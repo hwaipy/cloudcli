@@ -59,7 +59,8 @@
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/fix-node-pty.js",
     "prepare": "husky",
-    "update:platform": "./update-platform.sh"
+    "update:platform": "./update-platform.sh",
+    "dev:isolated": "python3 scripts/dev-isolated.py"
   },
   "build": {
     "appId": "ai.cloudcli.desktop",
