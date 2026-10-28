@@ -37,6 +37,7 @@ for key in ('CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME
 env.update({
     'HOME': str(debug_home),
     'NODE_ENV': 'development',
+    'CLOUDCLI_DEBUG_BASE': '/cloudcli_debug',
     'SERVER_PORT': '3102', 'PORT': '3102', 'VITE_PORT': '3002',
     'DATABASE_PATH': str(state / 'auth.db'),
     'JWT_SECRET': secret.read_text().strip(),

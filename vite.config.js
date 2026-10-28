@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
@@ -24,8 +25,25 @@ export default defineConfig(({ mode }) => {
   // TODO: Remove support for legacy PORT variables in all locations in a future major release, leaving only SERVER_PORT.
   const serverPort = env.SERVER_PORT || env.PORT || 3001
 
+  const debugBase = env.CLOUDCLI_DEBUG_BASE || ''
+  const debugProxy = debugBase ? Object.fromEntries(
+    ['api', 'ws', 'shell', 'plugin-ws'].map(route => [debugBase + '/' + route, {
+      target: `http://${proxyHost}:${serverPort}`,
+      ws: true,
+      rewrite: path => path.slice(debugBase.length),
+    }])
+  ) : {}
+
   return {
-    plugins: [react()],
+    base: debugBase ? debugBase + '/' : '/',
+    plugins: [react(), ...(debugBase ? [{
+      name: 'isolated-debug-proxy',
+      transformIndexHtml: {
+        order: 'post',
+        handler: () => [{ tag: 'script', injectTo: 'head-prepend', children:
+          readFileSync(new URL('./scripts/debug-proxy-client.js', import.meta.url), 'utf8') }],
+      },
+    }] : [])],
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version)
     },
@@ -36,8 +54,10 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host,
+      allowedHosts: debugBase ? ['ai.hwaipy.cn'] : undefined,
       port: parseInt(env.VITE_PORT) || 5173,
       proxy: {
+        ...debugProxy,
         '/api': `http://${proxyHost}:${serverPort}`,
         '/ws': {
           target: `ws://${proxyHost}:${serverPort}`,
