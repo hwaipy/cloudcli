@@ -5,7 +5,7 @@ This checkout replaces the former npm-installed standard CloudCLI.
 - Main URL: https://ai.hwaipy.cn/cloudcli/
 - Local URL: http://127.0.0.1:3001/cloudcli/
 - API: http://127.0.0.1:3102 (loopback only).
-- Node inspector: 127.0.0.1:9232, also forwarded to Code's loopback port 9232.
+- Node inspector: 127.0.0.1:9232, local access only.
 - Vite hot reload and backend automatic restart remain enabled.
 
 The service uses the real macOS home directory for provider authentication,
@@ -45,8 +45,8 @@ instance. Code's HTTPS nginx forwards `/cloudcli/` without removing the prefix.
 The `/cloudcli_debug/` endpoint returns 404. Port 3002 and its SSH reverse forward,
 and the temporary Docker bridge on 33002, have been removed.
 
-The `cn.hwaipy.cloudcli-debug-tunnel` LaunchAgent now forwards only the debugger
-on 9232. There is no public nginx route for the debugger.
+The `cn.hwaipy.cloudcli-debug-tunnel` LaunchAgent has been stopped and removed.
+Port 9232 is no longer forwarded to Code. There is no public nginx route for it.
 
 The Vite bootstrap prefixes API/WebSocket requests, preserves the development
 browser-storage namespace, and uses a non-caching service worker scoped to
