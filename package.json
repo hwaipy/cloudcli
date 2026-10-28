@@ -60,7 +60,7 @@
     "postinstall": "node scripts/fix-node-pty.js",
     "prepare": "husky",
     "update:platform": "./update-platform.sh",
-    "dev:isolated": "python3 scripts/dev-isolated.py"
+    "dev:local": "python3 scripts/dev-local.py"
   },
   "build": {
     "appId": "ai.cloudcli.desktop",

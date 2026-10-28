@@ -1,22 +1,28 @@
-# Isolated development
+# CloudCLI development service
 
-Use Node.js 24, install dependencies with `npm ci`, then run `npm run dev:isolated`.
-Optionally set `CLOUDCLI_DEBUG_NODE` to an absolute Node.js executable.
+This checkout replaces the former npm-installed standard CloudCLI.
 
-- UI and Vite hot reload: http://localhost:3002/cloudcli_debug/ (also listens on the LAN).
-- API with automatic restart: http://127.0.0.1:3102.
-- Node debugger: 127.0.0.1:9232, available through Chrome's `chrome://inspect`.
-- Private runtime files: `.debug-local/`, excluded from Git.
+- Main URL: https://ai.hwaipy.cn/cloudcli/
+- Local URL: http://127.0.0.1:3001/cloudcli/
+- API: http://127.0.0.1:3102 (loopback only).
+- Node inspector: 127.0.0.1:9232, also forwarded to Code's loopback port 9232.
+- Vite hot reload and backend automatic restart remain enabled.
 
-The development processes use `.debug-local/home` as their own home directory.
-CloudCLI accounts, provider configuration, sessions, assets and discovery markers
-are independent of the existing installation. Create a new CloudCLI account on
-first visit, then authenticate the providers you want to use. Files you explicitly
-open or edit in a shared project still affect that project.
+The service uses the real macOS home directory for provider authentication,
+configuration and historical sessions. Changes to sessions or provider settings
+are shared with the local command-line tools. Codex subagent transcripts are
+excluded from the sidebar by the upstream application. The 13 existing Codex
+archived transcripts were imported separately and retain their archived status.
 
-Do not run the ordinary `npm run dev` if you need this isolation.
+The merged CloudCLI database is `.debug-local/auth.db`. It retains the account
+created for the development instance and imports the former standard instance's
+projects, session index and related metadata. Migration backups are stored under
+`.debug-local/merge-backup-*`. All runtime data is excluded from Git.
 
-On this Mac the service is managed by the LaunchAgent `cn.hwaipy.cloudcli-debug`:
+## Operation
+
+The LaunchAgent `cn.hwaipy.cloudcli-debug` runs `scripts/dev-local.py` using the
+separate Node.js 24 runtime installed on this Mac.
 
 ```sh
 launchctl kickstart -k gui/$(id -u)/cn.hwaipy.cloudcli-debug
@@ -24,22 +30,26 @@ launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/cn.hwaipy.cloudcli-debug.p
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/cn.hwaipy.cloudcli-debug.plist
 ```
 
-Logs are in `.debug-local/stdout.log` and `.debug-local/stderr.log`.
-The original CloudCLI service and its launcher remain separate.
+For foreground development, stop the LaunchAgent first, then run:
 
-## HTTPS proxy on Code
+```sh
+CLOUDCLI_DEBUG_NODE="$HOME/.local/share/cloudcli-debug-runtime/node_modules/node/bin/node" npm run dev:local
+```
 
-Public development URL: https://ai.hwaipy.cn/cloudcli_debug/
+Logs: `.debug-local/stdout.log` and `.debug-local/stderr.log`.
 
-The macOS LaunchAgent `cn.hwaipy.cloudcli-debug-tunnel` forwards Code's loopback
-ports 3002 and 9232 to this Mac. On Code, the host-network `ai-guis-https` nginx
-container bridges Docker-only `172.17.0.1:33002` to loopback port 3002. The main
-`nginx` container forwards only `/cloudcli_debug/` to that bridge.
+## Reverse proxy
 
-The isolated launcher enables Vite's `/cloudcli_debug/` base. Its debug-only
-bootstrap prefixes API and WebSocket requests and browser storage keys, and
-registers a non-caching service worker scoped to that path. The production
-`/cloudcli` routing and root API remain unchanged. The debugger is still only
-available through SSH, without a public nginx route.
+The existing 3001 relay and Code's 33001 transport now serve this development
+instance. Code's HTTPS nginx forwards `/cloudcli/` without removing the prefix.
+The `/cloudcli_debug/` endpoint returns 404. Port 3002 and its SSH reverse forward,
+and the temporary Docker bridge on 33002, have been removed.
+
+The `cn.hwaipy.cloudcli-debug-tunnel` LaunchAgent now forwards only the debugger
+on 9232. There is no public nginx route for the debugger.
+
+The Vite bootstrap prefixes API/WebSocket requests, preserves the development
+browser-storage namespace, and uses a non-caching service worker scoped to
+`/cloudcli/`. It never replaces the root-scoped service worker.
 
 Validation: `node --test scripts/debug-proxy-client.test.mjs`.

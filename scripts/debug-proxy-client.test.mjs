@@ -20,19 +20,19 @@ test('debug transport and storage remain separate from production', async () => 
   const navigator = { serviceWorker: { register: (...args) => calls.push(args) } };
   vm.runInNewContext(readFileSync(new URL('./debug-proxy-client.js', import.meta.url), 'utf8'), {
     window, navigator, Storage, XMLHttpRequest: XHR, URL, Request,
-    location: { href: 'https://ai.hwaipy.cn/cloudcli_debug/', host: 'ai.hwaipy.cn' },
+    location: { href: 'https://ai.hwaipy.cn/cloudcli/', host: 'ai.hwaipy.cn' },
   });
   window.fetch('/api/auth/status');
-  assert.equal(calls.at(-1)[0], 'https://ai.hwaipy.cn/cloudcli_debug/api/auth/status');
+  assert.equal(calls.at(-1)[0], 'https://ai.hwaipy.cn/cloudcli/api/auth/status');
   window.fetch('https://example.com/api/test');
   assert.equal(calls.at(-1)[0], 'https://example.com/api/test');
   window.fetch(new Request('https://ai.hwaipy.cn/api/test', {method: 'POST', body: 'payload'}));
-  assert.equal(calls.at(-1)[0].url, 'https://ai.hwaipy.cn/cloudcli_debug/api/test');
+  assert.equal(calls.at(-1)[0].url, 'https://ai.hwaipy.cn/cloudcli/api/test');
   assert.equal(await calls.at(-1)[0].text(), 'payload');
   assert.equal(new window.WebSocket('wss://ai.hwaipy.cn/ws?token=test').url,
-    'wss://ai.hwaipy.cn/cloudcli_debug/ws?token=test');
-  assert.equal(new window.WebSocket('wss://ai.hwaipy.cn/cloudcli_debug/?token=test').url,
-    'wss://ai.hwaipy.cn/cloudcli_debug/?token=test');
+    'wss://ai.hwaipy.cn/cloudcli/ws?token=test');
+  assert.equal(new window.WebSocket('wss://ai.hwaipy.cn/cloudcli/?token=test').url,
+    'wss://ai.hwaipy.cn/cloudcli/?token=test');
   const storage = new Storage();
   assert.equal(storage.getItem('auth-token'), null);
   storage.setItem('auth-token', 'debug');
@@ -42,5 +42,5 @@ test('debug transport and storage remain separate from production', async () => 
   assert.equal(storage.values.get('auth-token'), 'production');
   assert.equal(storage.getItem('auth-token'), null);
   navigator.serviceWorker.register('/sw.js');
-  assert.equal(calls.at(-1)[0], '/cloudcli_debug/debug-sw.js');
+  assert.equal(calls.at(-1)[0], '/cloudcli/debug-sw.js');
 });

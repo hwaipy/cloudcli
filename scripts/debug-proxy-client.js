@@ -1,6 +1,6 @@
-// Injected only by the isolated debug Vite configuration, before application code.
+// Injected only by the development Vite configuration, before application code.
 (() => {
-  const base = '/cloudcli_debug';
+  const base = '/cloudcli';
   window.__ROUTER_BASENAME__ = base;
   const rewrite = (input) => {
     const url = new URL(String(input), location.href);
@@ -25,7 +25,7 @@
   XMLHttpRequest.prototype.open = function(method, url, ...args) {
     return open.call(this, method, rewrite(url), ...args);
   };
-  // Same HTTPS origin as production: keep debug auth and UI preferences separate.
+  // Retain the development storage namespace across the move to /cloudcli/.
   const prefix = 'cloudcli-debug:';
   for (const name of ['getItem', 'setItem', 'removeItem']) {
     const original = Storage.prototype[name];
