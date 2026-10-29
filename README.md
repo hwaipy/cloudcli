@@ -4,8 +4,10 @@
  <p>A desktop and mobile UI for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>, <a href="https://docs.cursor.com/en/cli/overview">Cursor CLI</a>, and <a href="https://developers.openai.com/codex">Codex</a>.<br>Use it locally or remotely to view your active projects and sessions from everywhere.</p>
 </div>
 
+> **Independent modified edition (2026-10-29).** This repository is maintained by hwaipy and is based on CloudCLI UI (https://github.com/siteboon/claudecodeui). It is not the original CloudCLI UI project or an official Siteboon release. Source code for this edition is available at https://github.com/hwaipy/cloudcli. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for license and attribution details.
+
 <p align="center">
- <a href="https://cloudcli.ai">CloudCLI Cloud</a> · <a href="https://cloudcli.ai/docs">Documentation</a> · <a href="https://discord.gg/buxwujPNRE">Discord</a> · <a href="https://github.com/siteboon/claudecodeui/issues">Bug Reports</a> · <a href="CONTRIBUTING.md">Contributing</a>
+ <a href="https://cloudcli.ai">CloudCLI Cloud</a> · <a href="https://cloudcli.ai/docs">Documentation</a> · <a href="https://discord.gg/buxwujPNRE">Discord</a> · <a href="https://github.com/hwaipy/cloudcli/issues">Bug Reports</a> · <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 <p align="center">
@@ -107,11 +109,11 @@ Supports Claude Code and Codex. See the [sandbox docs](docker/) for setup and ad
 
 ### Desktop Companion App
 
-CloudCLI Desktop is an optional native companion for CloudCLI Cloud and Local CloudCLI. It ships from this repository's GitHub Releases and keeps CloudCLI available from your menu bar or tray.
+The original CloudCLI Desktop is an optional native companion for CloudCLI Cloud and Local CloudCLI. This independent edition does not currently publish desktop releases.
 
 - **[macOS](https://cloudcli.ai/download/macos)**
 - **[Windows](https://cloudcli.ai/download/windows)**
-- **[Download page](https://cloudcli.ai/download)** · **[GitHub Releases and checksums](https://github.com/siteboon/claudecodeui/releases)**
+- **[Original project download page](https://cloudcli.ai/download)**
 
 Use it to open CloudCLI Cloud environments, switch between local and remote workspaces, and copy mobile/browser URLs. To work locally, choose **Local CloudCLI** in the desktop app; it will use your running local server or start one for you.
 
@@ -244,7 +246,7 @@ Yes, for self-hosted. CloudCLI UI reads from and writes to the same `~/.claude` 
 
 - **[Documentation](https://cloudcli.ai/docs)** — installation, configuration, features, and troubleshooting
 - **[Discord](https://discord.gg/buxwujPNRE)** — get help and connect with other users
-- **[GitHub Issues](https://github.com/siteboon/claudecodeui/issues)** — bug reports and feature requests
+- **[GitHub Issues](https://github.com/hwaipy/cloudcli/issues)** — bug reports and feature requests
 - **[Contributing Guide](CONTRIBUTING.md)** — how to contribute to the project
 
 ## License
@@ -253,7 +255,7 @@ GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later) — see [LIC
 
 This project is open source and free to use, modify, and distribute under the AGPL-3.0-or-later license. If you modify this software and run it as a network service, you must make your modified source code available to users of that service.
 
-CloudCLI UI - (https://cloudcli.ai).
+Original project attribution: CloudCLI UI (https://github.com/siteboon/claudecodeui).
 
 ## Acknowledgments
 

@@ -7,6 +7,10 @@ including additional terms under Section 7.
 
 Originally developed by Siteboon AI B.V. (https://github.com/siteboon/claudecodeui).
 
+This repository is an independent modified edition maintained by hwaipy since
+2026-10-29. Its source code is available at https://github.com/hwaipy/cloudcli.
+Required attribution: CloudCLI UI (https://github.com/siteboon/claudecodeui).
+
 Contributions by Siteboon AI B.V. prior to commit 004135ef were originally
 published under GPL-3.0 and are hereby relicensed to AGPL-3.0-or-later.
 Contributions by other authors prior to that commit remain under GPL-3.0
