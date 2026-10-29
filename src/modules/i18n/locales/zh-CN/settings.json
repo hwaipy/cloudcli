@@ -158,7 +158,13 @@
     "newPassword": "新密码（留空则不修改）",
     "save": "保存修改",
     "saving": "保存中…",
-    "saved": "已保存"
+    "saved": "已保存",
+    "avatar": "头像",
+    "avatarHint": "选择内置头像，或上传自己的照片。未设置时显示用户名首字母。",
+    "uploadPhoto": "上传照片",
+    "removeAvatar": "使用首字母",
+    "invalidPhoto": "请选择小于 10 MB 的 JPEG、PNG 或 WebP 照片。",
+    "uploadFailed": "照片处理失败，请换一张照片重试。"
   },
   "notifications": {
     "title": "通知",

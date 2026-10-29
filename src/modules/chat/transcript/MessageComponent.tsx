@@ -6,7 +6,8 @@ import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult, LL
 import { formatUsageLimitText, stripProposedPlanEnvelope } from '@/modules/chat/utils/chatFormatting';
 import { formatTaskDuration } from '@/modules/chat/utils/backgroundTasks';
 import { ToolRenderer, ToolErrorDisplay, SubagentPanel, WorkflowPanel, shouldHideToolResult } from '@/modules/chat/tools';
-import { LLMProviderLogo } from '@/shared/ui';
+import { AccountAvatar, LLMProviderLogo } from '@/shared/ui';
+import { useOptionalAuth } from '@/modules/auth';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/modules/chat/transcript/Reasoning';
 import ChatMessageImages from '@/modules/chat/transcript/ChatMessageImages';
 import ChatMessageFiles from '@/modules/chat/transcript/ChatMessageFiles';
@@ -51,6 +52,8 @@ const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
  */
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, provider, onEditMessage, onForkFromMessage }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
+  const account = useOptionalAuth()?.user;
+  const accountName = account?.username || t('message.you', 'You');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
       (prevMessage.type === 'user') ||
@@ -152,7 +155,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
         </div>
       ) : message.type === 'user' ? (
         /* User turn on the right: claude.ai-style attachment cards above the bubble */
-        <div className="flex w-full items-end sm:w-auto sm:max-w-[85%] md:max-w-md lg:max-w-lg xl:max-w-xl">
+        <div className="flex w-full items-start gap-2 sm:w-auto sm:max-w-[85%] md:max-w-md lg:max-w-lg xl:max-w-xl">
           <div className="flex min-w-0 flex-1 flex-col items-end gap-2 sm:flex-initial">
             {message.images && message.images.length > 0 && (
               <ChatMessageImages
@@ -201,6 +204,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 <span>{formattedTime}</span>
               </div>
             )}
+          </div>
+          <div className="flex max-w-20 shrink-0 flex-col items-center gap-1 pt-0.5">
+            <AccountAvatar username={accountName} avatar={account?.avatar} className="h-8 w-8 text-sm" />
+            <span className="max-w-20 truncate text-center text-[11px] text-muted-foreground" title={accountName}>{accountName}</span>
           </div>
         </div>
       ) : message.compact ? (

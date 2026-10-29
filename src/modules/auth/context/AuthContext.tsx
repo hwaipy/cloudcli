@@ -11,6 +11,7 @@ import { hydrateUserPreferences, resetUserPreferences } from '@/shared/userSetti
 type AuthUser = {
   id?: number | string;
   username: string;
+  avatar?: string | null;
   [key: string]: unknown;
 };
 
@@ -88,6 +89,11 @@ export function useAuth(): AuthContextValue {
   }
 
   return context;
+}
+
+/** Allows transcript renderers outside the live app shell, such as exports and tests, to omit AuthProvider. */
+export function useOptionalAuth(): AuthContextValue | null {
+  return useContext(AuthContext);
 }
 
 /** Used by App to expose the session, and its login/logout actions, to every module through useAuth. */

@@ -3,6 +3,7 @@ import { AppError } from '@/shared/utils.js';
 type AuthUser = {
   id: number | bigint;
   username: string;
+  avatar?: string | null;
 };
 
 type AuthLoginUser = AuthUser & { password_hash: string };
@@ -16,6 +17,7 @@ type AuthDependencies = {
     getUserByUsername(username: string): AuthLoginUser | undefined;
     getCredentialsById(userId: number): AuthLoginUser | undefined;
     updateAccount(userId: number, username: string, passwordHash?: string): void;
+    updateAvatar(userId: number, avatar: string | null): void;
     updateLastLogin(userId: number): void;
   };
   transaction: {
@@ -37,6 +39,32 @@ function isUniqueConstraintError(error: unknown): boolean {
     && error !== null
     && 'code' in error
     && error.code === 'SQLITE_CONSTRAINT_UNIQUE';
+}
+
+const AVATAR_PRESETS = new Set(['fox', 'cat', 'owl', 'bear', 'whale', 'rocket']);
+const MAX_AVATAR_BYTES = 256 * 1024;
+
+function validateAvatar(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value === 'string' && value.startsWith('preset:') && AVATAR_PRESETS.has(value.slice(7))) return value;
+  if (typeof value === 'string') {
+    const match = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+    if (match) {
+      if (match[2].length > Math.ceil(MAX_AVATAR_BYTES / 3) * 4) {
+        throw new AppError('Avatar exceeds 256 KB.', { code: 'AUTH_AVATAR_INVALID', statusCode: 400 });
+      }
+      const bytes = Buffer.from(match[2], 'base64');
+      const validSignature = match[1] === 'jpeg'
+        ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+        : match[1] === 'png'
+          ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+          : bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
+      if (bytes.length > 0 && bytes.length <= MAX_AVATAR_BYTES && validSignature) return value;
+    }
+  }
+  throw new AppError('Avatar must be a built-in option or a JPEG, PNG, or WebP image no larger than 256 KB.', {
+    code: 'AUTH_AVATAR_INVALID', statusCode: 400,
+  });
 }
 
 /**
@@ -86,7 +114,7 @@ export function createAuthService(dependencies: AuthDependencies) {
 
         return {
           success: true,
-          user: { id: user.id, username: user.username, isAdmin: true },
+          user: { id: user.id, username: user.username, avatar: null, isAdmin: true },
           token,
         };
       } catch (error) {
@@ -147,6 +175,16 @@ export function createAuthService(dependencies: AuthDependencies) {
       return this.updateAccountRecord(userId, usernameInput, newPasswordInput);
     },
 
+    updateOwnAvatar(actor: unknown, avatarInput: unknown) {
+      const userId = actor && typeof actor === 'object' && 'id' in actor ? Number(actor.id) : NaN;
+      if (!Number.isSafeInteger(userId) || !dependencies.users.getCredentialsById(userId)) {
+        throw new AppError('Account not found.', { code: 'AUTH_USER_REQUIRED', statusCode: 401 });
+      }
+      const avatar = validateAvatar(avatarInput);
+      dependencies.users.updateAvatar(userId, avatar);
+      return { avatar };
+    },
+
     async updateManagedUser(actor: unknown, userIdInput: unknown, usernameInput: unknown, newPasswordInput: unknown) {
       this.listUsers(actor);
       if (dependencies.platformMode) throw new AppError('Multi-user accounts require token authentication.', { code: 'MULTI_USER_UNAVAILABLE', statusCode: 409 });
@@ -203,6 +241,7 @@ export function createAuthService(dependencies: AuthDependencies) {
         user: {
           id: user.id,
           username: user.username,
+          avatar: user.avatar ?? null,
           isAdmin: dependencies.users.listUsers()[0]?.id === Number(user.id),
         },
         token: dependencies.generateToken(user),

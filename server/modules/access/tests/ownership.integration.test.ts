@@ -19,6 +19,9 @@ test('two accounts see only their own projects and sessions', async () => {
   try {
     const first = Number(userDb.createUser('first', 'hash').id);
     const second = Number(userDb.createUser('second', 'hash').id);
+    userDb.updateAvatar(first, 'preset:fox');
+    assert.equal(userDb.getUserById(first)?.avatar, 'preset:fox');
+    assert.equal(userDb.getUserById(second)?.avatar, null);
     const firstPath = path.join(directory, 'first');
     const secondPath = path.join(directory, 'second');
     const firstProject = projectsDb.createProjectPath(firstPath, null, first).project;
@@ -76,6 +79,9 @@ test('migration assigns existing single-account records to the original account'
     await initializeDatabase();
     assert.equal(projectsDb.getProjectById('old-project')?.owner_user_id, 1);
     assert.equal(sessionsDb.getSessionById('old-session')?.owner_user_id, 1);
+    assert.equal(userDb.getUserById(1)?.avatar, null);
+    userDb.updateAvatar(1, 'preset:owl');
+    assert.equal(userDb.getUserById(1)?.avatar, 'preset:owl');
     const second = Number(userDb.createUser('second', 'hash').id);
     assert.equal(projectsDb.getProjectPaths(second).length, 0);
     assert.equal(sessionsDb.getAllSessions(second).length, 0);

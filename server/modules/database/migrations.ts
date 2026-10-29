@@ -574,6 +574,7 @@ export const runMigrations = (db: Database) => {
 
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'git_name', 'TEXT');
     addColumnToTableIfNotExists(db, 'users', userColumnNames, 'git_email', 'TEXT');
+    addColumnToTableIfNotExists(db, 'users', userColumnNames, 'avatar', 'TEXT DEFAULT NULL');
     addColumnToTableIfNotExists(
       db,
       'users',

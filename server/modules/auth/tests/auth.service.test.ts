@@ -16,6 +16,7 @@ function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDepe
       getUserByUsername: () => undefined,
       getCredentialsById: () => ({ id: 1, username: 'alice', password_hash: 'hash' }),
       updateAccount: () => undefined,
+      updateAvatar: () => undefined,
       updateLastLogin: () => undefined,
     },
     transaction: {
@@ -52,6 +53,7 @@ test('register hashes credentials and commits through injected dependencies', as
       getUserByUsername: () => undefined,
       getCredentialsById: () => undefined,
       updateAccount: () => undefined,
+      updateAvatar: () => undefined,
       updateLastLogin: (userId) => operations.push(`login:${userId}`),
     },
   }));
@@ -72,6 +74,7 @@ test('login rejects an invalid password without issuing a token', async () => {
       getUserByUsername: () => ({ id: 1, username: 'alice', password_hash: 'hash' }),
       getCredentialsById: () => undefined,
       updateAccount: () => undefined,
+      updateAvatar: () => undefined,
       updateLastLogin: () => undefined,
     },
     comparePassword: async () => false,
@@ -152,4 +155,24 @@ test('administrator may edit another account but cannot bypass self verification
   await assert.rejects(service.updateManagedUser({ id: 1 }, 1, 'alice-new', undefined));
   await service.updateManagedUser({ id: 1 }, 2, 'bob-new', undefined);
   assert.deepEqual(changes, [[2, 'bob-new', undefined]]);
+});
+
+test('avatar updates belong to the authenticated account and reject unsafe image data', () => {
+  const updates: Array<[number, string | null]> = [];
+  const service = createAuthService(createDependencies({
+    users: {
+      ...createDependencies().users,
+      getCredentialsById: (id) => id === 2 ? { id, username: 'bob', password_hash: 'hash' } : undefined,
+      updateAvatar: (id, avatar) => { updates.push([id, avatar]); },
+    },
+  }));
+  assert.throws(() => service.updateOwnAvatar({ id: 1 }, 'preset:fox'));
+  assert.throws(() => service.updateOwnAvatar({ id: 2 }, 'preset:unknown'));
+  assert.throws(() => service.updateOwnAvatar({ id: 2 }, 'data:image/svg+xml;base64,PHN2Zz4='));
+  assert.throws(() => service.updateOwnAvatar({ id: 2 }, 'data:image/png;base64,PHNjcmlwdD4='));
+  const photo = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==';
+  assert.deepEqual(service.updateOwnAvatar({ id: 2 }, 'preset:fox'), { avatar: 'preset:fox' });
+  assert.deepEqual(service.updateOwnAvatar({ id: 2 }, photo), { avatar: photo });
+  assert.deepEqual(service.updateOwnAvatar({ id: 2 }, null), { avatar: null });
+  assert.deepEqual(updates, [[2, 'preset:fox'], [2, photo], [2, null]]);
 });

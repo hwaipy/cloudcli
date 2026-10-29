@@ -40,6 +40,20 @@ export const APP_VERSION: string = typeof __APP_VERSION__ === 'string' ? __APP_V
 
 // ---------------------------
 
+//----------------- ACCOUNT AVATARS ------------
+
+/** Built-in account avatars offered by profile settings and rendered beside chat turns. */
+export const ACCOUNT_AVATAR_PRESETS = [
+  { id: 'fox', emoji: '🦊', className: 'bg-orange-100 dark:bg-orange-950' },
+  { id: 'cat', emoji: '🐱', className: 'bg-amber-100 dark:bg-amber-950' },
+  { id: 'owl', emoji: '🦉', className: 'bg-violet-100 dark:bg-violet-950' },
+  { id: 'bear', emoji: '🐻', className: 'bg-rose-100 dark:bg-rose-950' },
+  { id: 'whale', emoji: '🐳', className: 'bg-sky-100 dark:bg-sky-950' },
+  { id: 'rocket', emoji: '🚀', className: 'bg-indigo-100 dark:bg-indigo-950' },
+] as const;
+
+// ---------------------------
+
 //----------------- SETTINGS NAVIGATION ------------
 
 /** Shape of one entry in `SETTINGS_MAIN_TABS`; only that constant needs it. */

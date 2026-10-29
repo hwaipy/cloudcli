@@ -17,9 +17,10 @@ type UserRow = {
   git_name: string | null;
   git_email: string | null;
   has_completed_onboarding: number;
+  avatar: string | null;
 };
 
-type UserPublicRow = Pick<UserRow, 'id' | 'username' | 'created_at' | 'last_login'>;
+type UserPublicRow = Pick<UserRow, 'id' | 'username' | 'avatar' | 'created_at' | 'last_login'>;
 
 type UserGitConfig = {
   git_name: string | null;
@@ -62,7 +63,7 @@ export const userDb = {
   /** Lists public account details for the administrator's user-management page. */
   listUsers(): UserPublicRow[] {
     return getConnection().prepare(
-      'SELECT id, username, created_at, last_login FROM users WHERE is_active = 1 ORDER BY id'
+      'SELECT id, username, avatar, created_at, last_login FROM users WHERE is_active = 1 ORDER BY id'
     ).all() as UserPublicRow[];
   },
 
@@ -92,6 +93,11 @@ export const userDb = {
     }
   },
 
+  /** Persists one user's selected built-in avatar or bounded image data. */
+  updateAvatar(userId: number, avatar: string | null): void {
+    getConnection().prepare('UPDATE users SET avatar = ? WHERE id = ? AND is_active = 1').run(avatar, userId);
+  },
+
   /** Updates the last_login timestamp. Non-fatal — logs but does not throw. */
   updateLastLogin(userId: number): void {
     try {
@@ -110,7 +116,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login FROM users WHERE id = ? AND is_active = 1'
+        'SELECT id, username, avatar, created_at, last_login FROM users WHERE id = ? AND is_active = 1'
       )
       .get(userId) as UserPublicRow | undefined;
   },
@@ -120,7 +126,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login FROM users WHERE is_active = 1 ORDER BY id LIMIT 1'
+        'SELECT id, username, avatar, created_at, last_login FROM users WHERE is_active = 1 ORDER BY id LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },

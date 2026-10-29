@@ -4,8 +4,9 @@ import { useTranslation } from 'react-i18next';
 
 import { api, readApiJson } from '@/shared/api';
 import { useAuth } from '@/modules/auth';
+import { AccountAvatar } from '@/shared/ui';
 
-type ManagedUser = { id: number; username: string };
+type ManagedUser = { id: number; username: string; avatar?: string | null };
 
 /** Used by Settings to let the administrator create and edit other accounts. */
 export default function UsersSettingsTab() {
@@ -80,7 +81,7 @@ export default function UsersSettingsTab() {
         <p className="text-sm text-muted-foreground">{t('users.description', 'Each account has its own project and session list. CLI credentials and the host filesystem remain shared.')}</p>
       </div>
       <div className="space-y-1 text-sm">
-        {users.filter((user) => user.id !== Number(currentUser?.id)).map((user) => <button type="button" key={user.id} onClick={() => { setSelectedId(user.id); setEditUsername(user.username); setEditPassword(''); setSaved(false); setError(''); }} className={`block w-full rounded-md border px-3 py-2 text-left ${selectedId === user.id ? 'border-primary bg-accent' : 'border-border'}`}>{user.username}</button>)}
+        {users.filter((user) => user.id !== Number(currentUser?.id)).map((user) => <button type="button" key={user.id} onClick={() => { setSelectedId(user.id); setEditUsername(user.username); setEditPassword(''); setSaved(false); setError(''); }} className={`flex w-full items-center gap-2 rounded-md border px-3 py-2 text-left ${selectedId === user.id ? 'border-primary bg-accent' : 'border-border'}`}><AccountAvatar username={user.username} avatar={user.avatar} className="h-7 w-7 text-sm" />{user.username}</button>)}
       </div>
       {selectedId !== null && <form onSubmit={(event) => { void saveUser(event); }} className="space-y-3 rounded-lg border border-border p-4">
         <h4 className="font-medium">{t('users.edit')}</h4>

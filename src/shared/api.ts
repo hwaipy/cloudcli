@@ -214,6 +214,7 @@ export const api = {
     refresh: () => post('/api/auth/refresh'),
     user: () => get('/api/auth/user'),
     updateOwnAccount: (username: string, currentPassword: string, newPassword?: string) => patch('/api/auth/user', { username, currentPassword, newPassword }),
+    updateOwnAvatar: (avatar: string | null) => patch('/api/auth/user/avatar', { avatar }),
     users: () => get('/api/auth/users'),
     createUser: (username: string, password: string) => post('/api/auth/users', { username, password }),
     updateUser: (id: number, username: string, newPassword?: string) => patch(`/api/auth/users/${encodeURIComponent(id)}`, { username, newPassword }),

@@ -68,6 +68,13 @@ export function createAuthRouter(
     } catch (error) { next(error); }
   });
 
+  router.patch('/user/avatar', authenticateToken, (req, res, next) => {
+    try {
+      const body = req.body as { avatar?: unknown };
+      res.json(service.updateOwnAvatar((req as AuthenticatedRequest).user, body?.avatar));
+    } catch (error) { next(error); }
+  });
+
   router.get('/user', authenticateToken, (req, res) => {
     res.json(service.getCurrentUser((req as AuthenticatedRequest).user));
   });

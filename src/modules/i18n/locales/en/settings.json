@@ -158,7 +158,13 @@
     "newPassword": "New password (leave blank to keep current)",
     "save": "Save changes",
     "saving": "Saving…",
-    "saved": "Saved"
+    "saved": "Saved",
+    "avatar": "Avatar",
+    "avatarHint": "Choose a built-in avatar or upload a photo. Without one, your initial is shown.",
+    "uploadPhoto": "Upload photo",
+    "removeAvatar": "Use initial",
+    "invalidPhoto": "Choose a JPEG, PNG, or WebP photo smaller than 10 MB.",
+    "uploadFailed": "Could not process the photo. Please try another."
   },
   "notifications": {
     "title": "Notifications",

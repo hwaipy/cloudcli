@@ -18,6 +18,7 @@
  */
 
 export { ActionMenu } from '@/shared/ui/ActionMenu';
+export { AccountAvatar } from '@/shared/ui/AccountAvatar';
 export { Badge } from '@/shared/ui/Badge';
 export { Button, buttonVariants } from '@/shared/ui/Button';
 export { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/shared/ui/Card';
