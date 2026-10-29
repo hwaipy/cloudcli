@@ -126,11 +126,11 @@
     "send": "Gönder",
     "stop": "Durdur",
     "hintText": {
-      "ctrlEnter": "Göndermek için Ctrl+Enter • Yeni satır için Shift+Enter • Mod değiştirmek için Tab • Slash komutları için /",
-      "enter": "Göndermek için Enter • Yeni satır için Shift+Enter • Mod değiştirmek için Tab • Slash komutları için /",
+      "ctrlEnter": "Göndermek için Ctrl+Enter • Yeni satır için Shift+Enter • Slash komutları için /",
+      "enter": "Göndermek için Enter • Yeni satır için Shift+Enter • Slash komutları için /",
       "appendQueued": "Sıradaki mesaja eklemek için Enter"
     },
-    "clickToChangeMode": "İzin modunu değiştirmek için tıkla (veya girdide Tab tuşuna bas)",
+    "clickToChangeMode": "İzin modunu değiştirmek için tıkla",
     "showAllCommands": "Tüm komutları göster",
     "clearInput": "Girdiyi temizle",
     "scrollToBottom": "En alta git",
@@ -248,7 +248,6 @@
   },
   "composer": {
     "permissionHeading": "{{provider}} eylemleri nasıl onaylansın?",
-    "permissionCycleHint": "Modu değiştirmek için giriş alanında Tab tuşuna bas",
     "permissionTriggerLabel": "{{mode}}: {{heading}}",
     "editing": {
       "title": "Önceki bir mesaj değiştiriliyor",

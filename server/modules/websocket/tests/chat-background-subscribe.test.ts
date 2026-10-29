@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { mock } from 'node:test';
 
-import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
-import { handleChatConnection } from '@/modules/websocket/services/chat-websocket.service.js';
+import { closeConnection, getConnection, initializeDatabase, sessionDraftsDb, sessionsDb } from '@/modules/database/index.js';
+import { handleChatConnection, runDetachedChatTurn } from '@/modules/websocket/services/chat-websocket.service.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
 
@@ -164,4 +164,83 @@ test('a retained run\'s eviction timer cannot evict the session\'s next run earl
   } finally {
     mock.timers.reset();
   }
+});
+
+
+test('a previously subscribed tab sees a detached queued turn as a user message', async () => {
+  await withIsolatedDatabase(async () => {
+    const tab = createFakeSocket();
+    const runtime = {
+      hasRuntime: () => true,
+      hasBackgroundWork: () => false,
+      getPendingApprovalsForSession: () => [],
+      run: async (_provider: string, _command: string, _options: unknown, writer: { send: (message: unknown) => void }) => {
+        writer.send({ kind: 'text', role: 'assistant', provider: 'claude', sessionId: SESSION_ID, content: 'done' });
+        writer.send({ kind: 'complete', provider: 'claude', sessionId: SESSION_ID, exitCode: 0 });
+      },
+    } as never;
+    handleChatConnection(tab as never, { user: { id: 1 } } as never, { runtime });
+    tab.emit('message', JSON.stringify({ type: 'chat.subscribe', sessions: [{ sessionId: SESSION_ID, lastSeq: 0 }] }));
+    await settle();
+
+    const result = await runDetachedChatTurn(
+      { sessionId: SESSION_ID, userId: 1, content: 'queued request' }, { runtime },
+    );
+    assert.equal(result.started, true);
+    const userFrame = tab.frames.find((frame) => frame.kind === 'text' && frame.role === 'user');
+    assert.equal(userFrame?.content, 'queued request');
+    assert.match(String(userFrame?.id), /^local_/);
+    assert.ok(tab.frames.some((frame) => frame.kind === 'text' && frame.role === 'assistant'));
+    tab.emit('close');
+  });
+});
+
+test('steering a live Codex turn acknowledges and publishes the accepted text', async () => {
+  await withIsolatedDatabase(async () => {
+    const tab = createFakeSocket();
+    const calls: unknown[] = [];
+    const runtime = {
+      steer: async (...args: unknown[]) => { calls.push(args); return true; },
+      hasBackgroundWork: () => false,
+      getPendingApprovalsForSession: () => [],
+    } as never;
+    handleChatConnection(tab as never, { user: { id: 1 } } as never, { runtime });
+    chatRunRegistry.startRun({ appSessionId: SESSION_ID, provider: 'codex', providerSessionId: null, connection: tab as never, userId: 1 });
+    tab.emit('message', JSON.stringify({ type: 'chat.steer', sessionId: SESSION_ID, clientMessageId: 'steer-1', content: 'change direction' }));
+    await settle();
+    assert.deepEqual(calls, [['codex', SESSION_ID, 'change direction']]);
+    assert.ok(tab.frames.some((frame) => frame.kind === 'text' && frame.role === 'user' && frame.content === 'change direction'));
+    assert.ok(tab.frames.some((frame) => frame.kind === 'chat_steer_accepted' && frame.clientMessageId === 'steer-1'));
+  });
+});
+
+test('steering a queued turn takes exactly that item and restores it when refused', async () => {
+  await withIsolatedDatabase(async () => {
+    getConnection().prepare('INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)').run(1, 'tester', 'hash');
+    const first = sessionDraftsDb.appendQueuedMessage(1, SESSION_ID, { content: 'first', attachments: [] });
+    const second = sessionDraftsDb.appendQueuedMessage(1, SESSION_ID, { content: 'second', attachments: [] });
+    const tab = createFakeSocket();
+    let accept = false;
+    const calls: string[] = [];
+    const runtime = {
+      steer: async (_provider: string, _sessionId: string, text: string) => { calls.push(text); return accept; },
+      hasBackgroundWork: () => false,
+      getPendingApprovalsForSession: () => [],
+    } as never;
+    handleChatConnection(tab as never, { user: { id: 1 } } as never, { runtime });
+    chatRunRegistry.startRun({ appSessionId: SESSION_ID, provider: 'codex', providerSessionId: null, connection: tab as never, userId: 1 });
+
+    tab.emit('message', JSON.stringify({ type: 'chat.steer', sessionId: SESSION_ID, clientMessageId: 'refuse', queuedMessageId: second.queuedMessage.id, content: 'forged' }));
+    await settle();
+    assert.deepEqual(calls, ['second']);
+    assert.ok(tab.frames.some((frame) => frame.kind === 'protocol_error' && frame.clientMessageId === 'refuse'));
+    assert.deepEqual((sessionDraftsDb.getDrafts(1)[0]?.queuedMessage as Array<{ content: string }>).map((item) => item.content), ['first', 'second']);
+
+    accept = true;
+    tab.emit('message', JSON.stringify({ type: 'chat.steer', sessionId: SESSION_ID, clientMessageId: 'accept', queuedMessageId: first.queuedMessage.id }));
+    await settle();
+    assert.deepEqual(calls, ['second', 'first']);
+    assert.ok(tab.frames.some((frame) => frame.kind === 'chat_steer_accepted' && frame.clientMessageId === 'accept'));
+    assert.deepEqual((sessionDraftsDb.getDrafts(1)[0]?.queuedMessage as Array<{ content: string }>).map((item) => item.content), ['second']);
+  });
 });

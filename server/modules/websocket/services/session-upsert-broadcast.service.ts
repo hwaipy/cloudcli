@@ -48,7 +48,7 @@ async function buildSessionUpsertedEvent(
       id: row.session_id,
       summary: row.custom_name || '',
       messageCount: 0,
-      lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+      lastActivity: row.last_user_message_at ?? row.created_at ?? new Date().toISOString(),
     },
     project: project
       ? {

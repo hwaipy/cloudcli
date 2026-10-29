@@ -399,12 +399,75 @@ const addProviderSessionIdMapping = (db: Database): void => {
   const sessionsTableInfo = getTableInfo(db, 'sessions');
   const columnNames = sessionsTableInfo.map((column) => column.name);
 
+  if (columnNames.includes('provider_session_id')) {
+    return;
+  }
+
   addColumnToTableIfNotExists(db, 'sessions', columnNames, 'provider_session_id', 'TEXT');
   db.exec(`
     UPDATE sessions
     SET provider_session_id = session_id
     WHERE provider_session_id IS NULL
   `);
+};
+
+type DuplicateProviderSession = { provider: string; provider_session_id: string };
+type DuplicateSessionRow = {
+  session_id: string;
+  custom_name: string | null;
+  jsonl_path: string | null;
+  model: string | null;
+  effort: string | null;
+  updated_at: string;
+};
+
+/** Keeps the app-facing row when a database merge or watcher race duplicated its provider mapping. */
+const mergeDuplicateProviderSessions = (db: Database): void => {
+  const duplicates = db.prepare(`
+    SELECT provider, provider_session_id FROM sessions
+    WHERE provider_session_id IS NOT NULL
+    GROUP BY provider, provider_session_id HAVING COUNT(*) > 1
+  `).all() as DuplicateProviderSession[];
+
+  if (duplicates.length === 0) return;
+
+  db.transaction(() => {
+    for (const { provider, provider_session_id: providerSessionId } of duplicates) {
+      const rows = db.prepare(`
+        SELECT session_id, custom_name, jsonl_path, model, effort, updated_at
+        FROM sessions WHERE provider = ? AND provider_session_id = ?
+        ORDER BY CASE WHEN session_id <> provider_session_id THEN 0 ELSE 1 END, created_at, session_id
+      `).all(provider, providerSessionId) as DuplicateSessionRow[];
+      const canonical = rows[0];
+
+      for (const duplicate of rows.slice(1)) {
+        db.prepare(`
+          UPDATE sessions SET
+            custom_name = COALESCE(custom_name, ?),
+            jsonl_path = COALESCE(jsonl_path, ?),
+            model = COALESCE(model, ?),
+            effort = COALESCE(effort, ?),
+            updated_at = CASE WHEN julianday(?) > julianday(updated_at) THEN ? ELSE updated_at END
+          WHERE session_id = ?
+        `).run(
+          duplicate.custom_name, duplicate.jsonl_path, duplicate.model, duplicate.effort,
+          duplicate.updated_at, duplicate.updated_at, canonical.session_id,
+        );
+        db.prepare('UPDATE scheduled_messages SET session_id = ? WHERE session_id = ?')
+          .run(canonical.session_id, duplicate.session_id);
+        db.prepare(`
+          INSERT INTO session_drafts (user_id, draft_scope, draft_text, queued_message, updated_at)
+          SELECT user_id, ?, draft_text, queued_message, updated_at
+          FROM session_drafts WHERE draft_scope = ?
+          ON CONFLICT(user_id, draft_scope) DO NOTHING
+        `).run(canonical.session_id, duplicate.session_id);
+        db.prepare('DELETE FROM session_drafts WHERE draft_scope = ?').run(duplicate.session_id);
+        db.prepare('UPDATE superseded_provider_sessions SET session_id = ? WHERE session_id = ?')
+          .run(canonical.session_id, duplicate.session_id);
+        db.prepare('DELETE FROM sessions WHERE session_id = ?').run(duplicate.session_id);
+      }
+    }
+  }).immediate();
 };
 
 /**
@@ -455,6 +518,21 @@ const addSessionEffortColumn = (db: Database): void => {
   const columnNames = sessionsTableInfo.map((column) => column.name);
 
   addColumnToTableIfNotExists(db, 'sessions', columnNames, 'effort', 'TEXT');
+};
+
+/** Keeps each session's permission choice consistent across browsers. */
+const addSessionPermissionModeColumn = (db: Database): void => {
+  const columnNames = getTableInfo(db, 'sessions').map((column) => column.name);
+  addColumnToTableIfNotExists(db, 'sessions', columnNames, 'permission_mode', 'TEXT');
+};
+
+/** Preserve the old order once, then keep transcript writes out of sidebar sorting. */
+const addLastUserMessageAtColumn = (db: Database): void => {
+  const columnNames = getTableInfo(db, 'sessions').map((column) => column.name);
+  if (!columnNames.includes('last_user_message_at')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN last_user_message_at DATETIME');
+    db.exec('UPDATE sessions SET last_user_message_at = COALESCE(updated_at, created_at)');
+  }
 };
 
 /**
@@ -532,9 +610,18 @@ export const runMigrations = (db: Database) => {
     addProviderSessionIdMapping(db);
     addSessionModelColumn(db);
     addSessionEffortColumn(db);
+    addSessionPermissionModeColumn(db);
+    addLastUserMessageAtColumn(db);
     addForkedFromSessionIdColumn(db);
     ensureProjectsForSessionPaths(db);
     db.exec(SCHEDULED_MESSAGES_TABLE_SCHEMA_SQL);
+
+    mergeDuplicateProviderSessions(db);
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_provider_native_unique
+      ON sessions(provider, provider_session_id)
+      WHERE provider_session_id IS NOT NULL
+    `);
 
     db.exec('CREATE INDEX IF NOT EXISTS idx_session_ids_lookup ON sessions(session_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_provider_session_id ON sessions(provider_session_id)');

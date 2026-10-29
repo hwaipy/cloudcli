@@ -47,6 +47,38 @@ beforeEach(() => {
   });
 });
 
+it('rejects control frames and heals a legacy invalid realtime cache on history refresh', async () => {
+  const { result } = await loadedStore();
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    act(() => {
+      result.current.appendRealtime('session-1', {
+        kind: 'chat_steer_accepted', sessionId: 'session-1', clientMessageId: 'client-1',
+      } as unknown as NormalizedMessage);
+    });
+    assert.equal(warn.mock.calls.length, 1);
+
+    let slot: Awaited<ReturnType<typeof result.current.fetchFromServer>> = null;
+    await act(async () => {
+      slot = await result.current.fetchFromServer('session-1');
+    });
+    const cachedSlot = slot as unknown as { realtimeMessages: NormalizedMessage[] };
+    cachedSlot.realtimeMessages.push({ kind: 'chat_steer_accepted', sessionId: 'session-1' } as unknown as NormalizedMessage);
+
+    act(() => {
+      result.current.appendRealtime('session-1', row('5', 'final answer'));
+    });
+    await act(async () => {
+      await result.current.fetchFromServer('session-1');
+    });
+
+    assert.deepEqual(result.current.getMessages('session-1').map((message) => message.id), ['1', '2', '3', '4', '5']);
+    assert.equal(cachedSlot.realtimeMessages.some((message) => !message.id), false);
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 afterEach(() => {
   vi.resetModules();
 });
@@ -61,6 +93,20 @@ async function loadedStore() {
 }
 
 describe('truncateAt', () => {
+  it('replaces incremental replies in the same row', async () => {
+    const { result } = await loadedStore();
+
+    act(() => {
+      result.current.appendRealtime('session-1', row('5', 'First'));
+      result.current.appendRealtime('session-1', row('5', 'First sentence'));
+      result.current.appendRealtime('session-1', row('5', 'First sentence.'));
+    });
+
+    const replies = result.current.getMessages('session-1').filter((message) => message.id === '5');
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].content, 'First sentence.');
+  });
+
   it('drops the anchored message and everything after it', async () => {
     const { result } = await loadedStore();
 

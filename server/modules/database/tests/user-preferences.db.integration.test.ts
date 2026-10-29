@@ -135,170 +135,103 @@ test('deleteDraft removes only the named scope', async () => {
 });
 
 const queuedIn = (scope: string) => (
-  sessionDraftsDb.getDrafts(USER_ID).find((draft) => draft.scope === scope)?.queuedMessage ?? null
+  sessionDraftsDb.getDrafts(USER_ID).find((draft) => draft.scope === scope)?.queuedMessage as Array<{ id: string; content: string; attachments: unknown[] }> | null
 );
 
-// What the dispatcher holds after listing a scope's queued message.
 const claimCandidate = (scope: string) => {
-  const row = getConnection()
-    .prepare('SELECT queued_message FROM session_drafts WHERE user_id = ? AND draft_scope = ?')
+  const row = getConnection().prepare('SELECT queued_message FROM session_drafts WHERE user_id = ? AND draft_scope = ?')
     .get(USER_ID, scope) as { queued_message: string };
-  return {
-    userId: USER_ID,
-    sessionId: scope,
-    queuedMessage: JSON.parse(row.queued_message) as unknown,
-    claimToken: row.queued_message,
-  };
+  const queued = JSON.parse(row.queued_message) as Array<{ id: string; content: string }>;
+  return { userId: USER_ID, sessionId: scope, queuedMessage: queued[0], claimToken: row.queued_message };
 };
 
-test('follow-ups queued while one waits are appended in order, not overwritten', async () => {
+test('queued follow-ups retain independent content, options, files and order', async () => {
   await withDatabase(() => {
-    sessionDraftsDb.saveDraftText(USER_ID, 'session-a', 'still typing');
-
-    const first = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', {
+    sessionDraftsDb.saveDraftText(USER_ID, 'session-a', 'typing');
+    const a = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', {
       content: 'A', options: { model: 'sonnet' }, attachments: [{ name: 'a.png' }],
     });
-    const second = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', {
-      content: 'B', attachments: [],
+    const b = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', {
+      content: 'B', options: { model: 'opus' }, attachments: [],
     });
-    const third = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', {
-      content: 'C', options: { model: 'opus' }, attachments: [{ name: 'c.txt' }],
-    });
-
-    assert.equal(first?.appended, false);
-    assert.equal(second?.appended, true);
-    assert.equal(third?.appended, true);
-    const expected = {
-      content: 'A\n\nB\n\nC',
-      options: { model: 'opus' },
-      attachments: [{ name: 'a.png' }, { name: 'c.txt' }],
-    };
-    assert.deepEqual(third?.queuedMessage, expected);
-    assert.deepEqual(queuedIn('session-a'), expected);
-    assert.equal(sessionDraftsDb.getDrafts(USER_ID)[0]?.text, 'still typing', 'the draft text is untouched');
+    assert.equal(a.appended, false);
+    assert.equal(b.appended, true);
+    assert.deepEqual(queuedIn('session-a')?.map((item) => item.content), ['A', 'B']);
+    assert.equal(queuedIn('session-a')?.[0]?.id, a.queuedMessage.id);
+    assert.equal(queuedIn('session-a')?.[1]?.id, b.queuedMessage.id);
+    assert.equal(sessionDraftsDb.getDrafts(USER_ID)[0]?.text, 'typing');
   });
 });
 
-test('a follow-up queued after the dispatcher claimed the waiting message is queued on its own', async () => {
+test('claim removes only the head and rejects a stale claim token', async () => {
   await withDatabase(() => {
     sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'A', attachments: [] });
-    assert.equal(sessionDraftsDb.claimQueuedMessage(claimCandidate('session-a')), true);
-
-    const result = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'B', attachments: [] });
-
-    assert.equal(result?.appended, false);
-    assert.deepEqual(queuedIn('session-a'), { content: 'B', attachments: [] }, 'A is not sent a second time');
-  });
-});
-
-test('a claim listed before a follow-up was appended no longer matches, so it is not sent short', async () => {
-  await withDatabase(() => {
-    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'A', attachments: [] });
-    const listedBeforeB = claimCandidate('session-a');
+    const stale = claimCandidate('session-a');
     sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'B', attachments: [] });
-
-    assert.equal(sessionDraftsDb.claimQueuedMessage(listedBeforeB), false);
-    assert.equal((queuedIn('session-a') as { content: string }).content, 'A\n\nB');
-  });
-});
-
-test('saving draft text leaves the queued message alone and keeps the row while it waits', async () => {
-  await withDatabase(() => {
-    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'A', attachments: [] });
-
-    sessionDraftsDb.saveDraftText(USER_ID, 'session-a', 'typing the next one');
-    assert.deepEqual(queuedIn('session-a'), { content: 'A', attachments: [] });
-
-    sessionDraftsDb.saveDraftText(USER_ID, 'session-a', '');
-    assert.deepEqual(queuedIn('session-a'), { content: 'A', attachments: [] });
-
-    // After a claim, a text save must not bring the sent message back.
+    assert.equal(sessionDraftsDb.claimQueuedMessage(stale), false);
     assert.equal(sessionDraftsDb.claimQueuedMessage(claimCandidate('session-a')), true);
-    sessionDraftsDb.saveDraftText(USER_ID, 'session-a', 'x');
-    assert.equal(queuedIn('session-a'), null);
-
-    // And once nothing is left, the row goes.
-    sessionDraftsDb.saveDraftText(USER_ID, 'session-a', '');
-    assert.deepEqual(sessionDraftsDb.getDrafts(USER_ID), []);
+    assert.deepEqual(queuedIn('session-a')?.map((item) => item.content), ['B']);
   });
 });
 
-test('clearing the queued message keeps the draft text, and drops an emptied row', async () => {
+test('reordering preserves message payloads and a prior claim cannot consume the old head', async () => {
+  await withDatabase(() => {
+    const a = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'A', attachments: [{ name: 'a.txt' }] });
+    const b = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'B', attachments: [] });
+    const staleClaim = claimCandidate('session-a');
+    const order = [a.queuedMessage.id!, b.queuedMessage.id!];
+    assert.deepEqual(sessionDraftsDb.reorderQueuedMessages(USER_ID, 'session-a', order, [...order].reverse())?.map((item) => item.content), ['B', 'A']);
+    assert.equal(sessionDraftsDb.claimQueuedMessage(staleClaim), false);
+    assert.equal(queuedIn('session-a')?.[1]?.attachments.length, 1);
+    assert.equal(sessionDraftsDb.reorderQueuedMessages(USER_ID, 'session-a', order, [...order].reverse()), null);
+  });
+});
+
+test('taking one queued turn prevents a stale dispatch claim and refusal restores its position', async () => {
+  await withDatabase(() => {
+    const a = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'A', attachments: [] });
+    const b = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'B', attachments: [] });
+    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'C', attachments: [] });
+    const staleClaim = claimCandidate('session-a');
+    const taken = sessionDraftsDb.takeQueuedMessage(USER_ID, 'session-a', b.queuedMessage.id!);
+    assert.equal(taken?.message.content, 'B');
+    assert.deepEqual(queuedIn('session-a')?.map((item) => item.content), ['A', 'C']);
+    assert.equal(sessionDraftsDb.claimQueuedMessage(staleClaim), false);
+    assert.equal(sessionDraftsDb.takeQueuedMessage(USER_ID, 'session-a', b.queuedMessage.id!), null);
+    sessionDraftsDb.restoreTakenQueuedMessage(USER_ID, 'session-a', taken!.message, taken!.index);
+    sessionDraftsDb.restoreTakenQueuedMessage(USER_ID, 'session-a', taken!.message, taken!.index);
+    assert.deepEqual(queuedIn('session-a')?.map((item) => item.content), ['A', 'B', 'C']);
+    assert.equal(queuedIn('session-a')?.[0]?.id, a.queuedMessage.id);
+  });
+});
+
+test('clearing one queued message preserves its neighbors and draft text', async () => {
   await withDatabase(() => {
     sessionDraftsDb.saveDraftText(USER_ID, 'session-a', 'keep me');
     sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'A', attachments: [] });
-    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-b', { content: 'B', attachments: [] });
-
-    sessionDraftsDb.clearQueuedMessage(USER_ID, 'session-a');
-    sessionDraftsDb.clearQueuedMessage(USER_ID, 'session-b');
-
-    assert.deepEqual(
-      sessionDraftsDb.getDrafts(USER_ID).map((draft) => [draft.scope, draft.text, draft.queuedMessage]),
-      [['session-a', 'keep me', null]],
-    );
+    const b = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'B', attachments: [] });
+    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'C', attachments: [] });
+    sessionDraftsDb.clearQueuedMessage(USER_ID, 'session-a', b.queuedMessage.id);
+    assert.deepEqual(queuedIn('session-a')?.map((item) => item.content), ['A', 'C']);
+    assert.equal(sessionDraftsDb.getDrafts(USER_ID)[0]?.text, 'keep me');
   });
 });
 
-test('a slash command is never merged with another queued message, in either order', async () => {
-  await withDatabase(() => {
-    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'fix the test', attachments: [] });
-    assert.equal(
-      sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: '/compact', attachments: [] }),
-      null,
-    );
-    assert.deepEqual(queuedIn('session-a'), { content: 'fix the test', attachments: [] }, 'the waiting text is kept as it was');
-
-    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-b', { content: '  /review src', attachments: [] });
-    assert.equal(
-      sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-b', { content: 'then fix it', attachments: [] }),
-      null,
-    );
-    assert.deepEqual(queuedIn('session-b'), { content: '  /review src', attachments: [] }, 'the waiting command is kept as it was');
-
-    // On its own, with nothing waiting, a command is queued as before.
-    assert.equal(sessionDraftsDb.claimQueuedMessage(claimCandidate('session-a')), true);
-    const alone = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: '/compact', attachments: [] });
-    assert.deepEqual(alone, { queuedMessage: { content: '/compact', attachments: [] }, appended: false });
-  });
-});
-
-test('a claim restored after losing a race goes back in front of a follow-up queued meanwhile', async () => {
-  await withDatabase(() => {
-    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'A', attachments: [{ name: 'a.png' }] });
-    const claimed = claimCandidate('session-a');
-    assert.equal(sessionDraftsDb.claimQueuedMessage(claimed), true);
-    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'B', options: { model: 'opus' }, attachments: [] });
-
-    sessionDraftsDb.restoreQueuedMessage(claimed);
-
-    assert.deepEqual(queuedIn('session-a'), {
-      content: 'A\n\nB',
-      options: { model: 'opus' },
-      attachments: [{ name: 'a.png' }],
-    });
-  });
-});
-
-test('an attachments-only message merged with a later text gains no leading blank line', async () => {
-  await withDatabase(() => {
-    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: '', attachments: [{ name: 'a.png' }] });
-
-    const result = sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'B', attachments: [] });
-
-    assert.deepEqual(result?.queuedMessage, { content: 'B', attachments: [{ name: 'a.png' }] });
-  });
-});
-
-test('a claim restored after its emptied row was removed is written back', async () => {
+test('a restored claim returns before messages appended meanwhile', async () => {
   await withDatabase(() => {
     sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'A', attachments: [] });
     const claimed = claimCandidate('session-a');
     assert.equal(sessionDraftsDb.claimQueuedMessage(claimed), true);
-    sessionDraftsDb.deleteEmptyDraft(USER_ID, 'session-a');
-    assert.deepEqual(sessionDraftsDb.getDrafts(USER_ID), []);
-
+    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'B', attachments: [] });
     sessionDraftsDb.restoreQueuedMessage(claimed);
+    assert.deepEqual(queuedIn('session-a')?.map((item) => item.content), ['A', 'B']);
+  });
+});
 
-    assert.deepEqual(queuedIn('session-a'), { content: 'A', attachments: [] });
+test('slash commands remain independent queued turns', async () => {
+  await withDatabase(() => {
+    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: 'A', attachments: [] });
+    sessionDraftsDb.appendQueuedMessage(USER_ID, 'session-a', { content: '/compact', attachments: [] });
+    assert.deepEqual(queuedIn('session-a')?.map((item) => item.content), ['A', '/compact']);
   });
 });

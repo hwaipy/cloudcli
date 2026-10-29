@@ -70,12 +70,14 @@ const { WebSocketProvider, useWebSocket } = await import('@/shared/context/WebSo
 /** Every status the provider rendered, in order, so a one-render flash is caught too. */
 let seen: string[] = [];
 let isConnected: boolean | null = null;
+let sendMessage: ((message: unknown) => boolean) | null = null;
 
 function RecordStatus() {
   const value = useWebSocket();
   seen.push(String(value.connectionStatus));
   useEffect(() => {
     isConnected = value.isConnected;
+    sendMessage = value.sendMessage;
   });
   return null;
 }
@@ -89,6 +91,7 @@ beforeEach(() => {
   FakeWebSocket.instances = [];
   seen = [];
   isConnected = null;
+  sendMessage = null;
   AUTH.current = { user: AUTH.user, token: 'token-1', isLoading: false };
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -109,6 +112,20 @@ test('the first handshake reads as connecting, never as a lost connection', () =
   assert.equal(lastStatus(), 'connected');
   assert.equal(isConnected, true);
   assert.ok(!seen.includes('disconnected'), `statuses seen: ${seen.join(', ')}`);
+});
+
+test('sending reports whether the socket accepted a frame', () => {
+  renderProvider();
+  assert.equal(sendMessage?.({ type: 'chat.send' }), false);
+
+  act(() => socket(0).serverOpens());
+  const send = vi.spyOn(socket(0), 'send');
+  assert.equal(sendMessage?.({ type: 'chat.send' }), true);
+  assert.equal(send.mock.calls.length, 1);
+
+  act(() => socket(0).serverDrops());
+  assert.equal(sendMessage?.({ type: 'chat.send' }), false);
+  assert.equal(send.mock.calls.length, 1);
 });
 
 test('a dropped socket reads as disconnected through every failed retry, until one opens', () => {

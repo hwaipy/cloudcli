@@ -1,7 +1,27 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import type { Project, ProjectSession, QuickSettingsTab, SlashCommand } from '@/shared/types';
+import type { NormalizedMessage, Project, ProjectSession, QuickSettingsTab, SlashCommand } from '@/shared/types';
+
+//----------------- CHAT TRANSCRIPT BOUNDARY ------------
+
+/** Kinds that represent displayable transcript rows, rather than protocol control frames. */
+const STORED_CHAT_MESSAGE_KINDS = new Set([
+  'text', 'tool_use', 'tool_result', 'thinking', 'stream_delta', 'error',
+  'session_created', 'task_notification', 'task_status',
+]);
+
+/** Rejects control frames and malformed rows before they can enter chat history. */
+export function isStorableChatMessage(value: unknown): value is NormalizedMessage {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.id === 'string' && row.id.length > 0
+    && typeof row.kind === 'string' && STORED_CHAT_MESSAGE_KINDS.has(row.kind)
+    && typeof row.timestamp === 'string' && row.timestamp.length > 0
+    && typeof row.provider === 'string' && row.provider.length > 0;
+}
+
+// ---------------------------
 
 //----------------- DEPLOYMENT MODE ------------
 

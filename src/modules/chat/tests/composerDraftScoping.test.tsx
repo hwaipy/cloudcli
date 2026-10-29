@@ -50,7 +50,6 @@ const renderComposer = (selectedSession: ProjectSession | null) => renderHook(
     currentSessionId: session?.id ?? null,
     provider: 'claude',
     permissionMode: 'default',
-    cyclePermissionMode: () => undefined,
     resolvePermissionModeForProvider: () => 'default' as PermissionMode,
     currentProviderModel: 'test-model',
     currentProviderEffort: 'medium',
@@ -159,4 +158,15 @@ test('clearing the composer clears that session\'s stored draft', async () => {
   });
 
   assert.equal(readDraftText('session-a'), '');
+});
+
+test('ordinary Tab keeps the browser focus-navigation behavior', () => {
+  const view = renderComposer({ id: 'session-a' });
+  const preventDefault = vi.fn();
+
+  act(() => {
+    view.result.current.handleKeyDown({ key: 'Tab', preventDefault } as never);
+  });
+
+  assert.equal(preventDefault.mock.calls.length, 0);
 });

@@ -13,11 +13,14 @@ type SessionRow = {
   model: string | null;
   /** Reasoning effort this session runs with; NULL until the app records one. */
   effort: string | null;
+  /** Permission mode explicitly chosen for this session, if any. */
+  permission_mode: string | null;
   /** The app session this one was branched from; NULL unless it is a fork. */
   forked_from_session_id: string | null;
   isArchived: number;
   created_at: string;
   updated_at: string;
+  last_user_message_at: string | null;
 };
 
 type RecentSessionsPage = {
@@ -26,7 +29,7 @@ type RecentSessionsPage = {
 };
 
 const SESSION_ROW_COLUMNS =
-  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, forked_from_session_id, isArchived, created_at, updated_at';
+  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, permission_mode, forked_from_session_id, isArchived, created_at, updated_at, last_user_message_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -57,6 +60,7 @@ function normalizeSessionRow<T extends SessionRow | null | undefined>(row: T): T
     ...row,
     created_at: normalizeTimestamp(row.created_at) ?? row.created_at,
     updated_at: normalizeTimestamp(row.updated_at) ?? row.updated_at,
+    last_user_message_at: normalizeTimestamp(row.last_user_message_at ?? undefined),
   };
 }
 
@@ -70,6 +74,11 @@ function normalizeProjectPathForProvider(provider: string, projectPath: string):
 }
 
 export const sessionsDb = {
+  /** Advances sidebar recency after a user turn or steer is accepted. */
+  recordUserMessage(sessionId: string): void {
+    getConnection().prepare('UPDATE sessions SET last_user_message_at = ? WHERE session_id = ?')
+      .run(new Date().toISOString(), sessionId);
+  },
   /**
    * Upserts one session row discovered on disk by a provider synchronizer.
    *
@@ -94,76 +103,82 @@ export const sessionsDb = {
     const updatedAtValue = normalizeTimestamp(updatedAt);
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
 
-    // First, ensure the project path is recorded in the projects table,
-    // since it's a foreign key in the sessions table.
-    projectsDb.createProjectPath(normalizedProjectPath);
+    // Hold the write lock across the lookup and insert. Another backend process
+    // may learn the app-to-provider mapping while the watcher indexes this file.
+    const upsert = db.transaction(() => {
+      // First, ensure the project path is recorded in the projects table,
+      // since it's a foreign key in the sessions table.
+      projectsDb.createProjectPath(normalizedProjectPath);
 
-    const existing = db
-      .prepare(
-        `SELECT session_id FROM sessions
-         WHERE provider_session_id = ? AND provider = ?
-         LIMIT 1`
-      )
-      .get(providerSessionId, provider) as { session_id: string } | undefined;
+      const existing = db
+        .prepare(
+          `SELECT session_id FROM sessions
+           WHERE provider_session_id = ? AND provider = ?
+           LIMIT 1`
+        )
+        .get(providerSessionId, provider) as { session_id: string } | undefined;
 
-    if (existing) {
+      if (existing) {
+        db.prepare(
+          `UPDATE sessions SET
+             provider = ?,
+             updated_at = COALESCE(?, CURRENT_TIMESTAMP),
+             project_path = ?,
+             jsonl_path = ?,
+             isArchived = CASE WHEN ? IS NULL OR julianday(?) > julianday(updated_at) THEN 0 ELSE isArchived END,
+             custom_name = CASE
+               WHEN session_id <> provider_session_id AND custom_name IS NOT NULL THEN custom_name
+               ELSE COALESCE(?, custom_name)
+             END
+           WHERE session_id = ?`
+        ).run(
+          provider,
+          updatedAtValue,
+          normalizedProjectPath,
+          jsonlPath ?? null,
+          updatedAtValue,
+          updatedAtValue,
+          customName ?? null,
+          existing.session_id
+        );
+
+        return existing.session_id;
+      }
+
+      // Sessions created outside the app (directly via the provider CLI) are
+      // keyed by the provider-native id for both columns. The ON CONFLICT path
+      // covers legacy rows that predate the provider_session_id mapping.
       db.prepare(
-        `UPDATE sessions SET
-           provider = ?,
-           updated_at = COALESCE(?, CURRENT_TIMESTAMP),
-           project_path = ?,
-           jsonl_path = ?,
-           isArchived = CASE WHEN ? IS NULL OR julianday(?) > julianday(updated_at) THEN 0 ELSE isArchived END,
+        `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
+         ON CONFLICT(session_id) DO UPDATE SET
+           provider = excluded.provider,
+           provider_session_id = excluded.provider_session_id,
+           updated_at = excluded.updated_at,
+           project_path = excluded.project_path,
+           jsonl_path = excluded.jsonl_path,
+           isArchived = CASE WHEN ? IS NULL OR julianday(excluded.updated_at) > julianday(sessions.updated_at) THEN 0 ELSE sessions.isArchived END,
            custom_name = CASE
-             WHEN session_id <> provider_session_id AND custom_name IS NOT NULL THEN custom_name
-             ELSE COALESCE(?, custom_name)
-           END
-         WHERE session_id = ?`
+             WHEN sessions.session_id <> sessions.provider_session_id AND sessions.custom_name IS NOT NULL
+               THEN sessions.custom_name
+             ELSE COALESCE(excluded.custom_name, sessions.custom_name)
+           END`
       ).run(
+        providerSessionId,
         provider,
-        updatedAtValue,
+        providerSessionId,
+        customName ?? null,
         normalizedProjectPath,
         jsonlPath ?? null,
+        createdAtValue,
         updatedAtValue,
-        updatedAtValue,
-        customName ?? null,
-        existing.session_id
+        updatedAtValue
       );
 
-      return existing.session_id;
-    }
+      return providerSessionId;
+    });
 
-    // Sessions created outside the app (directly via the provider CLI) are
-    // keyed by the provider-native id for both columns. The ON CONFLICT path
-    // covers legacy rows that predate the provider_session_id mapping.
-    db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
-       ON CONFLICT(session_id) DO UPDATE SET
-         provider = excluded.provider,
-         provider_session_id = excluded.provider_session_id,
-         updated_at = excluded.updated_at,
-         project_path = excluded.project_path,
-         jsonl_path = excluded.jsonl_path,
-         isArchived = CASE WHEN ? IS NULL OR julianday(excluded.updated_at) > julianday(sessions.updated_at) THEN 0 ELSE sessions.isArchived END,
-         custom_name = CASE
-           WHEN sessions.session_id <> sessions.provider_session_id AND sessions.custom_name IS NOT NULL
-             THEN sessions.custom_name
-           ELSE COALESCE(excluded.custom_name, sessions.custom_name)
-         END`
-    ).run(
-      providerSessionId,
-      provider,
-      providerSessionId,
-      customName ?? null,
-      normalizedProjectPath,
-      jsonlPath ?? null,
-      createdAtValue,
-      updatedAtValue,
-      updatedAtValue
-    );
-
-    return providerSessionId;
+    return upsert.immediate();
   },
 
   /**
@@ -180,6 +195,7 @@ export const sessionsDb = {
     provider: string,
     projectPath: string,
     customName?: string,
+    permissionMode?: string,
   ): string {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
@@ -187,9 +203,9 @@ export const sessionsDb = {
     projectsDb.createProjectPath(normalizedProjectPath);
 
     db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-       VALUES (?, ?, NULL, ?, ?, NULL, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    ).run(sessionId, provider, customName ?? null, normalizedProjectPath);
+      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, permission_mode, isArchived, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, ?, NULL, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    ).run(sessionId, provider, customName ?? null, normalizedProjectPath, permissionMode ?? null);
 
     return sessionId;
   },
@@ -212,6 +228,7 @@ export const sessionsDb = {
     forkedFromSessionId: string;
     model: string | null;
     effort: string | null;
+    permissionMode: string | null;
   }): string {
     const db = getConnection();
     const normalizedProjectPath = normalizeProjectPathForProvider(input.provider, input.projectPath);
@@ -225,8 +242,8 @@ export const sessionsDb = {
       db.prepare('DELETE FROM sessions WHERE session_id = ? AND session_id <> ?')
         .run(input.providerSessionId, input.sessionId);
       db.prepare(
-        `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, model, effort, forked_from_session_id, isArchived, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, model, effort, permission_mode, forked_from_session_id, isArchived, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
       ).run(
         input.sessionId,
         input.provider,
@@ -236,6 +253,7 @@ export const sessionsDb = {
         input.jsonlPath,
         input.model,
         input.effort,
+        input.permissionMode,
         input.forkedFromSessionId,
       );
     })();
@@ -286,7 +304,7 @@ export const sessionsDb = {
       ).run(providerSessionId, sessionId);
     });
 
-    merge();
+    merge.immediate();
   },
 
   /**
@@ -439,6 +457,13 @@ export const sessionsDb = {
     ).run(effort, sessionId);
   },
 
+  /** Records the permission mode the next turn in this session will use. */
+  setSessionPermissionMode(sessionId: string, permissionMode: string): void {
+    const db = getConnection();
+    db.prepare('UPDATE sessions SET permission_mode = ? WHERE session_id = ?')
+      .run(permissionMode, sessionId);
+  },
+
   updateSessionCustomName(sessionId: string, customName: string): void {
     const db = getConnection();
     db.prepare(
@@ -555,7 +580,7 @@ export const sessionsDb = {
          FROM sessions
          LEFT JOIN projects ON projects.project_path = sessions.project_path
          WHERE ${visibilityClause}
-         ORDER BY julianday(COALESCE(sessions.updated_at, sessions.created_at)) DESC,
+         ORDER BY julianday(COALESCE(sessions.last_user_message_at, sessions.created_at)) DESC,
                   sessions.session_id DESC
          LIMIT ? OFFSET ?`
       )
@@ -635,7 +660,7 @@ export const sessionsDb = {
          FROM sessions
          WHERE project_path = ?
            AND isArchived = 0
-         ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC
+         ORDER BY julianday(COALESCE(last_user_message_at, created_at)) DESC, session_id DESC
          LIMIT ? OFFSET ?`
       )
       .all(normalizedProjectPath, limit, offset) as SessionRow[];

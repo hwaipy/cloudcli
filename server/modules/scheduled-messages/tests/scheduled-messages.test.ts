@@ -183,19 +183,18 @@ test('a queued message waits for background work its session\'s last turn left r
   });
 });
 
-test('follow-ups queued during one turn are all sent, once, in order, as the next turn', async () => {
+test('follow-ups queued during one turn are sent as separate turns in order', async () => {
   await withIsolatedDatabase(async (userId) => {
     for (const content of ['follow-up A', 'follow-up B', 'follow-up C']) {
       sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content, options: { model: 'opus' }, attachments: [] });
     }
 
     const runs: RunCall[] = [];
-    assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 1);
+    assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 3);
     assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 0, 'nothing is left to send');
 
-    assert.equal(runs.length, 1);
-    assert.equal(runs[0].command, 'follow-up A\n\nfollow-up B\n\nfollow-up C');
-    assert.equal(runs[0].options.model, 'opus');
+    assert.deepEqual(runs.map((run) => run.command), ['follow-up A', 'follow-up B', 'follow-up C']);
+    assert.ok(runs.every((run) => run.options.model === 'opus'));
     assert.equal(sessionDraftsDb.getDrafts(userId).length, 0);
   });
 });

@@ -74,11 +74,12 @@ type ToolApprovalDecision = AnyRecord | null;
 type ToolApprovalResolver = ((decision: ToolApprovalDecision) => void) & AnyRecord;
 
 /**
- * A context-window reading. `used` is what the window holds; `total` is its size.
+ * A context-window reading. `total` is omitted until the SDK or a server
+ * setting supplies a window size; guessing one would make the ratio false.
  */
 type TokenBudget = {
   used: number;
-  total: number;
+  total?: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
@@ -540,13 +541,14 @@ function readNumber(value: unknown) {
  * The window a budget is measured against: the one the SDK reported for the
  * session's model when known, else the server-wide CONTEXT_WINDOW setting.
  * @param {number|null|undefined} reportedContextWindow - SDK-reported window
- * @returns {number} Context window in tokens
+ * @returns {number|undefined} Context window in tokens when known
  */
-function resolveContextWindow(reportedContextWindow?: number | null): number {
+function resolveContextWindow(reportedContextWindow?: number | null): number | undefined {
   if (typeof reportedContextWindow === 'number' && Number.isFinite(reportedContextWindow) && reportedContextWindow > 0) {
     return reportedContextWindow;
   }
-  return parseInt(process.env.CONTEXT_WINDOW ?? '', 10) || 160000;
+  const configured = Number.parseInt(process.env.CONTEXT_WINDOW ?? '', 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : undefined;
 }
 
 /**
@@ -600,7 +602,7 @@ function buildTokenBudget(messageUsage: AnyRecord, reportedContextWindow?: numbe
 
   return {
     used: inputTokens + outputTokens,
-    total: contextWindow,
+    ...(contextWindow ? { total: contextWindow } : {}),
     inputTokens,
     outputTokens,
     cacheReadTokens,
@@ -698,7 +700,7 @@ function extractCumulativeTokenBudget(rawMessage: unknown, reportedContextWindow
 
   return {
     used: totalUsed,
-    total: contextWindow,
+    ...(contextWindow ? { total: contextWindow } : {}),
     inputTokens,
     outputTokens,
     breakdown: {
@@ -1248,6 +1250,10 @@ async function queryClaudeSDK(
         options: sdkOptions
       });
     }
+
+    // Both the SDK and the scripted test transport must produce a query here.
+    // Keep a runtime guard because setup can take either branch above.
+    if (!queryInstance) throw new Error('Claude query did not initialize.');
 
     // Track the query instance for abort capability
     if (sessionKey()) {

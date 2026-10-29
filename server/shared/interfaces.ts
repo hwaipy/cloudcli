@@ -38,6 +38,10 @@ export interface IProviderRuntime {
     context: ProviderRuntimeContext,
   ): Promise<unknown>;
   abort(sessionId: string): boolean | Promise<boolean>;
+  /** Adds user input to a live turn when this provider supports steering. */
+  steer?(sessionId: string, text: string): Promise<boolean>;
+  /** Releases provider-owned child processes during application shutdown. */
+  shutdown?(): void | Promise<void>;
   permissions?: ProviderRuntimePermissionGateway;
   /**
    * Sessions with background tasks still outstanding, whether or not their

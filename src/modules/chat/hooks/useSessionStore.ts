@@ -12,6 +12,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { api } from '@/shared/api';
 import type { LLMProvider, NormalizedMessage } from '@/shared/types';
 import { removeOptimisticUserEchoes } from '@/modules/chat/utils/sessionMessageReconciliation';
+import { isStorableChatMessage } from '@/shared/utils';
 import {
   hasReachedCachedTailTimeBoundary,
   mergeLatestServerPage,
@@ -98,25 +99,53 @@ async function requestSessionHistoryPage(
   sessionId: string,
   options: SessionMessagesRequestOptions,
 ): Promise<SessionHistoryPage> {
-  const response = await api.providers.sessionMessages(sessionId, options, {
-    signal: AbortSignal.timeout(SESSION_HISTORY_REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  let response: Response;
+  try {
+    response = await api.providers.sessionMessages(sessionId, options, {
+      signal: AbortSignal.timeout(SESSION_HISTORY_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new SessionHistoryError('request', error);
+  }
+  if (!response.ok) throw new SessionHistoryError('request', `HTTP ${response.status}`);
 
-  const body = await response.json();
-  const data = body?.data ?? body;
-  const messages: NormalizedMessage[] = Array.isArray(data.messages) ? data.messages : [];
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (error) {
+    throw new SessionHistoryError('response', error);
+  }
+  const data = body && typeof body === 'object' && 'data' in body ? body.data : body;
+  if (!data || typeof data !== 'object' || !('messages' in data)
+    || !Array.isArray(data.messages) || !data.messages.every(isStorableChatMessage)) {
+    throw new SessionHistoryError('response', 'Invalid messages array');
+  }
+  const payload = data as Record<string, unknown> & { messages: NormalizedMessage[] };
+  const messages = payload.messages;
 
   return {
     messages,
-    total: typeof data.total === 'number' ? data.total : messages.length,
-    hasMore: Boolean(data.hasMore),
+    total: typeof payload.total === 'number' ? payload.total : messages.length,
+    hasMore: Boolean(payload.hasMore),
     ...(
-      data && typeof data === 'object' && 'tokenUsage' in data
-        ? { tokenUsage: data.tokenUsage }
+      'tokenUsage' in payload
+        ? { tokenUsage: payload.tokenUsage }
         : {}
     ),
   };
+}
+
+class SessionHistoryError extends Error {
+  readonly detail: unknown;
+  constructor(readonly stage: 'request' | 'response', cause: unknown) {
+    super(`Session history ${stage} failed`);
+    this.detail = cause;
+  }
+}
+
+function logHistoryFailure(sessionId: string, operation: string, error: unknown): void {
+  const stage = error instanceof SessionHistoryError ? error.stage : 'merge';
+  console.error(`[SessionStore] ${operation} ${stage} failed for ${sessionId}:`, error);
 }
 
 /**
@@ -303,8 +332,27 @@ function pruneRealtimeSupersededByServer(
 
   const serverIds = new Set(serverMessages.map((message) => message.id));
   const reconciledRealtimeMessages = removeOptimisticUserEchoes(serverMessages, realtimeMessages);
+  // If only one of two identical Steer inputs has reached history, keep both
+  // echoes in the cache. The merge can then claim that history row once and
+  // still display the other echo. Once both persist, both echoes are pruned.
+  const pendingSteerTexts = new Set(
+    reconciledRealtimeMessages
+      .filter((message) => message.id.startsWith('steer_') && message.provider === 'codex' && message.kind === 'text' && message.role === 'user')
+      .map((message) => message.content?.trim()),
+  );
+  const reconciledIds = new Set(reconciledRealtimeMessages.map((message) => message.id));
 
-  return reconciledRealtimeMessages.filter((message) => {
+  return realtimeMessages.filter((message) => {
+    if (!isStorableChatMessage(message)) return false;
+    if (!reconciledIds.has(message.id) && !(
+      message.id.startsWith('steer_')
+      && message.provider === 'codex'
+      && message.kind === 'text'
+      && message.role === 'user'
+      && pendingSteerTexts.has(message.content?.trim())
+    )) {
+      return false;
+    }
     if (serverIds.has(message.id)) {
       return false;
     }
@@ -378,12 +426,23 @@ function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[
  * (by reference). Returns true if merged was recomputed.
  */
 function recomputeMergedIfNeeded(slot: SessionSlot): boolean {
+  // Older clients could cache a control frame before validation existed. Heal
+  // that slot before comparing memoized references or merging new history.
+  const validServerMessages = slot.serverMessages.filter(isStorableChatMessage);
+  const validRealtimeMessages = slot.realtimeMessages.filter(isStorableChatMessage);
+  if (validServerMessages.length !== slot.serverMessages.length) {
+    slot.serverMessages = validServerMessages;
+  }
+  if (validRealtimeMessages.length !== slot.realtimeMessages.length) {
+    slot.realtimeMessages = validRealtimeMessages;
+  }
   if (slot.serverMessages === slot._lastServerRef && slot.realtimeMessages === slot._lastRealtimeRef) {
     return false;
   }
+  const merged = computeMerged(slot.serverMessages, slot.realtimeMessages);
   slot._lastServerRef = slot.serverMessages;
   slot._lastRealtimeRef = slot.realtimeMessages;
-  slot.merged = computeMerged(slot.serverMessages, slot.realtimeMessages);
+  slot.merged = merged;
   return true;
 }
 
@@ -620,7 +679,7 @@ export function useSessionStore() {
         notify(sessionId);
         return slot;
       } catch (error) {
-        console.error(`[SessionStore] fetch failed for ${sessionId}:`, error);
+        logHistoryFailure(sessionId, 'fetch', error);
         slot.status = 'error';
         notify(sessionId);
         return slot;
@@ -694,7 +753,7 @@ export function useSessionStore() {
         if (changed) notify(sessionId);
         return { slot, prependedCount };
       } catch (error) {
-        console.error(`[SessionStore] fetchMore failed for ${sessionId}:`, error);
+        logHistoryFailure(sessionId, 'fetchMore', error);
         if (changed) notify(sessionId);
         return { slot, prependedCount };
       }
@@ -749,17 +808,45 @@ export function useSessionStore() {
   }, [notify]);
 
   const appendRealtime = useCallback((sessionId: string, msg: NormalizedMessage) => {
+    if (!isStorableChatMessage(msg)) {
+      const row = msg && typeof msg === 'object' ? msg as unknown as Record<string, unknown> : {};
+      console.warn('[SessionStore] Ignored invalid realtime message', {
+        kind: row.kind,
+        sessionId,
+        missingId: typeof row.id !== 'string' || row.id.length === 0,
+      });
+      return;
+    }
     const slot = getSlot(sessionId);
     const normalizedMessage =
       msg.sessionId === sessionId
         ? msg
         : { ...msg, sessionId };
-    let updated = [...slot.realtimeMessages, normalizedMessage];
+    const serverMessages = slot.serverMessages.filter(isStorableChatMessage);
+    const realtimeMessages = slot.realtimeMessages.filter(isStorableChatMessage);
+    // Providers send successive snapshots of a live item with the same id.
+    // Replace its row in place so text and tool progress grow without duplicates.
+    const existingIndex = realtimeMessages.findIndex((message) => message.id === normalizedMessage.id);
+    let updated = [...realtimeMessages];
+    if (existingIndex >= 0) {
+      updated[existingIndex] = {
+        ...normalizedMessage,
+        timestamp: updated[existingIndex].timestamp,
+      };
+    } else {
+      updated.push(normalizedMessage);
+    }
     if (updated.length > MAX_REALTIME_MESSAGES) {
       updated = updated.slice(-MAX_REALTIME_MESSAGES);
     }
+    // Compute before committing either array: one malformed row cannot leave
+    // a partially updated cache that makes every later refresh fail.
+    const merged = computeMerged(serverMessages, updated);
+    slot.serverMessages = serverMessages;
     slot.realtimeMessages = updated;
-    recomputeMergedIfNeeded(slot);
+    slot.merged = merged;
+    slot._lastServerRef = serverMessages;
+    slot._lastRealtimeRef = updated;
     notify(sessionId);
   }, [getSlot, notify]);
 
@@ -788,7 +875,7 @@ export function useSessionStore() {
         if (result.changed) notify(sessionId);
         return { slot, ...result };
       } catch (error) {
-        console.error(`[SessionStore] latest refresh failed for ${sessionId}:`, error);
+        logHistoryFailure(sessionId, 'latest refresh', error);
         return { slot, applied: false, changed: false, deferred: false };
       }
     });

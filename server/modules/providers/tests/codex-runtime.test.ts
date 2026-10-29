@@ -8,6 +8,48 @@ import type { Thread, ThreadOptions } from '@openai/codex-sdk';
 import { codexRuntime } from '@/modules/providers/list/codex/codex-runtime.provider.js';
 import type { ProviderRuntimeContext } from '@/shared/index.js';
 
+test('Codex forwards growing assistant text before the item completes', async (t) => {
+  const events = [
+    { type: 'thread.started', thread_id: 'native-thread' },
+    { type: 'item.started', item: { id: 'reply-1', type: 'agent_message', text: '' } },
+    { type: 'item.updated', item: { id: 'reply-1', type: 'agent_message', text: 'First' } },
+    { type: 'item.updated', item: { id: 'reply-1', type: 'agent_message', text: 'First sentence' } },
+    { type: 'item.completed', item: { id: 'reply-1', type: 'agent_message', text: 'First sentence.' } },
+  ];
+  const thread = {
+    id: 'native-thread',
+    async runStreamed() {
+      return { events: (async function* () { for (const event of events) yield event; })() };
+    },
+  } as unknown as Thread;
+  t.mock.method(Codex.prototype, 'startThread', () => thread);
+  const messages: Array<{ id?: string; content?: string }> = [];
+  const context: ProviderRuntimeContext = {
+    resolveProviderSessionId: () => null,
+    resolveResumeModel: async () => 'test-model',
+    getProviderModels: async () => ({ OPTIONS: [], DEFAULT: 'test-model' }),
+    normalizeMessage: (event) => {
+      const item = event as { itemType?: string; itemId?: string; message?: { content?: string } };
+      return item.itemType === 'agent_message'
+        ? [{ id: item.itemId, content: item.message?.content } as ReturnType<ProviderRuntimeContext['normalizeMessage']>[number]]
+        : [];
+    },
+    isProviderInstalled: async () => true,
+  };
+
+  await codexRuntime.run('hello', { cwd: process.cwd() }, {
+    isWebSocketWriter: true,
+    send: (message) => messages.push(message as { id?: string; content?: string }),
+  }, context);
+
+  assert.deepEqual(messages.filter((message) => message.id === 'reply-1'), [
+    { id: 'reply-1', content: '' },
+    { id: 'reply-1', content: 'First' },
+    { id: 'reply-1', content: 'First sentence' },
+    { id: 'reply-1', content: 'First sentence.' },
+  ]);
+});
+
 for (const resumed of [false, true]) {
   for (const permissionMode of [undefined, 'default', 'unknown', 'acceptEdits', 'bypassPermissions']) {
     test(`Codex ${resumed ? 'resumes' : 'starts'} with supported permissions (${permissionMode ?? 'omitted'})`, async (t) => {

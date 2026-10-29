@@ -22,6 +22,7 @@ import {
   createNormalizedMessage,
 } from '@/shared/index.js';
 import { notifyRunFailed, notifyRunStopped } from '@/modules/notifications/index.js';
+import { codexAppServerRuntime } from '@/modules/providers/list/codex/codex-app-server-runtime.provider.js';
 import type { AnyRecord, ProviderRuntimeContext, ProviderRuntimeWriter } from '@/shared/index.js';
 
 type ActiveCodexSession = {
@@ -41,36 +42,10 @@ const CODEX_IMAGE_ONLY_PROMPT = 'Please analyze the attached image(s).';
 /**
  * Item types whose in-flight updates are worth showing. These are the ones a
  * user waits on — a shell command's output, an MCP call, and the running plan.
+ * Accept assistant updates too when an SDK version supplies them; the current
+ * exec JSON transport normally reports assistant prose only on completion.
  */
-const PROGRESSIVE_CODEX_ITEM_TYPES = new Set(['command_execution', 'mcp_tool_call', 'todo_list']);
-
-function readUsageNumber(value: unknown) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function extractCodexTokenBudget(event: AnyRecord) {
-  const info = event?.info || event?.payload?.info || event?.usage?.info;
-  const usage = info?.total_token_usage || event?.usage?.total_token_usage || event?.usage;
-  if (!usage || typeof usage !== 'object') {
-    return null;
-  }
-
-  const inputTokens = readUsageNumber(usage.input_tokens);
-  const outputTokens = readUsageNumber(usage.output_tokens);
-  const used = readUsageNumber(usage.total_tokens) || inputTokens + outputTokens;
-
-  return {
-    used,
-    total: readUsageNumber(info?.model_context_window || event?.usage?.model_context_window) || 200000,
-    inputTokens,
-    outputTokens,
-    breakdown: {
-      input: inputTokens,
-      output: outputTokens,
-    },
-  };
-}
+const PROGRESSIVE_CODEX_ITEM_TYPES = new Set(['agent_message', 'command_execution', 'mcp_tool_call', 'todo_list']);
 
 /**
  * Transform Codex SDK event to WebSocket message format
@@ -389,9 +364,9 @@ async function queryCodex(
       // Progress events used to be dropped, so a long shell command or a
       // growing plan showed nothing until it finished. They are forwarded now;
       // every item carries a stable id, so the client replaces the row it
-      // already has rather than stacking a new one per tick. Text items are
-      // still skipped mid-flight because assistant prose arrives through the
-      // separate streaming path.
+      // already has rather than stacking a new one per tick. Forward assistant
+      // updates if supplied, although exec JSON currently usually emits only
+      // a completed assistant item.
       if (
         (event.type === 'item.started' || event.type === 'item.updated')
         && !PROGRESSIVE_CODEX_ITEM_TYPES.has(event.item?.type)
@@ -423,15 +398,10 @@ async function queryCodex(
         });
       }
 
-      // Extract and send token usage if available (normalized to match Claude format)
-      if (event.type === 'turn.completed') {
-        const tokenBudget = extractCodexTokenBudget(event);
-        if (tokenBudget) {
-          sendMessage(ws, createNormalizedMessage({ kind: 'status', text: 'token_budget', tokenBudget, sessionId: capturedSessionId || sessionId || null, provider: 'codex' }));
-        }
-      }
     }
 
+    // `turn.completed.usage` sums the whole turn, not occupied context. The
+    // completion refresh reads the latest token_count snapshot instead.
     // Send the terminal completion event — skipped for aborted runs, whose
     // terminal `complete` (aborted: true) was already sent by abort-session.
     const runSession = activeCodexSessions.get(sessionKey() || '');
@@ -525,8 +495,18 @@ function abortCodexSession(sessionId: string) {
 
 /** Used by the providers module's CodexProvider to run and abort SDK turns. */
 export const codexRuntime = {
-  run: queryCodex,
-  abort: abortCodexSession,
+  // Default remains the existing SDK/exec path until explicitly opted in.
+  run: (command: string, options: AnyRecord, writer: ProviderRuntimeWriter, context: ProviderRuntimeContext) =>
+    process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server'
+      ? codexAppServerRuntime.run(command, options, writer, context)
+      : queryCodex(command, options, writer, context),
+  abort: (sessionId: string) => process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server'
+    ? codexAppServerRuntime.abort(sessionId)
+    : abortCodexSession(sessionId),
+  steer: (sessionId: string, text: string) => process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server'
+    ? codexAppServerRuntime.steer(sessionId, text)
+    : Promise.resolve(false),
+  shutdown: () => codexAppServerRuntime.shutdownAll(),
 };
 
 /**

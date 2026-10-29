@@ -95,6 +95,25 @@ export default function AppearanceSettingsTab({
         </SettingsCard>
       </SettingsSection>
 
+      <SettingsSection title={t('appearanceSettings.chatInput.section', { defaultValue: 'Chat input' })}>
+        <SettingsCard>
+          <SettingsRow
+            label={t('appearanceSettings.chatInput.enterAction.label', { defaultValue: 'Enter while Codex is working' })}
+            description={t('appearanceSettings.chatInput.enterAction.description', { defaultValue: 'Choose whether Enter steers the current turn or queues the next message. Command+Enter on Mac or Ctrl+Enter on Windows/Linux performs the other action.' })}
+          >
+            <select
+              value={preferences.codexEnterQueues ? 'queue' : 'steer'}
+              onChange={(event) => setPreference('codexEnterQueues', event.target.value === 'queue')}
+              aria-label={t('appearanceSettings.chatInput.enterAction.label', { defaultValue: 'Enter while Codex is working' })}
+              className="w-full touch-manipulation rounded-lg border border-input bg-card p-2.5 text-sm text-foreground focus:border-primary focus:ring-1 focus:ring-primary sm:w-36"
+            >
+              <option value="steer">{t('appearanceSettings.chatInput.enterAction.steer', { defaultValue: 'Steer' })}</option>
+              <option value="queue">{t('appearanceSettings.chatInput.enterAction.queue', { defaultValue: 'Queue' })}</option>
+            </select>
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
       <SettingsSection title={t('appearanceSettings.codeEditor.title')}>
         <SettingsCard divided>
           <SettingsRow

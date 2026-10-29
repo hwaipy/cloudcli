@@ -1,6 +1,7 @@
 import spawn from 'cross-spawn';
 
-import { sessionDraftsDb, userDb, userPreferencesDb } from '@/modules/database/index.js';
+import { sessionDraftsDb, sessionsDb, userDb, userPreferencesDb } from '@/modules/database/index.js';
+import { broadcastSessionUpserted } from '@/modules/websocket/index.js';
 
 import { createUserRouter } from './user.routes.js';
 import { createUserService } from './user.service.js';
@@ -35,6 +36,13 @@ async function readSystemGitConfig() {
 }
 
 const userService = createUserService({
+  onQueuedMessageAccepted: (scope) => {
+    if (!sessionsDb.getSessionById(scope)) return;
+    sessionsDb.recordUserMessage(scope);
+    void broadcastSessionUpserted(scope).catch((error) => {
+      console.error('[User] Failed to broadcast queued message order', { scope, error });
+    });
+  },
   users: {
     getGitConfig: (userId) => userDb.getGitConfig(userId),
     updateGitConfig: (userId, gitName, gitEmail) => userDb.updateGitConfig(
@@ -54,7 +62,8 @@ const userService = createUserService({
     saveDraft: (userId, scope, draft) => sessionDraftsDb.saveDraft(userId, scope, draft),
     saveDraftText: (userId, scope, text) => sessionDraftsDb.saveDraftText(userId, scope, text),
     appendQueuedMessage: (userId, scope, message) => sessionDraftsDb.appendQueuedMessage(userId, scope, message),
-    clearQueuedMessage: (userId, scope) => sessionDraftsDb.clearQueuedMessage(userId, scope),
+    reorderQueuedMessages: (userId, scope, expectedIds, orderedIds) => sessionDraftsDb.reorderQueuedMessages(userId, scope, expectedIds, orderedIds),
+    clearQueuedMessage: (userId, scope, messageId) => sessionDraftsDb.clearQueuedMessage(userId, scope, messageId),
     deleteDraft: (userId, scope) => sessionDraftsDb.deleteDraft(userId, scope),
   },
   readSystemGitConfig,

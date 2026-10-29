@@ -28,7 +28,9 @@ const renderHandlers = () => {
     provider: 'claude',
     selectedSession: { id: 'viewed-session' } as ProjectSession,
     currentSessionId: 'viewed-session',
-    setTokenBudget: (budget) => budgets.push(budget),
+    setTokenBudget: (update) => {
+      budgets.push(typeof update === 'function' ? update(budgets.at(-1) ?? null) : update);
+    },
     pendingPermissionRequests: [],
     setPendingPermissionRequests: () => {},
     streamTimerRef: { current: null },
@@ -65,4 +67,29 @@ test('ignores token budgets from other running sessions', () => {
   dispatch(budgetEvent('some-other-session'));
 
   assert.equal(budgets.length, 0);
+});
+
+test('live context updates retain the last known session total until history refreshes it', () => {
+  const { budgets, dispatch } = renderHandlers();
+  dispatch({
+    ...budgetEvent('viewed-session'),
+    tokenBudget: { used: 1000, total: 160000, sessionTotalTokens: 5000 },
+  } as ServerEvent);
+  dispatch(budgetEvent('viewed-session'));
+
+  assert.deepEqual(budgets[1], { used: 1234, total: 160000, sessionTotalTokens: 5000 });
+});
+
+test('a live cumulative total replaces the older session total', () => {
+  const { budgets, dispatch } = renderHandlers();
+  dispatch({
+    ...budgetEvent('viewed-session'),
+    tokenBudget: { used: 1000, total: 160000, sessionTotalTokens: 5000 },
+  } as ServerEvent);
+  dispatch({
+    ...budgetEvent('viewed-session'),
+    tokenBudget: { used: 1200, total: 160000, sessionTotalTokens: 6200 },
+  } as ServerEvent);
+
+  assert.equal(budgets[1]?.sessionTotalTokens, 6200);
 });

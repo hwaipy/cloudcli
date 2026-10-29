@@ -9,7 +9,8 @@ const noDrafts: UserDependencies['drafts'] = {
   getDrafts: () => [],
   saveDraft: () => undefined,
   saveDraftText: () => undefined,
-  appendQueuedMessage: (_userId, _scope, message) => ({ queuedMessage: message, appended: false }),
+  appendQueuedMessage: (_userId, _scope, message) => ({ queuedMessage: message, queuedMessages: [message], appended: false }),
+  reorderQueuedMessages: () => [],
   clearQueuedMessage: () => undefined,
   deleteDraft: () => undefined,
 };
@@ -157,7 +158,7 @@ test('appendQueuedMessage hands the repository the message and returns what is n
       ...noDrafts,
       appendQueuedMessage: (...args) => {
         appended.push(args);
-        return { queuedMessage: { content: 'A\n\nB', attachments: [] }, appended: true };
+        return { queuedMessage: { content: 'B', attachments: [] }, queuedMessages: [{ content: 'A', attachments: [] }, { content: 'B', attachments: [] }], appended: true };
       },
     },
   }));
@@ -176,9 +177,29 @@ test('appendQueuedMessage hands the repository the message and returns what is n
   }]]);
   assert.deepEqual(result, {
     success: true,
-    queuedMessage: { content: 'A\n\nB', attachments: [] },
+    queuedMessage: { content: 'B', attachments: [] },
+    queuedMessages: [{ content: 'A', attachments: [] }, { content: 'B', attachments: [] }],
     appended: true,
   });
+});
+
+test('queue acceptance updates sidebar recency only after the message is stored', () => {
+  const events: string[] = [];
+  const service = createUserService(createDependencies({
+    drafts: {
+      ...noDrafts,
+      appendQueuedMessage: (_userId, scope, message) => {
+        events.push(`stored:${scope}`);
+        return { queuedMessage: message, queuedMessages: [message], appended: false };
+      },
+    },
+    onQueuedMessageAccepted: (scope) => events.push(`ranked:${scope}`),
+  }));
+
+  service.appendQueuedMessage(5, 'session-1', { content: 'Follow up' });
+  assert.deepEqual(events, ['stored:session-1', 'ranked:session-1']);
+  assert.throws(() => service.appendQueuedMessage(5, 'session-1', { content: '  ' }), /text or attachments/);
+  assert.equal(events.length, 2);
 });
 
 test('appendQueuedMessage refuses a message with nothing to send, or a bad scope', () => {
@@ -189,21 +210,13 @@ test('appendQueuedMessage refuses a message with nothing to send, or a bad scope
   assert.throws(() => service.appendQueuedMessage(5, '   ', { content: 'B' }), /scope/i);
 });
 
-test('appendQueuedMessage refuses, as a conflict, a slash command the repository cannot combine', () => {
+test('queue reorder rejects missing IDs and reports a concurrent claim', () => {
   const service = createUserService(createDependencies({
-    drafts: { ...noDrafts, appendQueuedMessage: () => null },
+    drafts: { ...noDrafts, reorderQueuedMessages: () => null },
   }));
-
-  assert.throws(
-    () => service.appendQueuedMessage(5, 'session-1', { content: '/compact', attachments: [] }),
-    (error: unknown) => {
-      const appError = error as { code?: string; statusCode?: number; message?: string };
-      assert.equal(appError.code, 'QUEUED_MESSAGE_NOT_COMBINABLE');
-      assert.equal(appError.statusCode, 409);
-      assert.match(appError.message ?? '', /slash command/);
-      return true;
-    },
-  );
+  assert.throws(() => service.reorderQueuedMessages(5, 'session-1', ['a', 'b'], ['a', 'a']), /same messages|unique/i);
+  assert.throws(() => service.reorderQueuedMessages(5, 'session-1', ['a', 'b'], ['b', 'c']), /same messages/i);
+  assert.throws(() => service.reorderQueuedMessages(5, 'session-1', ['a', 'b'], ['b', 'a']), /queue changed/i);
 });
 
 test('clearQueuedMessage clears the named scope', () => {
@@ -213,7 +226,7 @@ test('clearQueuedMessage clears the named scope', () => {
   }));
 
   assert.deepEqual(service.clearQueuedMessage(5, 'session-1'), { success: true });
-  assert.deepEqual(cleared, [[5, 'session-1']]);
+  assert.deepEqual(cleared, [[5, 'session-1', undefined]]);
 });
 
 test('saveDraft rejects a blank or over-long scope', () => {

@@ -44,6 +44,59 @@ import type {
 export const IS_PLATFORM = process.env.VITE_IS_PLATFORM === 'true';
 
 // ---------------------------
+//----------------- CODEX CONTEXT USAGE ------------
+/** Reads Codex's cumulative thread bill even when the latest snapshot has no context row. */
+export function readCodexSessionTotalTokens(info: unknown): number | undefined {
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return undefined;
+  const cumulative = (info as Record<string, unknown>).total_token_usage;
+  if (!cumulative || typeof cumulative !== 'object' || Array.isArray(cumulative)) return undefined;
+  const usage = cumulative as Record<string, unknown>;
+  const reportedTotal = Number(usage.total_tokens);
+  if (Number.isFinite(reportedTotal) && reportedTotal >= 0) return reportedTotal;
+  const input = Number(usage.input_tokens);
+  const output = Number(usage.output_tokens);
+  return Number.isFinite(input) && input >= 0 && Number.isFinite(output) && output >= 0
+    ? input + output
+    : undefined;
+}
+
+/**
+ * Reads the most recent Codex model request's context occupancy from a
+ * `token_count` info record. `total_token_usage` is cumulative for the whole
+ * thread and is reported separately from context occupancy. A missing
+ * `last_token_usage` means the occupied context is unknown, not zero.
+ */
+export function readCodexContextUsage(info: unknown): {
+  used: number;
+  total?: number;
+  sessionTotalTokens?: number;
+  inputTokens: number;
+  outputTokens: number;
+  breakdown: { input: number; output: number };
+} | null {
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return null;
+  const record = info as Record<string, unknown>;
+  const last = record.last_token_usage;
+  if (!last || typeof last !== 'object' || Array.isArray(last)) return null;
+  const usage = last as Record<string, unknown>;
+  const inputTokens = Number(usage.input_tokens);
+  const outputTokens = Number(usage.output_tokens);
+  if (!Number.isFinite(inputTokens) || inputTokens < 0 || !Number.isFinite(outputTokens) || outputTokens < 0) {
+    return null;
+  }
+  const window = Number(record.model_context_window);
+  const sessionTotalTokens = readCodexSessionTotalTokens(info);
+  return {
+    used: inputTokens + outputTokens,
+    ...(Number.isFinite(window) && window > 0 ? { total: window } : {}),
+    ...(sessionTotalTokens !== undefined ? { sessionTotalTokens } : {}),
+    inputTokens,
+    outputTokens,
+    breakdown: { input: inputTokens, output: outputTokens },
+  };
+}
+
+// ---------------------------
 //----------------- NORMALIZED MESSAGE HELPER INPUT TYPES ------------
 /**
  * Input payload accepted by `createNormalizedMessage`.
@@ -123,7 +176,20 @@ export function readQueuedChatMessage(value: unknown): QueuedChatMessage | null 
   const options = record.options && typeof record.options === 'object' && !Array.isArray(record.options)
     ? record.options as Record<string, unknown>
     : undefined;
-  return { content, ...(options ? { options } : {}), attachments };
+  return {
+    ...(typeof record.id === 'string' && record.id ? { id: record.id } : {}),
+    content,
+    ...(options ? { options } : {}),
+    attachments,
+  };
+}
+
+/** Reads the queue in its current array shape and legacy single-message shape. */
+export function readQueuedChatMessages(value: unknown): QueuedChatMessage[] {
+  const values = Array.isArray(value) ? value : value == null ? [] : [value];
+  return values
+    .map(readQueuedChatMessage)
+    .filter((message): message is QueuedChatMessage => message !== null);
 }
 
 // ---------------------------

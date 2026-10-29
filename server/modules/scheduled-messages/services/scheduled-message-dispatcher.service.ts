@@ -31,11 +31,11 @@ function readOptions(raw: string): Record<string, unknown> {
 async function sendClaimedQueuedMessage(
   candidate: QueuedSessionMessageRecord,
   runtime: ProviderRuntimeGateway,
-): Promise<void> {
+): Promise<boolean> {
   const message = readQueuedChatMessage(candidate.queuedMessage);
   if (!message) {
     sessionDraftsDb.deleteEmptyDraft(candidate.userId, candidate.sessionId);
-    return;
+    return false;
   }
 
   const result = await runDetachedChatTurn(
@@ -44,6 +44,7 @@ async function sendClaimedQueuedMessage(
       userId: candidate.userId,
       content: message.content,
       options: { ...message.options, attachments: message.attachments },
+      alreadyRecordedUserSend: true,
     },
     { runtime },
   );
@@ -52,9 +53,10 @@ async function sendClaimedQueuedMessage(
   // wins that tiny race, put the turn back so the next poll tries again.
   if (!result.started && result.error === 'A run was already in progress for this session.') {
     sessionDraftsDb.restoreQueuedMessage(candidate);
-    return;
+    return false;
   }
   sessionDraftsDb.deleteEmptyDraft(candidate.userId, candidate.sessionId);
+  return result.started && !result.error;
 }
 
 /**
@@ -75,15 +77,20 @@ export async function dispatchQueuedMessages(runtime: ProviderRuntimeGateway): P
   const candidates = sessionDraftsDb.listQueuedMessages();
   let claimed = 0;
 
-  await Promise.all(candidates.map(async (candidate) => {
-    if (isSessionBusy(candidate.sessionId, runtime)) {
-      return;
+  await Promise.all(candidates.map(async (initial) => {
+    let candidate: QueuedSessionMessageRecord | undefined = initial;
+    while (candidate && !isSessionBusy(candidate.sessionId, runtime)) {
+      if (!sessionDraftsDb.claimQueuedMessage(candidate)) {
+        // A newer append changed the claim token; retry with the new head.
+        candidate = sessionDraftsDb.listQueuedMessages().find((item) => item.sessionId === initial.sessionId);
+        continue;
+      }
+      claimed += 1;
+      if (!await sendClaimedQueuedMessage(candidate, runtime)) {
+        break;
+      }
+      candidate = sessionDraftsDb.listQueuedMessages().find((item) => item.sessionId === initial.sessionId);
     }
-    if (!sessionDraftsDb.claimQueuedMessage(candidate)) {
-      return;
-    }
-    claimed += 1;
-    await sendClaimedQueuedMessage(candidate, runtime);
   }));
 
   return claimed;

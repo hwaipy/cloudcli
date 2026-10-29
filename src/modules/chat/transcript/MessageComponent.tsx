@@ -1,9 +1,10 @@
-import { memo, useMemo, useRef } from 'react';
+import { memo, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { GitBranchIcon, PencilIcon } from 'lucide-react';
+import { ChevronRightIcon, GitBranchIcon, PencilIcon } from 'lucide-react';
 
 import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult, LLMProvider,DiffLine,Project } from '@/shared/types';
 import { formatUsageLimitText, stripProposedPlanEnvelope } from '@/modules/chat/utils/chatFormatting';
+import { formatTaskDuration } from '@/modules/chat/utils/backgroundTasks';
 import { ToolRenderer, ToolErrorDisplay, SubagentPanel, WorkflowPanel, shouldHideToolResult } from '@/modules/chat/tools';
 import { LLMProviderLogo } from '@/shared/ui';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/modules/chat/transcript/Reasoning';
@@ -16,6 +17,7 @@ import MessageModelLabel from '@/modules/chat/transcript/MessageModelLabel';
 import MessageSpeakControl from '@/modules/chat/transcript/MessageSpeakControl';
 import { useIsExportingTranscript } from '@/modules/chat/context/TranscriptRenderContext';
 import { MemoryCitations } from '@/modules/chat/transcript/MemoryCitations';
+import { LongUserMessage } from '@/modules/chat/transcript/LongUserMessage';
 
 type MessageComponentProps = {
   message: ChatMessage;
@@ -76,6 +78,10 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
   // also pull in browser-only voice state that a document render has no
   // provider for.
   const isExporting = useIsExportingTranscript();
+  // Keep completed Codex work mounted so its full height can animate in both directions.
+  const [isCodexWorkExpanded, setIsCodexWorkExpanded] = useState(false);
+  const codexWorkId = useId();
+  const showCodexWork = isExporting || isCodexWorkExpanded;
   const shouldShowUserCopyControl = !isExporting && message.type === 'user' && userCopyContent.trim().length > 0;
   const shouldShowAssistantCopyControl = !isExporting &&
     message.type === 'assistant' &&
@@ -97,9 +103,56 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
       data-message-timestamp={message.timestamp || undefined}
       className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
-      {message.type === 'user' ? (
+      {message.codexUpdates ? (
+        <div className="w-full text-sm">
+          <button
+            type="button"
+            aria-expanded={showCodexWork}
+            aria-controls={codexWorkId}
+            onClick={() => setIsCodexWorkExpanded((expanded) => !expanded)}
+            className="flex w-full cursor-pointer items-center gap-2 border-b border-border/70 pb-2 text-left text-muted-foreground hover:text-foreground"
+          >
+            <span>{t('codex.workedFor', {
+              duration: message.codexWorkDurationMs === undefined ? '—' : formatTaskDuration(message.codexWorkDurationMs),
+              defaultValue: 'Worked for {{duration}}',
+            })}</span>
+            <ChevronRightIcon className={`h-4 w-4 transition-transform duration-300 motion-reduce:transition-none ${showCodexWork ? 'rotate-90' : ''}`} />
+          </button>
+          <div
+            id={codexWorkId}
+            aria-hidden={!showCodexWork}
+            {...(!showCodexWork ? { inert: '' } : {})}
+            className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out motion-reduce:transition-none ${showCodexWork ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
+          >
+            <div className="min-h-0 overflow-hidden">
+              <div className="space-y-4 py-4">
+                {message.codexUpdates.map((update, index) => (
+                  <div key={`${String(update.timestamp)}-${index}`}>
+                    {update.isToolUse ? (
+                      <MessageComponent
+                        message={update}
+                        prevMessage={update}
+                        createDiff={createDiff}
+                        onFileOpen={onFileOpen}
+                        showRawParameters={showRawParameters}
+                        showThinking={showThinking}
+                        selectedProject={selectedProject}
+                        provider={provider}
+                      />
+                    ) : update.isThinking ? (
+                      showThinking && <Markdown className="prose prose-sm max-w-none font-serif text-muted-foreground dark:prose-invert">{update.content || ''}</Markdown>
+                    ) : (
+                      <Markdown className="prose prose-sm max-w-none font-serif dark:prose-invert">{update.content || ''}</Markdown>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : message.type === 'user' ? (
         /* User turn on the right: claude.ai-style attachment cards above the bubble */
-        <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
+        <div className="flex w-full items-end sm:w-auto sm:max-w-[85%] md:max-w-md lg:max-w-lg xl:max-w-xl">
           <div className="flex min-w-0 flex-1 flex-col items-end gap-2 sm:flex-initial">
             {message.images && message.images.length > 0 && (
               <ChatMessageImages
@@ -112,14 +165,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
             )}
             {userCopyContent.trim().length > 0 || (!message.images?.length && !message.files?.length) ? (
               <div className="group max-w-full rounded-2xl rounded-br-md border border-border/60 bg-muted/60 px-3 py-2 text-foreground shadow-sm dark:bg-gray-800/60 sm:px-4">
-                <div dir="auto" className="break-words font-serif text-sm">
-                  <Markdown
-                    breaks
-                    className="prose prose-sm max-w-none font-serif dark:prose-invert"
-                  >
-                    {message.content}
-                  </Markdown>
-                </div>
+                <LongUserMessage content={userCopyContent} />
                 <div className="mt-1 flex items-center justify-end gap-1 text-xs text-muted-foreground">
                   {onEditMessage && message.transcriptAnchorId && (
                     <button
@@ -156,11 +202,6 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               </div>
             )}
           </div>
-          {!isGrouped && (
-            <div className="hidden h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm text-white sm:flex">
-              U
-            </div>
-          )}
         </div>
       ) : message.compact ? (
         /* A compaction: one row, its numbers, and its summary folded into it */
@@ -235,7 +276,6 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
           )}
 
           <div className="w-full">
-
             {message.isToolUse && message.toolName === 'Workflow' ? (
               /* A workflow launch owns its whole card too. The anchor is what
                  the background-tasks strip scrolls to. */
@@ -433,4 +473,3 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
 });
 
 export default MessageComponent;
-

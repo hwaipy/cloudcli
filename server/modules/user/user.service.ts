@@ -15,6 +15,8 @@ type DraftRecord = {
 };
 
 type UserDependencies = {
+  /** Updates sidebar recency when a user submits a queued turn. */
+  onQueuedMessageAccepted?: (scope: string) => void;
   users: {
     getGitConfig(userId: number): GitConfig | undefined;
     updateGitConfig(userId: number, gitName: string | null, gitEmail: string | null): void;
@@ -33,8 +35,9 @@ type UserDependencies = {
       userId: number,
       scope: string,
       message: QueuedChatMessage,
-    ): { queuedMessage: QueuedChatMessage; appended: boolean } | null;
-    clearQueuedMessage(userId: number, scope: string): void;
+    ): { queuedMessage: QueuedChatMessage; queuedMessages: QueuedChatMessage[]; appended: boolean };
+    reorderQueuedMessages(userId: number, scope: string, expectedIds: string[], orderedIds: string[]): QueuedChatMessage[] | null;
+    clearQueuedMessage(userId: number, scope: string, messageId?: string): void;
     deleteDraft(userId: number, scope: string): void;
   };
   readSystemGitConfig(): Promise<GitConfig>;
@@ -220,30 +223,48 @@ export function createUserService(dependencies: UserDependencies) {
       return { success: true };
     },
 
-    /**
-     * Queues a message behind the session's running turn. A message already
-     * waiting there is kept and this one is added after it, so a burst of
-     * follow-ups all reach the provider, in order, as the next turn.
-     *
-     * A slash command is the one exception: it only works as a turn of its
-     * own, so it is refused rather than merged, and the composer keeps it.
-     */
+    /** Queues one independent turn behind the session's current work. */
     appendQueuedMessage(userId: number, scopeInput: unknown, queuedMessageInput: unknown) {
       const scope = readDraftScope(scopeInput);
       const message = readQueuedMessageInput(queuedMessageInput);
       const result = dependencies.drafts.appendQueuedMessage(userId, scope, message);
-      if (!result) {
-        throw new AppError(
-          'A slash command runs as a turn of its own, so it cannot be combined with the queued message. '
-            + 'Send it after the queued message has gone.',
-          { code: 'QUEUED_MESSAGE_NOT_COMBINABLE', statusCode: 409 },
-        );
-      }
-      return { success: true, queuedMessage: result.queuedMessage, appended: result.appended };
+      dependencies.onQueuedMessageAccepted?.(scope);
+      return { success: true, ...result };
     },
 
-    clearQueuedMessage(userId: number, scopeInput: unknown) {
-      dependencies.drafts.clearQueuedMessage(userId, readDraftScope(scopeInput));
+    /** Saves a drag order only if the dispatcher has not consumed the queue. */
+    reorderQueuedMessages(userId: number, scopeInput: unknown, expectedInput: unknown, orderedInput: unknown) {
+      const scope = readDraftScope(scopeInput);
+      const readIds = (value: unknown): string[] => {
+        if (!Array.isArray(value) || value.length < 2 || value.length > 1000
+          || value.some((id) => typeof id !== 'string' || !id || id.length > 200)
+          || new Set(value).size !== value.length) {
+          throw new AppError('A list of unique queued message IDs is required', {
+            code: 'INVALID_QUEUE_ORDER', statusCode: 400,
+          });
+        }
+        return value as string[];
+      };
+      const expectedIds = readIds(expectedInput);
+      const orderedIds = readIds(orderedInput);
+      if (expectedIds.length !== orderedIds.length
+        || orderedIds.some((id) => !expectedIds.includes(id))) {
+        throw new AppError('The queue order must contain the same messages', {
+          code: 'INVALID_QUEUE_ORDER', statusCode: 400,
+        });
+      }
+      const queuedMessages = dependencies.drafts.reorderQueuedMessages(userId, scope, expectedIds, orderedIds);
+      if (!queuedMessages) {
+        throw new AppError('The queue changed while it was being reordered', {
+          code: 'QUEUE_CHANGED', statusCode: 409,
+        });
+      }
+      return { success: true, queuedMessages };
+    },
+
+    clearQueuedMessage(userId: number, scopeInput: unknown, messageIdInput?: unknown) {
+      const messageId = typeof messageIdInput === 'string' ? messageIdInput : undefined;
+      dependencies.drafts.clearQueuedMessage(userId, readDraftScope(scopeInput), messageId);
       return { success: true };
     },
 

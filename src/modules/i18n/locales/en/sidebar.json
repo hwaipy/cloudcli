@@ -2,6 +2,9 @@
   "projects": {
     "title": "Projects",
     "newProject": "New Project",
+    "actions": "Project actions",
+    "edit": "Edit",
+    "delete": "Delete",
     "deleteProject": "Remove Project",
     "renameProject": "Rename Project",
     "noProjects": "No projects found",

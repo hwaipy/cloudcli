@@ -25,16 +25,14 @@ export default function WorkspaceConnectionStatus() {
         {isDisconnected ? description : null}
       </div>
       {isDisconnected && (
-        // Hidden from screen readers, which get the live region above instead.
-        // Between sm and xl the title box is capped at a third of a narrow
-        // header, so the pill drops its label there and keeps the tooltip.
+        // The live region announces the status; the visible cue stays compact.
         <span
           aria-hidden="true"
           title={description}
-          className="inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-300"
+          data-testid="workspace-reconnecting-indicator"
+          className="inline-flex flex-shrink-0 animate-pulse items-center justify-center text-amber-600 motion-reduce:animate-none dark:text-amber-400"
         >
-          <WifiOff className="h-3.5 w-3.5 flex-shrink-0" />
-          <span className="sm:hidden xl:inline">{t('status.reconnecting')}</span>
+          <WifiOff className="h-4 w-4" />
         </span>
       )}
     </>

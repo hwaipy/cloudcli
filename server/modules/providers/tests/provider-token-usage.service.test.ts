@@ -22,10 +22,12 @@ function createSessionRow(overrides: Record<string, unknown> = {}) {
     custom_name: null,
     model: null,
     effort: null,
+    permission_mode: null,
     forked_from_session_id: null,
     isArchived: 0,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
+    last_user_message_at: null,
     ...overrides,
   };
 }
@@ -58,6 +60,7 @@ test('token usage lookup requires only the app-facing session id for Claude', as
     assert.deepEqual(await service.getSessionTokenUsage('app-session'), {
       used: 155,
       total: 180_000,
+      sessionTotalTokens: 155,
       inputTokens: 125,
       outputTokens: 30,
       cacheReadTokens: 20,
@@ -82,6 +85,7 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
           type: 'token_count',
           info: {
             total_token_usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
+            last_token_usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 },
             model_context_window: 100_000,
           },
         },
@@ -92,6 +96,7 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
           type: 'token_count',
           info: {
             total_token_usage: { input_tokens: 40, output_tokens: 9, total_tokens: 49 },
+            last_token_usage: { input_tokens: 30, output_tokens: 5, total_tokens: 35 },
             model_context_window: 250_000,
           },
         },
@@ -106,11 +111,12 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
     });
 
     assert.deepEqual(await service.getSessionTokenUsage('app-session'), {
-      used: 49,
+      used: 35,
       total: 250_000,
-      inputTokens: 40,
-      outputTokens: 9,
-      breakdown: { input: 40, output: 9 },
+      sessionTotalTokens: 49,
+      inputTokens: 30,
+      outputTokens: 5,
+      breakdown: { input: 30, output: 5 },
     });
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });
@@ -155,6 +161,8 @@ test('OpenCode token usage resolves its provider-native id from the session row'
 
     assert.deepEqual(await service.getSessionTokenUsage('app-session'), {
       used: 29,
+      contextUsed: null,
+      sessionTotalTokens: 29,
       inputTokens: 17,
       outputTokens: 7,
       breakdown: { input: 17, output: 7 },
@@ -200,6 +208,7 @@ test('the Claude summarizer reads the newest assistant turn, not the whole conve
 
   assert.deepEqual(summarizeClaudeTokenUsage(entries, '200000'), {
     used: 4183,
+    sessionTotalTokens: 5238,
     total: 200_000,
     inputTokens: 4103,
     outputTokens: 80,
@@ -246,6 +255,18 @@ test('the Claude summarizer skips a subagent sidechain turn', () => {
   ];
 
   assert.equal(summarizeClaudeTokenUsage(entries, '200000').used, 4083);
+  assert.equal(summarizeClaudeTokenUsage(entries, '200000').sessionTotalTokens, 4998);
+});
+
+test('Claude session total bills repeated streaming snapshots only once', () => {
+  const usage = summarizeClaudeTokenUsage([
+    { type: 'assistant', message: { id: 'first', usage: { input_tokens: 20, output_tokens: 3 } } },
+    { type: 'assistant', message: { id: 'first', usage: { input_tokens: 20, output_tokens: 8 } } },
+    { type: 'assistant', message: { id: 'second', usage: { input_tokens: 50, output_tokens: 5 } } },
+  ], '200000');
+
+  assert.equal(usage.used, 55);
+  assert.equal(usage.sessionTotalTokens, 83);
 });
 
 test('the Claude summarizer reports zero for a transcript with no assistant turn yet', () => {
@@ -255,13 +276,21 @@ test('the Claude summarizer reports zero for a transcript with no assistant turn
   assert.equal(usage.total, 200_000);
 });
 
+test('Claude leaves the context total unknown without an SDK report or configured window', () => {
+  const usage = summarizeClaudeTokenUsage([
+    { type: 'assistant', message: { usage: { input_tokens: 100, output_tokens: 5 } } },
+  ], '');
+  assert.equal(usage.used, 105);
+  assert.equal(usage.total, undefined);
+});
+
 /** Padding rows large enough to push earlier rows out of the 4MB tail window. */
 function paddingLines(totalBytes: number): string {
   const line = JSON.stringify({ type: 'attachment', filler: 'x'.repeat(4096) });
   return Array.from({ length: Math.ceil(totalBytes / line.length) }, () => line).join('\n');
 }
 
-test('Claude token usage reads only the tail of a large transcript', async () => {
+test('Claude token usage reads the full large transcript for an accurate session total', async () => {
   const tempDirectory = await mkdtemp(path.join(tmpdir(), 'provider-token-usage-claude-tail-'));
   const sessionFilePath = path.join(tempDirectory, 'provider-session.jsonl');
 
@@ -274,13 +303,12 @@ test('Claude token usage reads only the tail of a large transcript', async () =>
     const service = createProviderTokenUsageService({
       getSessionById: () => createSessionRow({ jsonl_path: sessionFilePath }),
       getClaudeContextWindow: () => '180000',
-      // Reading the whole file here would defeat the tail read; fail loudly.
-      readTextFile: () => { throw new Error('full read must not happen when the tail has usage'); },
     });
 
     const usage = await service.getSessionTokenUsage('app-session');
     assert.equal(usage.inputTokens, 7);
     assert.equal(usage.outputTokens, 2);
+    assert.equal(usage.sessionTotalTokens, 9);
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });
   }
@@ -322,6 +350,7 @@ test('Codex token usage reads only the tail of a large rollout', async () => {
           type: 'token_count',
           info: {
             total_token_usage: { input_tokens: 21, output_tokens: 8, total_tokens: 29 },
+            last_token_usage: { input_tokens: 21, output_tokens: 8, total_tokens: 29 },
             model_context_window: 150_000,
           },
         },
@@ -336,6 +365,7 @@ test('Codex token usage reads only the tail of a large rollout', async () => {
     assert.deepEqual(await service.getSessionTokenUsage('app-session'), {
       used: 29,
       total: 150_000,
+      sessionTotalTokens: 29,
       inputTokens: 21,
       outputTokens: 8,
       breakdown: { input: 21, output: 8 },
@@ -355,7 +385,7 @@ test('Codex token usage falls back to the whole file when the tail has no token_
         type: 'event_msg',
         payload: {
           type: 'token_count',
-          info: { total_token_usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 } },
+          info: { total_token_usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 }, last_token_usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 } },
         },
       }),
       paddingLines(5 * 1024 * 1024),
@@ -367,6 +397,29 @@ test('Codex token usage falls back to the whole file when the tail has no token_
 
     const usage = await service.getSessionTokenUsage('app-session');
     assert.equal(usage.used, 6);
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('Codex does not mistake cumulative usage for occupied context when the latest request is missing', async () => {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), 'provider-token-usage-codex-unknown-'));
+  const sessionFilePath = path.join(tempDirectory, 'rollout-provider-session.jsonl');
+  try {
+    await writeFile(sessionFilePath, JSON.stringify({
+      type: 'event_msg', payload: { type: 'token_count', info: {
+        total_token_usage: { input_tokens: 24_000_000, output_tokens: 60_000, total_tokens: 24_060_000 },
+        model_context_window: 258_400,
+      } },
+    }));
+    const service = createProviderTokenUsageService({
+      getSessionById: () => createSessionRow({ provider: 'codex', jsonl_path: sessionFilePath }),
+    });
+    const usage = await service.getSessionTokenUsage('app-session');
+    assert.equal(usage.used, 0);
+    assert.equal(usage.total, undefined);
+    assert.equal(usage.contextUsed, null);
+    assert.equal(usage.sessionTotalTokens, 24_060_000);
   } finally {
     await rm(tempDirectory, { recursive: true, force: true });
   }

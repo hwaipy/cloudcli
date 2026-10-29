@@ -20,6 +20,12 @@
     "codex": "Codex",
     "opencode": "OpenCode"
   },
+  "codex": {
+    "updates": "更新内容",
+    "update": "更新",
+    "finalAnswer": "最终回答",
+    "workedFor": "工作了 {{duration}}"
+  },
   "tools": {
     "settings": "工具设置",
     "error": "工具错误",
@@ -129,12 +135,12 @@
     "send": "发送",
     "stop": "停止",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令",
-      "enter": "Enter 发送 • Shift+Enter 换行 • Tab 切换模式 • / 斜杠命令",
+      "ctrlEnter": "Ctrl+Enter 发送 • Shift+Enter 换行 • / 斜杠命令",
+      "enter": "Enter 发送 • Shift+Enter 换行 • / 斜杠命令",
       "queue": "Enter 排队发送下一条消息",
       "appendQueued": "Enter 添加到排队消息"
     },
-    "clickToChangeMode": "点击更改权限模式（或在输入框中按 Tab）",
+    "clickToChangeMode": "点击更改权限模式",
     "showAllCommands": "显示所有命令",
     "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部",
@@ -142,10 +148,14 @@
       "sendNext": "排队发送下一条消息",
       "append": "添加到排队消息",
       "notCombinable": "无法排队发送消息：斜杠命令会单独运行，因此不能与排队消息合并。请在排队消息发送后再发送。",
-      "label": "已排队",
-      "willSend": "将在当前完成后发送",
+      "steer": "Steer",
+      "actions": "消息操作",
       "edit": "编辑排队消息",
-      "delete": "删除排队消息"
+      "delete": "删除排队消息",
+      "drag": "拖动重排第 {{position}} 条排队消息",
+      "moveUp": "上移排队消息",
+      "moveDown": "下移排队消息",
+      "attachmentsOnly": "附件"
     }
   },
   "providerSelection": {
@@ -253,13 +263,22 @@
     "nextTaskPrompt": "开始下一个任务"
   },
   "message": {
+    "expandCode": "展开代码",
+    "collapseCode": "收起代码",
+    "expandContent": "展开内容",
+    "collapseContent": "收起内容",
     "editAndResend": "编辑并重新发送",
     "forkFromHere": "从此处派生",
     "answeredBy": "由 {{model}} 回答"
   },
   "composer": {
+    "reasoning": "推理强度",
+    "model": "模型",
+    "effortDefault": "默认",
+    "loadingModels": "正在加载模型…",
+    "selectModel": "模型：{{model}}",
+    "selectEffort": "推理强度：{{effort}}",
     "permissionHeading": "如何批准 {{provider}} 的操作？",
-    "permissionCycleHint": "在输入框中按 Tab 切换模式",
     "permissionTriggerLabel": "{{mode}}：{{heading}}",
     "editing": {
       "title": "正在替换先前的消息",
@@ -299,6 +318,24 @@
     "failed": "未发送 — {{reason}}",
     "cancel": "取消定时消息",
     "dismiss": "关闭失败提示"
+  },
+  "usage": {
+    "sessionTotal": "会话累计",
+    "context": "上下文",
+    "planQuota": "套餐用量",
+    "planType": "套餐",
+    "primaryWindow": "主额度",
+    "secondaryWindow": "附加额度",
+    "days": "天",
+    "hours": "小时",
+    "minutes": "分钟",
+    "resetsAt": "重置时间",
+    "resetCredits": "可用额度重置次数：{{count}}",
+    "limitReached": "已达额度上限",
+    "unavailable": "暂时无法获取套餐用量",
+    "loading": "正在获取套餐用量…",
+    "checkedAt": "查询于",
+    "refreshFailed": "刷新失败"
   },
   "modelLibrary": {
     "effortLevels": "推理级别",

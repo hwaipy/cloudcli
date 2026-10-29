@@ -22,10 +22,11 @@ const createCurrentActiveModel = (model: string): ProviderCurrentActiveModel => 
 const createSessionStore = (
   rows: Record<string, string | null> = {},
   efforts: Record<string, string | null> = {},
+  permissions: Record<string, string | null> = {},
 ) => {
   const sessions = new Map(Object.entries(rows).map(([sessionId, model]) => [
     sessionId,
-    { model, effort: efforts[sessionId] ?? null },
+    { model, effort: efforts[sessionId] ?? null, permission_mode: permissions[sessionId] ?? null },
   ]));
   return {
     sessions,
@@ -42,6 +43,10 @@ const createSessionStore = (
       if (session) {
         session.effort = effort;
       }
+    },
+    setSessionPermissionMode: (sessionId: string, permissionMode: string) => {
+      const session = sessions.get(sessionId);
+      if (session) session.permission_mode = permissionMode;
     },
   };
 };
@@ -166,6 +171,16 @@ test('provider catalogs merge source-controlled defaults with custom persistence
     isCustom: false,
   });
   assert.deepEqual(catalog.rows.get('codex'), undefined);
+});
+
+test('a custom record matching a built-in model ID does not duplicate the picker option', async () => {
+  const { service, catalog } = createTestService();
+  catalog.createCustomProviderModel('codex', { id: 'codex-default', model: 'Codex Default Again' });
+
+  const models = await service.getProviderModels('codex');
+  assert.deepEqual(models.OPTIONS.map((option) => option.value), ['codex-default']);
+  assert.equal(models.OPTIONS[0].isCustom, false);
+  assert.equal(catalog.listCustomProviderModels('codex').length, 1);
 });
 
 test('the custom-models-only flag is off by default and leaves the merged catalog unchanged', async () => {
@@ -461,6 +476,7 @@ test('setSessionModel records the model on the session row', () => {
     sessionId: 'session-1',
     model: 'opus',
     effort: null,
+    permissionMode: null,
     source: 'session',
   });
   assert.equal(sessions.sessions.get('session-1')?.model, 'opus');
@@ -497,9 +513,23 @@ test('setSessionEffort ignores sessions that have no row yet', () => {
   assert.equal(sessions.sessions.size, 0);
 });
 
+test('permission mode is stored per session and invalid provider modes are rejected', async () => {
+  const sessions = createSessionStore({ first: null, second: null });
+  const { service } = createTestService({ sessions });
+
+  assert.deepEqual(service.setSessionPermissionMode('codex', 'first', 'bypassPermissions'), {
+    provider: 'codex', sessionId: 'first', permissionMode: 'bypassPermissions',
+  });
+  assert.equal(sessions.sessions.get('first')?.permission_mode, 'bypassPermissions');
+  assert.equal(sessions.sessions.get('second')?.permission_mode, null);
+  assert.equal((await service.resolveSessionModel('codex', { sessionId: 'first' })).permissionMode, 'bypassPermissions');
+  assert.throws(() => service.setSessionPermissionMode('codex', 'first', 'plan'), AppError);
+  assert.equal(sessions.sessions.get('first')?.permission_mode, 'bypassPermissions');
+});
+
 test('resolveSessionModel prefers the recorded session model', async () => {
   const { service } = createTestService({
-    sessions: createSessionStore({ 'session-1': 'haiku' }, { 'session-1': 'high' }),
+    sessions: createSessionStore({ 'session-1': 'haiku' }, { 'session-1': 'high' }, { 'session-1': 'acceptEdits' }),
     activeModel: () => 'provider-reported',
   });
 
@@ -510,6 +540,7 @@ test('resolveSessionModel prefers the recorded session model', async () => {
 
   assert.equal(resolved.model, 'haiku');
   assert.equal(resolved.effort, 'high');
+  assert.equal(resolved.permissionMode, 'acceptEdits');
   assert.equal(resolved.source, 'session');
 });
 

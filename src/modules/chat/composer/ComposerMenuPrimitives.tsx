@@ -5,10 +5,10 @@ import { cn } from '@/shared/utils';
 import type { ComposerMenuAnchor } from '@/shared/types';
 
 /**
- * Shared shell for the composer popovers (model/effort and permissions) so both
+ * Shared shell for the composer model, effort and permission popovers so all
  * menus share one surface, one heading style and one row style.
  *
- * Used by chat's ComposerModelMenu and ComposerPermissionMenu.
+ * Used by chat's ComposerModelMenu, ComposerEffortMenu and ComposerPermissionMenu.
  */
 export function ComposerMenuSurface({
   anchor,
@@ -39,19 +39,14 @@ export function ComposerMenuSurface({
   );
 }
 
-/** Used by chat's ComposerModelMenu and ComposerPermissionMenu to label a section of the popover. */
+/** Used by chat's model, effort and permission menus to label a section of the popover. */
 export function ComposerMenuHeading({ children }: { children: ReactNode }) {
   return (
     <p className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">{children}</p>
   );
 }
 
-/** Used by chat's ComposerModelMenu to divide its model and effort sections. */
-export function ComposerMenuSeparator() {
-  return <div className="my-1 h-px bg-border" aria-hidden />;
-}
-
-/** Used by chat's ComposerModelMenu and ComposerPermissionMenu to render one selectable row with its checked state. */
+/** Used by chat's model, effort and permission menus to render one selectable row with its checked state. */
 export function ComposerMenuItem({
   label,
   description,

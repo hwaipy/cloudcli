@@ -63,7 +63,7 @@
     "ttsModel": "Text-to-speech model",
     "voice": "Voice",
     "format": "Audio format",
-    "note": "A custom base URL is called directly by your browser and must allow browser CORS requests. Leave it blank to use the server-configured backend."
+    "note": "Custom base URLs and keys are stored only in this browser, so configure them again on your phone. Your browser calls the URL directly, which requires CORS. Leave it blank to use the server-configured backend."
   },
   "quickSettings": {
     "title": "Quick Settings",
@@ -168,6 +168,15 @@
     }
   },
   "appearanceSettings": {
+    "chatInput": {
+      "section": "Chat input",
+      "enterAction": {
+        "label": "Enter while Codex is working",
+        "description": "Choose whether Enter steers the current turn or queues the next message. Command+Enter on Mac or Ctrl+Enter on Windows/Linux performs the other action. Shift+Enter adds a line; idle sessions keep their usual send shortcut.",
+        "steer": "Steer",
+        "queue": "Queue"
+      }
+    },
     "darkMode": {
       "label": "Dark Mode",
       "description": "Toggle between light and dark themes"

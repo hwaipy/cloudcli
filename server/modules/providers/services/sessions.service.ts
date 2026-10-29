@@ -5,6 +5,7 @@ import path from 'node:path';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
+import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { listBusyClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
 import { sessionHistoryCache } from '@/modules/providers/services/session-history-cache.service.js';
 import type {
@@ -234,7 +235,7 @@ export const sessionsService = {
         projectId: project?.project_id ?? null,
         projectDisplayName: resolveProjectDisplayName(projectPath, project?.custom_project_name),
         sessionTitle: session.custom_name?.trim() || session.session_id,
-        lastActivity: session.updated_at ?? session.created_at ?? null,
+        lastActivity: session.last_user_message_at ?? session.created_at ?? null,
       };
     });
 
@@ -288,6 +289,7 @@ export const sessionsService = {
     provider: LLMProvider,
     projectPath: string,
     initialMessage: string,
+    permissionMode?: string,
   ): CreateAppSessionResult {
     const normalizedProjectPath = projectPath.trim();
     if (!normalizedProjectPath) {
@@ -299,7 +301,14 @@ export const sessionsService = {
 
     const sessionId = randomUUID();
     const sessionName = buildCloudCliSessionName(initialMessage);
-    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName);
+    if (permissionMode !== undefined
+      && !providerCapabilitiesService.getProviderCapabilities(provider).permissionModes.includes(permissionMode)) {
+      throw new AppError('Unsupported permission mode.', {
+        code: 'INVALID_PERMISSION_MODE',
+        statusCode: 400,
+      });
+    }
+    sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName, permissionMode);
 
     return {
       sessionId,
@@ -370,6 +379,7 @@ export const sessionsService = {
       // differently from the conversation it was branched from.
       model: source.model,
       effort: source.effort,
+      permissionMode: source.permission_mode,
     });
 
     await broadcastSessionUpserted(forkSessionId);
@@ -617,7 +627,7 @@ export const sessionsService = {
       summary: session.custom_name?.trim() || '',
       createdAt: session.created_at ?? null,
       updatedAt: session.updated_at ?? null,
-      lastActivity: session.updated_at ?? session.created_at ?? null,
+      lastActivity: session.last_user_message_at ?? session.created_at ?? null,
       isArchived: Boolean(session.isArchived),
       project: project && projectPath
         ? {
@@ -660,7 +670,7 @@ export const sessionsService = {
         sessionTitle: session.custom_name?.trim() || session.session_id,
         createdAt: session.created_at ?? null,
         updatedAt: session.updated_at ?? null,
-        lastActivity: session.updated_at ?? session.created_at ?? null,
+        lastActivity: session.last_user_message_at ?? session.created_at ?? null,
         isProjectArchived: Boolean(project?.isArchived),
       };
     });

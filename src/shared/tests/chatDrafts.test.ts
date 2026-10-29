@@ -55,7 +55,7 @@ vi.mock('@/shared/api', async (importOriginal) => ({
         await appendResponseGate;
         return appendResponse
           ? appendResponse(queuedMessage)
-          : json({ success: true, queuedMessage, appended: false });
+          : json({ success: true, queuedMessage: { ...(queuedMessage as object), id: `q-${appendRequests.length}` }, queuedMessages: [{ ...(queuedMessage as object), id: `q-${appendRequests.length}` }], appended: false });
       },
       clearQueuedMessage: async (scope: string) => {
         clearedScopes.push(scope);
@@ -186,27 +186,18 @@ test('a failed hydrate keeps the mirrored draft rather than blanking the compose
   assert.equal(store.readDraftText('session-a'), 'local work');
 });
 
-test('queueing goes to the server at once and keeps what it says is now queued', async () => {
-  // The server appended this to a message another tab had queued.
-  appendResponse = () => json({
+test('queueing adopts an independent list returned by the server', async () => {
+  appendResponse = (message) => json({
     success: true,
-    queuedMessage: { content: 'from the laptop\n\nsend this next', attachments: [] },
+    queuedMessage: { ...(message as object), id: 'b' },
+    queuedMessages: [{ id: 'a', content: 'from laptop', attachments: [] }, { ...(message as object), id: 'b' }],
     appended: true,
   });
   const store = await loadStore();
   store.writeDraftText('session-a', 'still editing');
-
   const result = await store.appendQueuedMessage('session-a', { content: 'send this next', attachments: [] });
-
-  assert.deepEqual(appendRequests, [{
-    scope: 'session-a',
-    queuedMessage: { content: 'send this next', attachments: [] },
-  }], 'queue actions persist without waiting for the draft debounce');
-  assert.deepEqual(result, {
-    queuedMessage: { content: 'from the laptop\n\nsend this next', attachments: [] },
-    appended: true,
-  });
-  assert.equal(store.readQueuedMessage('session-a')?.content, 'from the laptop\n\nsend this next');
+  assert.deepEqual(store.readQueuedMessages('session-a').map((message) => message.content), ['from laptop', 'send this next']);
+  assert.equal(result.queuedMessage.id, 'b');
   assert.equal(store.readDraftText('session-a'), 'still editing');
 });
 
@@ -234,21 +225,23 @@ test('hydrate takes the server\'s queued message even for a scope being typed in
   assert.equal(store.readDraftText('session-a'), 'typing', 'the text being typed stays');
 });
 
-test('a hydrate already in flight when a message is queued does not put back the older queue', async () => {
+test('a hydrate already in flight does not replace a newly queued turn', async () => {
   const store = await loadStore();
   await store.appendQueuedMessage('session-a', { content: 'A', attachments: [] });
-
-  serverDrafts = [{ scope: 'session-a', text: '', queuedMessage: { content: 'A', attachments: [] } }];
+  serverDrafts = [{ scope: 'session-a', text: '', queuedMessage: [{ id: 'q-1', content: 'A', attachments: [] }] }];
   let releaseDrafts!: () => void;
   draftsResponseGate = new Promise((resolve) => { releaseDrafts = resolve; });
   const hydrating = store.hydrateChatDrafts();
-
-  appendResponse = () => json({ success: true, queuedMessage: { content: 'A\n\nB', attachments: [] }, appended: true });
+  appendResponse = (message) => json({
+    success: true,
+    queuedMessage: { ...(message as object), id: 'q-2' },
+    queuedMessages: [{ id: 'q-1', content: 'A', attachments: [] }, { ...(message as object), id: 'q-2' }],
+    appended: true,
+  });
   await store.appendQueuedMessage('session-a', { content: 'B', attachments: [] });
   releaseDrafts();
   await hydrating;
-
-  assert.equal(store.readQueuedMessage('session-a')?.content, 'A\n\nB');
+  assert.deepEqual(store.readQueuedMessages('session-a').map((message) => message.content), ['A', 'B']);
 });
 
 test('a hydrate already in flight when the queued message is cleared does not bring it back', async () => {
@@ -284,41 +277,26 @@ test('a hydrate takes the server\'s text for a scope whose queue changed but whi
   assert.equal(store.readQueuedMessage('session-a')?.content, 'B');
 });
 
-test('a clear made while an append is being answered is sent after it, and the message queued again', async () => {
-  appendResponse = (queuedMessage) => json({ success: true, queuedMessage, appended: false });
+test('clearing a different queued message during append does not erase the new turn', async () => {
   const store = await loadStore();
+  await store.appendQueuedMessage('session-a', { content: 'A', attachments: [] });
+  const firstId = store.readQueuedMessage('session-a')?.id;
+  assert.ok(firstId);
   let releaseAppend!: () => void;
   appendResponseGate = new Promise((resolve) => { releaseAppend = resolve; });
-
+  appendResponse = (message) => json({
+    success: true,
+    queuedMessage: { ...(message as object), id: 'q-2' },
+    queuedMessages: [{ id: firstId, content: 'A', attachments: [] }, { ...(message as object), id: 'q-2' }],
+    appended: true,
+  });
   const appending = store.appendQueuedMessage('session-a', { content: 'B', attachments: [] });
   await vi.advanceTimersByTimeAsync(0);
-  store.clearQueuedMessage('session-a');
-  assert.deepEqual(clearedScopes, [], 'the clear waits for the append to be answered');
+  store.clearQueuedMessage('session-a', firstId);
   releaseAppend();
-  const result = await appending;
-
-  assert.deepEqual(clearedScopes, ['session-a']);
-  assert.equal(appendRequests.length, 2, 'the clear removed B on the server too, so B is queued again');
-  assert.equal(result.queuedMessage.content, 'B');
-  assert.equal(store.readQueuedMessage('session-a')?.content, 'B');
-});
-
-test('a clear that fails while an append is being answered does not queue the message twice', async () => {
-  appendResponse = () => json({ success: true, queuedMessage: { content: 'A\n\nB', attachments: [] }, appended: true });
-  clearStatus = 503;
-  const store = await loadStore();
-  let releaseAppend!: () => void;
-  appendResponseGate = new Promise((resolve) => { releaseAppend = resolve; });
-
-  const appending = store.appendQueuedMessage('session-a', { content: 'B', attachments: [] });
-  await vi.advanceTimersByTimeAsync(0);
-  store.clearQueuedMessage('session-a');
-  releaseAppend();
-  const result = await appending;
-
-  assert.equal(appendRequests.length, 1);
-  assert.equal(result.queuedMessage.content, 'A\n\nB', 'the server still holds both, so that is what is shown');
-  assert.equal(store.readQueuedMessage('session-a')?.content, 'A\n\nB');
+  await appending;
+  assert.deepEqual(store.readQueuedMessages('session-a').map((message) => message.content), ['B']);
+  assert.equal(appendRequests.length, 2);
 });
 
 test('a queue the server refuses rejects and changes nothing here', async () => {

@@ -43,13 +43,10 @@ export type CodexThreadFork = {
 };
 
 /**
- * Resolves the `codex` launcher shipped in node_modules.
- *
- * Deliberately not the `codex` on PATH: a machine can have a second, older
- * install, and the protocol this speaks is only guaranteed against the
- * version this package depends on.
+ * Used by fork operations and the persistent Codex runtime to launch the
+ * bundled CLI; another `codex` on PATH may speak a different protocol.
  */
-function resolveCodexLauncher(): string {
+export function resolveCodexLauncher(): string {
   const require_ = createRequire(import.meta.url);
   try {
     return require_.resolve('@openai/codex/bin/codex.js');
@@ -192,6 +189,11 @@ async function withAppServer<T>(
 }
 
 export const codexAppServer = {
+  /** Reads the signed-in Codex account's rate-limit windows without starting a turn. */
+  readRateLimits(): Promise<unknown> {
+    return withAppServer((call) => call('account/rateLimits/read', {}));
+  },
+
   /**
    * Copies a thread into a new one that ends at `lastTurnId`, or copies the
    * whole thread when it is omitted.

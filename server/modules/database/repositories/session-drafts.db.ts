@@ -1,11 +1,13 @@
+import { randomUUID } from 'node:crypto';
+
 import { getConnection } from '@/modules/database/connection.js';
 import type { QueuedChatMessage } from '@/shared/types.js';
-import { readQueuedChatMessage } from '@/shared/utils.js';
+import { readQueuedChatMessages } from '@/shared/utils.js';
 
 /**
  * One chat scope's unsent state: the text still in the composer, plus the
- * message queued behind an in-flight turn. Both are optional — a scope can
- * hold only a draft, only a queued message, or both.
+ * ordered turns queued behind an in-flight turn. Both are optional — a scope
+ * can hold only a draft, only queued turns, or both.
  */
 export type SessionDraftRecord = {
   scope: string;
@@ -48,38 +50,12 @@ function parseQueuedMessage(raw: string | null): unknown | null {
   }
 }
 
-/**
- * Joins a message queued later onto the one already waiting, so both are sent
- * in one turn, in the order they were queued. Text is separated by a blank
- * line and attachments keep their order. The later message's send options win:
- * they are the composer settings the user chose most recently.
- */
-function mergeQueuedMessages(earlier: QueuedChatMessage, later: QueuedChatMessage): QueuedChatMessage {
-  const options = later.options ?? earlier.options;
-  return {
-    content: [earlier.content, later.content].filter((part) => part.trim()).join('\n\n'),
-    ...(options ? { options } : {}),
-    attachments: [...earlier.attachments, ...later.attachments],
-  };
-}
-
-/**
- * Whether a queued message is a slash command, such as "/compact" or
- * "/review src". The CLI takes the command from the start of the message and
- * the rest as its arguments, so a command cannot share a turn with other
- * follow-ups: text added after it would become its arguments, and a command
- * added after text would reach the CLI as plain text.
- */
-function isSlashCommand(message: QueuedChatMessage): boolean {
-  return message.content.trimStart().startsWith('/');
-}
-
-/** The message waiting in a scope's queue, or null when nothing sendable is stored there. */
-function readStoredQueuedMessage(userId: number, scope: string): QueuedChatMessage | null {
+/** The messages waiting in one scope, including a legacy single stored message. */
+function readStoredQueuedMessages(userId: number, scope: string): QueuedChatMessage[] {
   const row = getConnection()
     .prepare('SELECT queued_message FROM session_drafts WHERE user_id = ? AND draft_scope = ?')
     .get(userId, scope) as { queued_message: string | null } | undefined;
-  return readQueuedChatMessage(parseQueuedMessage(row?.queued_message ?? null));
+  return readQueuedChatMessages(parseQueuedMessage(row?.queued_message ?? null));
 }
 
 /** Stores a scope's queued message without touching its draft text. */
@@ -137,23 +113,27 @@ export const sessionDraftsDb = {
       )
       .all() as QueuedMessageRow[];
 
-    return rows.map((row) => ({
-      userId: row.user_id,
-      sessionId: row.draft_scope,
-      queuedMessage: parseQueuedMessage(row.queued_message),
-      claimToken: row.queued_message,
-    }));
+    return rows.flatMap((row) => {
+      const first = readQueuedChatMessages(parseQueuedMessage(row.queued_message))[0];
+      return first ? [{
+        userId: row.user_id,
+        sessionId: row.draft_scope,
+        queuedMessage: first,
+        claimToken: row.queued_message,
+      }] : [];
+    });
   },
 
   /** Atomically removes a queued turn only if it has not been edited since listing. */
   claimQueuedMessage(candidate: QueuedSessionMessageRecord): boolean {
+    const remaining = readQueuedChatMessages(parseQueuedMessage(candidate.claimToken)).slice(1);
     const result = getConnection()
       .prepare(
         `UPDATE session_drafts
-         SET queued_message = NULL, updated_at = CURRENT_TIMESTAMP
+         SET queued_message = ?, updated_at = CURRENT_TIMESTAMP
          WHERE user_id = ? AND draft_scope = ? AND queued_message = ?`
       )
-      .run(candidate.userId, candidate.sessionId, candidate.claimToken);
+      .run(remaining.length > 0 ? JSON.stringify(remaining) : null, candidate.userId, candidate.sessionId, candidate.claimToken);
     return result.changes > 0;
   },
 
@@ -165,63 +145,97 @@ export const sessionDraftsDb = {
    * they were queued in is kept.
    */
   restoreQueuedMessage(candidate: QueuedSessionMessageRecord): void {
-    const restored = readQueuedChatMessage(candidate.queuedMessage);
+    const restored = readQueuedChatMessages(candidate.queuedMessage)[0];
     if (!restored) {
       return;
     }
 
     const db = getConnection();
     db.transaction(() => {
-      const queuedSinceClaim = readStoredQueuedMessage(candidate.userId, candidate.sessionId);
+      const queuedSinceClaim = readStoredQueuedMessages(candidate.userId, candidate.sessionId);
       writeStoredQueuedMessage(
         candidate.userId,
         candidate.sessionId,
-        queuedSinceClaim
-          ? JSON.stringify(mergeQueuedMessages(restored, queuedSinceClaim))
-          : candidate.claimToken,
+        JSON.stringify([restored, ...queuedSinceClaim]),
       );
     })();
   },
 
-  /**
-   * Queues a message to be sent when the session is next idle, after any
-   * message already queued for it.
-   *
-   * A session has one queued turn, so a message queued while another is still
-   * waiting is appended to it instead of replacing it: the user sent both.
-   * Reading and writing in one transaction keeps this exact against the
-   * dispatcher, which claims the stored value: once the earlier message has been
-   * claimed for sending, the new one is queued on its own and nothing is sent
-   * twice. Returns the message that is now queued and whether it was appended,
-   * or null, storing nothing, when the waiting message and this one cannot be
-   * one turn because either of them is a slash command.
-   */
+  /** Appends one independent turn, preserving per-message options and attachments. */
   appendQueuedMessage(
     userId: number,
     scope: string,
     message: QueuedChatMessage
-  ): { queuedMessage: QueuedChatMessage; appended: boolean } | null {
+  ): { queuedMessage: QueuedChatMessage; queuedMessages: QueuedChatMessage[]; appended: boolean } {
     const db = getConnection();
     return db.transaction(() => {
-      const waiting = readStoredQueuedMessage(userId, scope);
-      if (waiting && (isSlashCommand(waiting) || isSlashCommand(message))) {
-        return null;
-      }
-      const queuedMessage = waiting ? mergeQueuedMessages(waiting, message) : message;
-      writeStoredQueuedMessage(userId, scope, JSON.stringify(queuedMessage));
-      return { queuedMessage, appended: waiting !== null };
+      const waiting = readStoredQueuedMessages(userId, scope);
+      const queuedMessage = { ...message, id: randomUUID() };
+      const queuedMessages = [...waiting, queuedMessage];
+      writeStoredQueuedMessage(userId, scope, JSON.stringify(queuedMessages));
+      return { queuedMessage, queuedMessages, appended: waiting.length > 0 };
     })();
   },
 
-  /** Removes a scope's queued message (edited back into the composer or deleted), keeping its text. */
-  clearQueuedMessage(userId: number, scope: string): void {
+  /** Reorders only the exact queue the client saw; a concurrent claim or append wins. */
+  reorderQueuedMessages(
+    userId: number,
+    scope: string,
+    expectedIds: string[],
+    orderedIds: string[],
+  ): QueuedChatMessage[] | null {
+    const db = getConnection();
+    return db.transaction(() => {
+      const waiting = readStoredQueuedMessages(userId, scope);
+      const currentIds = waiting.map((message) => message.id);
+      if (currentIds.length !== expectedIds.length
+        || currentIds.some((id, index) => id !== expectedIds[index])) return null;
+      const byId = new Map(waiting.map((message) => [message.id, message]));
+      const reordered = orderedIds.map((id) => byId.get(id));
+      if (reordered.some((message) => !message)) return null;
+      const next = reordered as QueuedChatMessage[];
+      writeStoredQueuedMessage(userId, scope, JSON.stringify(next));
+      return next;
+    })();
+  },
+
+  /** Atomically takes one identified turn so the dispatcher cannot send it too. */
+  takeQueuedMessage(userId: number, scope: string, messageId: string): { message: QueuedChatMessage; index: number } | null {
+    const db = getConnection();
+    return db.transaction(() => {
+      const waiting = readStoredQueuedMessages(userId, scope);
+      const index = waiting.findIndex((message) => message.id === messageId);
+      if (index < 0) return null;
+      const [message] = waiting.splice(index, 1);
+      db.prepare('UPDATE session_drafts SET queued_message = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND draft_scope = ?')
+        .run(waiting.length ? JSON.stringify(waiting) : null, userId, scope);
+      return { message, index };
+    })();
+  },
+
+  /** Puts back a turn whose steer was refused, without overwriting newer queue edits. */
+  restoreTakenQueuedMessage(userId: number, scope: string, message: QueuedChatMessage, index: number): void {
     const db = getConnection();
     db.transaction(() => {
+      const waiting = readStoredQueuedMessages(userId, scope);
+      if (waiting.some((item) => item.id === message.id)) return;
+      waiting.splice(Math.min(index, waiting.length), 0, message);
+      writeStoredQueuedMessage(userId, scope, JSON.stringify(waiting));
+    })();
+  },
+
+  /** Removes one queued turn by ID, or the entire queue for legacy callers. */
+  clearQueuedMessage(userId: number, scope: string, messageId?: string): void {
+    const db = getConnection();
+    db.transaction(() => {
+      const remaining = messageId
+        ? readStoredQueuedMessages(userId, scope).filter((message) => (message.id ?? 'legacy') !== messageId)
+        : [];
       db.prepare(
         `UPDATE session_drafts
-         SET queued_message = NULL, updated_at = CURRENT_TIMESTAMP
+         SET queued_message = ?, updated_at = CURRENT_TIMESTAMP
          WHERE user_id = ? AND draft_scope = ?`
-      ).run(userId, scope);
+      ).run(remaining.length > 0 ? JSON.stringify(remaining) : null, userId, scope);
       sessionDraftsDb.deleteEmptyDraft(userId, scope);
     })();
   },

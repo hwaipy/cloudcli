@@ -132,6 +132,33 @@ async function withGateway(
 /** The handler is async and the socket listener does not await it. */
 const settle = () => new Promise((resolve) => { setTimeout(resolve, 30); });
 
+test('a sent turn records its permission mode for the next browser to read', async () => {
+  await withGateway('claude', async ({ socket, runs }) => {
+    socket.emit('message', JSON.stringify({
+      type: 'chat.send', sessionId: SESSION_ID, content: 'hello',
+      options: { permissionMode: 'acceptEdits' },
+    }));
+    await settle();
+
+    assert.equal(runs.length, 1);
+    assert.equal(sessionsDb.getSessionById(SESSION_ID)?.permission_mode, 'acceptEdits');
+  });
+});
+
+test('an invalid permission mode is refused before a run is registered', async () => {
+  await withGateway('claude', async ({ socket, runs }) => {
+    socket.emit('message', JSON.stringify({
+      type: 'chat.send', sessionId: SESSION_ID, content: 'hello',
+      options: { permissionMode: 'unsupported' },
+    }));
+    await settle();
+
+    assert.equal(runs.length, 0);
+    assert.equal(chatRunRegistry.getRun(SESSION_ID), undefined);
+    assert.equal(sessionsDb.getSessionById(SESSION_ID)?.permission_mode, null);
+  });
+});
+
 test('an edit resumes through the turn before the one being replaced', async () => {
   await withGateway('claude', async ({ socket, runs }) => {
     socket.emit('message', JSON.stringify({

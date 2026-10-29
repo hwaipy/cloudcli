@@ -126,11 +126,11 @@
     "send": "Invia",
     "stop": "Ferma",
     "hintText": {
-      "ctrlEnter": "Ctrl+Invio per inviare • Shift+Invio per nuova riga • Tab per cambiare modalità • / per comandi",
-      "enter": "Invio per inviare • Shift+Invio per nuova riga • Tab per cambiare modalità • / per comandi",
+      "ctrlEnter": "Ctrl+Invio per inviare • Shift+Invio per nuova riga • / per comandi",
+      "enter": "Invio per inviare • Shift+Invio per nuova riga • / per comandi",
       "appendQueued": "Invio per aggiungere al messaggio in coda"
     },
-    "clickToChangeMode": "Clicca per cambiare modalità permessi (o premi Tab nell'input)",
+    "clickToChangeMode": "Clicca per cambiare modalità permessi",
     "showAllCommands": "Mostra tutti i comandi",
     "clearInput": "Cancella input",
     "scrollToBottom": "Scorri in basso",
@@ -248,7 +248,6 @@
   },
   "composer": {
     "permissionHeading": "Come approvare le azioni di {{provider}}?",
-    "permissionCycleHint": "Premi Tab nel campo di testo per cambiare modalità",
     "permissionTriggerLabel": "{{mode}}: {{heading}}",
     "editing": {
       "title": "Sostituzione di un messaggio precedente",

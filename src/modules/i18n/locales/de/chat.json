@@ -126,11 +126,11 @@
     "send": "Senden",
     "stop": "Stoppen",
     "hintText": {
-      "ctrlEnter": "Strg+Enter zum Senden • Shift+Enter für neue Zeile • Tab zum Moduswechsel • / für Slash-Befehle",
-      "enter": "Enter zum Senden • Shift+Enter für neue Zeile • Tab zum Moduswechsel • / für Slash-Befehle",
+      "ctrlEnter": "Strg+Enter zum Senden • Shift+Enter für neue Zeile • / für Slash-Befehle",
+      "enter": "Enter zum Senden • Shift+Enter für neue Zeile • / für Slash-Befehle",
       "appendQueued": "Enter zum Anhängen an die Nachricht in der Warteschlange"
     },
-    "clickToChangeMode": "Klicken, um den Berechtigungsmodus zu ändern (oder Tab in der Eingabe drücken)",
+    "clickToChangeMode": "Klicken, um den Berechtigungsmodus zu ändern",
     "showAllCommands": "Alle Befehle anzeigen",
     "clearInput": "Eingabe leeren",
     "scrollToBottom": "Nach unten scrollen",
@@ -248,7 +248,6 @@
   },
   "composer": {
     "permissionHeading": "Wie sollen Aktionen von {{provider}} genehmigt werden?",
-    "permissionCycleHint": "Tab im Eingabefeld drücken, um den Modus zu wechseln",
     "permissionTriggerLabel": "{{mode}}: {{heading}}",
     "editing": {
       "title": "Ersetzt eine frühere Nachricht",

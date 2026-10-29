@@ -1,23 +1,22 @@
 import { memo } from 'react';
-import { ActivityIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
+import { Tooltip } from '@/shared/ui';
 
 type TokenUsageSummaryProps = {
   usage: Record<string, unknown> | null;
   onClick?: () => void;
+  part?: 'context' | 'total' | 'both';
 };
 
-const formatTokenCount = (value: number) => {
+const formatTokenCount = (value: number, precise = false) => {
   if (!Number.isFinite(value) || value <= 0) {
     return '0';
   }
 
   if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
-  }
-
-  if (value >= 10_000) {
-    return `${Math.round(value / 1_000)}K`;
+    const millions = (value / 1_000_000).toFixed(precise ? 3 : value >= 10_000_000 ? 0 : 1);
+    return `${precise ? millions.replace(/\.?0+$/, '') : millions}M`;
   }
 
   if (value >= 1_000) {
@@ -33,10 +32,10 @@ const readUsageNumber = (value: unknown) => {
 };
 
 /**
- * Rendered by chat's ChatComposer to show the session's context-window usage
- * and open the detailed token breakdown on click.
+ * Rendered by ChatComposer to show session tokens and context occupancy as
+ * separate controls that open the detailed token breakdown on click.
  */
-function TokenUsageSummary({ usage, onClick }: TokenUsageSummaryProps) {
+function TokenUsageSummary({ usage, onClick, part = 'both' }: TokenUsageSummaryProps) {
   const { t } = useTranslation();
   const breakdown =
     usage?.breakdown && typeof usage.breakdown === 'object'
@@ -44,26 +43,47 @@ function TokenUsageSummary({ usage, onClick }: TokenUsageSummaryProps) {
       : null;
   const inputTokens = readUsageNumber(usage?.inputTokens ?? breakdown?.input);
   const outputTokens = readUsageNumber(usage?.outputTokens ?? breakdown?.output);
-  const usedTokens = readUsageNumber(usage?.used) || inputTokens + outputTokens;
+  const contextKnown = usage !== null && usage.contextUsed !== null;
+  const usedTokens = contextKnown ? readUsageNumber(usage?.used) || inputTokens + outputTokens : 0;
+  const contextWindow = readUsageNumber(usage?.total);
+  const sessionTotal = usage?.sessionTotalTokens === undefined
+    ? null
+    : readUsageNumber(usage.sessionTotalTokens);
+  const contextPercentage = contextKnown && contextWindow > 0
+    ? Math.min(100, Math.max(0, usedTokens / contextWindow * 100))
+    : null;
+  const sessionTotalLabel = `${t('chat:usage.sessionTotal', 'Session total')}: ${sessionTotal === null ? '—' : sessionTotal.toLocaleString()} ${t('chat:misc.tokensLabel', { count: sessionTotal ?? 0 })}`;
+  const contextLabel = `${t('chat:usage.context', 'Context')}: ${contextKnown ? formatTokenCount(usedTokens) : '—'} / ${contextWindow > 0 ? formatTokenCount(contextWindow) : '—'}${contextPercentage !== null ? ` · ${Math.round(contextPercentage)}%` : ''}`;
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border/70 bg-background/70 px-2 text-xs text-muted-foreground shadow-sm transition-colors hover:border-primary/25 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:gap-2 sm:px-2.5"
-      title={t('chat:misc.tokensUsed', { count: usedTokens })}
-      aria-label={t('chat:misc.showTokenUsage')}
-    >
-      <span className="grid h-5 w-5 place-items-center rounded-md bg-primary/10 text-primary">
-        <ActivityIcon className="h-3.5 w-3.5" />
-      </span>
-      <span className="font-medium text-foreground">{formatTokenCount(usedTokens)}</span>
-      <span className="hidden text-muted-foreground/70 sm:inline">
-        {t('chat:misc.tokensLabel', { count: usedTokens })}
-      </span>
-    </button>
+    <>
+      {part !== 'total' && <Tooltip content={contextLabel}>
+        <button
+          type="button"
+          onClick={onClick}
+          className="inline-grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-border/70 bg-background/70 text-muted-foreground shadow-sm transition-colors hover:border-primary/25 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          aria-label={contextLabel}
+        >
+          <svg viewBox="0 0 24 24" className="h-6 w-6 -rotate-90" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="3" className="text-muted-foreground/20" />
+            {contextPercentage !== null && (
+              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="text-primary" strokeDasharray={`${contextPercentage * 0.56549} 56.549`} />
+            )}
+          </svg>
+        </button>
+      </Tooltip>}
+      {part !== 'context' && <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex h-9 shrink-0 items-center rounded-lg border border-border/70 bg-background/70 px-2.5 text-xs font-medium text-foreground shadow-sm transition-colors hover:border-primary/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        title={sessionTotalLabel}
+        aria-label={sessionTotalLabel}
+      >
+        {sessionTotal === null ? '—' : formatTokenCount(sessionTotal, true)}
+      </button>}
+    </>
   );
 }
 
-/** Memoized: the composer re-renders on every keystroke and this row's numbers only move when a turn ends. */
+/** Memoized: the composer re-renders on every keystroke while usage updates arrive independently. */
 export default memo(TokenUsageSummary);

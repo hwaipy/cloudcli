@@ -15,9 +15,10 @@ import { AppError } from '@/shared/utils.js';
 
 /** Session-row access the service needs, narrowed so tests can stub it. */
 type ProviderModelsSessionStore = {
-  getSessionById(sessionId: string): { model: string | null; effort: string | null } | null;
+  getSessionById(sessionId: string): { model: string | null; effort: string | null; permission_mode: string | null; provider?: string } | null;
   setSessionModel(sessionId: string, model: string): void;
   setSessionEffort(sessionId: string, effort: string): void;
+  setSessionPermissionMode(sessionId: string, permissionMode: string): void;
 };
 
 /** SQLite catalog operations used by the Providers service and its unit fakes. */
@@ -106,12 +107,15 @@ const mergeProviderModels = (
 ): ProviderModelsDefinition => {
   const customOptions = custom.map(toCustomProviderModelOption);
   const listOnlyCustomModels = customModelsOnly && customOptions.length > 0;
+  // Existing installations may already have custom rows with the same runtime
+  // ID as a built-in. Keep those rows editable, but show the ID only once.
+  const predefinedIds = new Set(predefined.OPTIONS.map((option) => option.value));
   return {
     OPTIONS: listOnlyCustomModels
       ? customOptions
       : [
         ...predefined.OPTIONS.map((option) => ({ ...option, isCustom: false })),
-        ...customOptions,
+        ...customOptions.filter((option) => !predefinedIds.has(option.value)),
       ],
     DEFAULT: listOnlyCustomModels ? customOptions[0].value : predefined.DEFAULT,
     // Copied so no caller can mutate the shared capability matrix.
@@ -346,7 +350,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
 
   const readRecordedSessionSelection = (
     sessionId: string,
-  ): { model: string | null; effort: string | null } | null => {
+  ): { model: string | null; effort: string | null; permissionMode: string | null } | null => {
     const session = sessions.getSessionById(sessionId);
     if (!session) {
       return null;
@@ -355,6 +359,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     return {
       model: session.model?.trim() || null,
       effort: session.effort?.trim() || null,
+      permissionMode: session.permission_mode?.trim() || null,
     };
   };
 
@@ -389,6 +394,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
       sessionId: normalizedSessionId,
       model: normalizedModel,
       effort: recordedSelection.effort,
+      permissionMode: recordedSelection.permissionMode,
       source: 'session',
     };
   };
@@ -424,6 +430,48 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     };
   };
 
+  /** Saves a session's permission choice before its next turn starts. */
+  const setSessionPermissionMode = (
+    provider: LLMProvider,
+    sessionId: string,
+    permissionMode: string,
+  ): { provider: LLMProvider; sessionId: string; permissionMode: string } | null => {
+    const normalizedMode = permissionMode.trim();
+    const supportedModes = providerCapabilitiesService.getProviderCapabilities(provider).permissionModes;
+    if (!supportedModes.includes(normalizedMode)) {
+      throw new AppError('Unsupported permission mode.', {
+        code: 'INVALID_PERMISSION_MODE',
+        statusCode: 400,
+      });
+    }
+
+    const row = sessions.getSessionById(sessionId);
+    if (!row || (row.provider && row.provider !== provider)) return null;
+    sessions.setSessionPermissionMode(sessionId, normalizedMode);
+    return { provider, sessionId, permissionMode: normalizedMode };
+  };
+
+  /** Reads only the stored permission, without invoking the provider's model CLI. */
+  const getSessionPermissionMode = (
+    provider: LLMProvider,
+    sessionId: string,
+  ): { provider: LLMProvider; sessionId: string; permissionMode: string | null } => {
+    const row = sessions.getSessionById(sessionId);
+    if (!row || (row.provider && row.provider !== provider)) {
+      throw new AppError('Session not found for this provider.', {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+    const supportedModes = providerCapabilitiesService.getProviderCapabilities(provider).permissionModes;
+    return {
+      provider,
+      sessionId,
+      permissionMode: row.permission_mode && supportedModes.includes(row.permission_mode)
+        ? row.permission_mode : null,
+    };
+  };
+
   /**
    * Answers "which model is this session using?" for every display surface.
    *
@@ -450,6 +498,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
           sessionId: normalizedSessionId,
           model: recordedSelection.model,
           effort: recordedSelection.effort,
+          permissionMode: recordedSelection.permissionMode,
           source: 'session',
         };
       }
@@ -467,6 +516,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
           sessionId: normalizedSessionId,
           model: resolvedProviderModel,
           effort: recordedSelection?.effort ?? null,
+          permissionMode: recordedSelection?.permissionMode ?? null,
           source: 'provider',
         };
       }
@@ -476,6 +526,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
         sessionId: normalizedSessionId,
         model: normalizedRequestedModel || providerCatalog.DEFAULT,
         effort: recordedSelection?.effort ?? null,
+        permissionMode: recordedSelection?.permissionMode ?? null,
         source: normalizedRequestedModel ? 'session' : 'default',
       };
     }
@@ -486,6 +537,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
         sessionId: null,
         model: normalizedRequestedModel,
         effort: null,
+        permissionMode: null,
         source: 'session',
       };
     }
@@ -496,6 +548,7 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
       sessionId: null,
       model: providerCatalog.DEFAULT,
       effort: null,
+      permissionMode: null,
       source: 'default',
     };
   };
@@ -530,6 +583,8 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
     deleteCustomModel,
     setSessionModel,
     setSessionEffort,
+    setSessionPermissionMode,
+    getSessionPermissionMode,
     resolveSessionModel,
     resolveResumeModel,
   };

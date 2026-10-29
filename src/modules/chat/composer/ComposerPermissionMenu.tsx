@@ -13,7 +13,6 @@ import {
 
 import type { PermissionMode } from '@/shared/types';
 import { useComposerMenuAnchor } from '@/modules/chat/hooks/useComposerMenuAnchor';
-import { usePermissionNameFit } from '@/modules/chat/hooks/usePermissionNameFit';
 import {
   ComposerMenuHeading,
   ComposerMenuItem,
@@ -103,15 +102,6 @@ function ComposerPermissionMenu({
   const modeLabel = (mode: PermissionMode) =>
     t(`codex.modes.${mode}`, { defaultValue: getAppearance(mode).label || mode });
   const activeModeLabel = modeLabel(permissionMode);
-  // The name is shown only where the composer has room for it, so it never
-  // pushes the model menu and the send button onto a second row. Plan mode,
-  // the one that changes nothing, keeps its name wherever it fits inside the
-  // composer, even when that gives the controls a row of their own.
-  const isNameShown = usePermissionNameFit(
-    triggerRef,
-    permissionModes.length > 0 ? activeModeLabel : null,
-    permissionMode === 'plan',
-  );
 
   if (permissionModes.length === 0) {
     return null;
@@ -133,11 +123,11 @@ function ComposerPermissionMenu({
           updateAnchor();
           setIsOpen((current) => !current);
         }}
-        className={`flex h-8 min-w-8 max-w-40 shrink-0 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors sm:max-w-48 ${isNameShown ? 'px-2' : 'w-8'} ${activeAppearance.trigger}`}
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${activeAppearance.trigger}`}
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        // The mode name leads the accessible name, so what a screen reader
-        // announces starts with what the button shows.
+        // Keep the mode explicit for assistive technology while the visible
+        // trigger stays icon-only at every composer width.
         aria-label={t('composer.permissionTriggerLabel', {
           mode: activeModeLabel,
           heading,
@@ -146,8 +136,6 @@ function ComposerPermissionMenu({
         title={t('input.clickToChangeMode')}
       >
         <ActiveIcon className="h-4 w-4 shrink-0" />
-        {/* Named, not just drawn: the mode decides what the next message may change. */}
-        {isNameShown && <span className="truncate">{activeModeLabel}</span>}
       </button>
 
       {isOpen && anchor && createPortal(
@@ -171,9 +159,6 @@ function ComposerPermissionMenu({
               />
             );
           })}
-          <ComposerMenuHeading>
-            {t('composer.permissionCycleHint', { defaultValue: 'Press Tab in the message box to switch modes' })}
-          </ComposerMenuHeading>
         </ComposerMenuSurface>,
         document.body,
       )}

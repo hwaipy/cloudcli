@@ -57,7 +57,6 @@ const renderComposer = (initialSession: ProjectSession | null) => {
       currentSessionId: session?.id ?? null,
       provider: 'claude',
       permissionMode: 'default',
-      cyclePermissionMode: () => undefined,
       resolvePermissionModeForProvider: () => 'default' as PermissionMode,
       currentProviderModel: 'test-model',
       currentProviderEffort: 'medium',
