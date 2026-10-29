@@ -13,7 +13,8 @@ import path from 'path';
 
 import express from 'express';
 
-import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
+import { WS_OPEN_STATE, connectedClients, clientUserIds } from '@/modules/websocket/index.js';
+import { projectsDb } from '@/modules/database/index.js';
 
 import type { createTaskmasterService } from './taskmaster.service.js';
 // cross-spawn: drop-in spawn with Windows .cmd/PATHEXT resolution — required
@@ -25,6 +26,7 @@ type TaskmasterRouterDependencies = {
     spawnProcess: typeof import('cross-spawn').default;
     resolveProjectPathById(projectId: string): string | null;
     taskmasterService: ReturnType<typeof createTaskmasterService>;
+    authorizeProject?: (request: express.Request, projectId: string) => void;
 };
 
 /**
@@ -38,6 +40,8 @@ type TaskmasterRouterDependencies = {
  */
 function broadcastTaskMasterUpdate(type, projectId, payloadKey, payload) {
     if (!projectId) return;
+    const ownerUserId = projectsDb.getProjectById(projectId)?.owner_user_id;
+    if (!ownerUserId) return;
     const message = JSON.stringify({
         type,
         projectId,
@@ -45,7 +49,7 @@ function broadcastTaskMasterUpdate(type, projectId, payloadKey, payload) {
         timestamp: new Date().toISOString(),
     });
     connectedClients.forEach((client) => {
-        if (client.readyState === WS_OPEN_STATE) client.send(message);
+        if (client.readyState === WS_OPEN_STATE && clientUserIds.get(client) === ownerUserId) client.send(message);
     });
 }
 
@@ -80,6 +84,12 @@ export function createTaskmasterRouter(dependencies: TaskmasterRouterDependencie
         ? dependencies.resolveProjectPathById(projectId)
         : null;
     const router = express.Router();
+    router.param('projectId', (req, _res, next, projectId) => {
+      try {
+        dependencies.authorizeProject?.(req, String(projectId));
+        next();
+      } catch (error) { next(error); }
+    });
 
     function runTaskmasterProcess(command, args, options, onComplete) {
         const child = spawn(command, args, options);

@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 
 import { getConnection, userDb } from '@/modules/database/index.js';
+import { IS_PLATFORM } from '@/shared/utils.js';
 
 import { authenticateToken, generateToken } from './auth.middleware.js';
 import { createAuthRouter } from './auth.routes.js';
@@ -18,9 +19,11 @@ const bcrypt = require('bcrypt') as BcryptAdapter;
 const databaseConnection = getConnection();
 
 const authService = createAuthService({
+  platformMode: IS_PLATFORM,
   users: {
     hasUsers: () => userDb.hasUsers(),
     createUser: (username, passwordHash) => userDb.createUser(username, passwordHash),
+    listUsers: () => userDb.listUsers(),
     getUserByUsername: (username) => userDb.getUserByUsername(username),
     updateLastLogin: (userId) => userDb.updateLastLogin(userId),
   },

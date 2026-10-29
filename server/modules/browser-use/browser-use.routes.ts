@@ -1,9 +1,13 @@
 import express from 'express';
 import type { Response } from 'express';
 
+import { requireAdmin } from '@/modules/access/index.js';
 import { browserUseService } from '@/modules/browser-use/browser-use.service.js';
 
 const router = express.Router();
+router.use((req, _res, next) => {
+  try { requireAdmin(req); next(); } catch (error) { next(error); }
+});
 
 /**
  * Stable machine-readable error codes for the browser-use API.

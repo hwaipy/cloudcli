@@ -8,9 +8,11 @@ type AuthUser = {
 type AuthLoginUser = AuthUser & { password_hash: string };
 
 type AuthDependencies = {
+  platformMode?: boolean;
   users: {
     hasUsers(): boolean;
     createUser(username: string, passwordHash: string): AuthUser;
+    listUsers(): Array<{ id: number; username: string }>;
     getUserByUsername(username: string): AuthLoginUser | undefined;
     updateLastLogin(userId: number): void;
   };
@@ -68,7 +70,7 @@ export function createAuthService(dependencies: AuthDependencies) {
       dependencies.transaction.begin();
       try {
         if (dependencies.users.hasUsers()) {
-          throw new AppError('User already exists. This is a single-user system.', {
+          throw new AppError('Initial setup is complete. Ask an administrator to add an account.', {
             code: 'AUTH_USER_ALREADY_CONFIGURED',
             statusCode: 403,
           });
@@ -82,7 +84,7 @@ export function createAuthService(dependencies: AuthDependencies) {
 
         return {
           success: true,
-          user: { id: user.id, username: user.username },
+          user: { id: user.id, username: user.username, isAdmin: true },
           token,
         };
       } catch (error) {
@@ -92,6 +94,42 @@ export function createAuthService(dependencies: AuthDependencies) {
             code: 'AUTH_USERNAME_CONFLICT',
             statusCode: 409,
           });
+        }
+        throw error;
+      }
+    },
+
+    listUsers(actor: unknown) {
+      const users = dependencies.users.listUsers();
+      if (!users.length || !actor || typeof actor !== 'object' || !('id' in actor)
+        || Number(actor.id) !== users[0].id) {
+        throw new AppError('Administrator access required.', { code: 'ADMIN_REQUIRED', statusCode: 403 });
+      }
+      return { users };
+    },
+
+    async createManagedUser(actor: unknown, usernameInput: unknown, passwordInput: unknown) {
+      // Account creation is administrator-only; /register remains bootstrap-only.
+      this.listUsers(actor);
+      if (dependencies.platformMode) {
+        throw new AppError('Multi-user accounts require token authentication.', {
+          code: 'MULTI_USER_UNAVAILABLE', statusCode: 409,
+        });
+      }
+      const username = typeof usernameInput === 'string' ? usernameInput.trim() : '';
+      const password = typeof passwordInput === 'string' ? passwordInput : '';
+      if (username.length < 3 || password.length < 6) {
+        throw new AppError('Username must be at least 3 characters, password at least 6 characters', {
+          code: 'AUTH_CREDENTIALS_TOO_SHORT', statusCode: 400,
+        });
+      }
+      try {
+        const passwordHash = await dependencies.hashPassword(password);
+        const user = dependencies.users.createUser(username, passwordHash);
+        return { user: { id: user.id, username: user.username } };
+      } catch (error) {
+        if (isUniqueConstraintError(error)) {
+          throw new AppError('Username already exists', { code: 'AUTH_USERNAME_CONFLICT', statusCode: 409 });
         }
         throw error;
       }
@@ -121,13 +159,21 @@ export function createAuthService(dependencies: AuthDependencies) {
       dependencies.users.updateLastLogin(numericUserId(user.id));
       return {
         success: true,
-        user: { id: user.id, username: user.username },
+        user: {
+          id: user.id,
+          username: user.username,
+          isAdmin: dependencies.users.listUsers()[0]?.id === Number(user.id),
+        },
         token: dependencies.generateToken(user),
       };
     },
 
     getCurrentUser(user: unknown) {
-      return { user };
+      const account = user as AuthUser;
+      return { user: {
+        ...account,
+        isAdmin: dependencies.users.listUsers()[0]?.id === Number(account.id),
+      } };
     },
 
     refreshSession(user: unknown) {

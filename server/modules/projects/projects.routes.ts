@@ -1,4 +1,5 @@
 import express from 'express';
+import { requireOwnedProject, requireUserId } from '@/modules/access/index.js';
 
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
 import { createProjectCloneRouter } from '@/modules/projects/project-clone.routes.js';
@@ -18,6 +19,13 @@ import { applyLegacyStarredProjectIds, toggleProjectStar } from '@/modules/proje
 const PENDING_CLONE_REQUEST_TTL_MS = 60_000;
 
 const router = express.Router();
+
+router.param('projectId', (req, _res, next, projectId) => {
+  try {
+    requireOwnedProject(requireUserId(req), String(projectId));
+    next();
+  } catch (error) { next(error); }
+});
 
 function readQueryStringValue(value: unknown): string {
   if (typeof value === 'string') {
@@ -67,6 +75,7 @@ router.get(
     const sessionsLimit = readOptionalNumericQueryValue(req.query.sessionsLimit) ?? undefined;
     const sessionsOffset = readOptionalNumericQueryValue(req.query.sessionsOffset) ?? undefined;
     const projects = await getProjectsWithSessions({
+      ownerUserId: requireUserId(req),
       skipSynchronization,
       sessionsLimit,
       sessionsOffset,
@@ -77,8 +86,8 @@ router.get(
 
 router.get(
   '/archived',
-  asyncHandler(async (_req, res) => {
-    const projects = await getArchivedProjectsWithSessions();
+  asyncHandler(async (req, res) => {
+    const projects = await getArchivedProjectsWithSessions({ ownerUserId: requireUserId(req) });
     res.json(createApiSuccessResponse({ projects }));
   }),
 );
@@ -119,6 +128,7 @@ router.post(
     const projectCreationResult = await createProject({
       projectPath,
       customName,
+      ownerUserId: requireUserId(req),
     });
 
     res.json({
@@ -141,7 +151,7 @@ router.post(
     const projectIds = Array.isArray((req.body as { projectIds?: unknown })?.projectIds)
       ? ((req.body as { projectIds: unknown[] }).projectIds as unknown[]).map((x) => String(x))
       : [];
-    const { updated } = applyLegacyStarredProjectIds(projectIds);
+    const { updated } = applyLegacyStarredProjectIds(projectIds, requireUserId(req));
     res.json({ success: true, updated });
   }),
 );

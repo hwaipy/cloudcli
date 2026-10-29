@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
+import { closeConnection, initializeDatabase, sessionsDb, userDb } from '@/modules/database/index.js';
 import {
   broadcastSessionUpserted,
   broadcastSessionUpsertedBatch,
 } from '@/modules/websocket/services/session-upsert-broadcast.service.js';
-import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
+import { clientUserIds, connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
 
 class FakeConnection {
   readyState = 1; // WS_OPEN_STATE
@@ -27,6 +27,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await initializeDatabase();
+  userDb.createUser('owner', 'test-hash');
 
   try {
     await runTest();
@@ -49,6 +50,7 @@ test('an upsert always carries the provider session id', async () => {
 
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
+    clientUserIds.set(connection, 1);
 
     await broadcastSessionUpserted('app-1');
 
@@ -66,6 +68,7 @@ test('the watcher path resolves a provider-native id to the same canonical event
 
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
+    clientUserIds.set(connection, 1);
 
     // The sessions watcher only ever knows the id written in the transcript.
     await broadcastSessionUpsertedBatch(['native-2']);
@@ -82,6 +85,7 @@ test('a session with no provider id yet reports null rather than omitting the fi
 
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
+    clientUserIds.set(connection, 1);
 
     await broadcastSessionUpserted('app-3');
 
@@ -99,6 +103,7 @@ test('upserts broadcast the user-send time, not later transcript writes', async 
     const sentAt = sessionsDb.getSessionById('ordered-session')?.last_user_message_at;
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
+    clientUserIds.set(connection, 1);
 
     sessionsDb.createSession('ordered-session', 'codex', '/workspace/demo', 'Ordered',
       '2020-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z');
@@ -113,6 +118,7 @@ test('an unresolvable id broadcasts nothing', async () => {
   await withIsolatedDatabase(async () => {
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
+    clientUserIds.set(connection, 1);
 
     await broadcastSessionUpserted('does-not-exist');
     await broadcastSessionUpsertedBatch(['also-missing']);
@@ -128,6 +134,7 @@ test('a batch delivers every resolvable session and skips the rest', async () =>
 
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
+    clientUserIds.set(connection, 1);
 
     await broadcastSessionUpsertedBatch(['app-4', 'missing', 'app-5']);
 
@@ -147,6 +154,8 @@ test('a closed socket is skipped', async () => {
     closing.readyState = 3;
     connectedClients.add(open as never);
     connectedClients.add(closing as never);
+    clientUserIds.set(open, 1);
+    clientUserIds.set(closing, 1);
 
     await broadcastSessionUpserted('app-6');
 

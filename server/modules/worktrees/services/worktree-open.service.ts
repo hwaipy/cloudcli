@@ -55,6 +55,9 @@ export async function openWorktreeAsProject(
 
   const existingRow = projects.getProjectByPath(normalizedWorktreePath);
   if (existingRow) {
+    if (input.ownerUserId !== undefined && existingRow.owner_user_id !== input.ownerUserId) {
+      throw new AppError('Project not found', { code: 'PROJECT_NOT_FOUND', statusCode: 404 });
+    }
     if (existingRow.isArchived) {
       await projects.restoreProject(existingRow.project_id);
     }
@@ -65,6 +68,7 @@ export async function openWorktreeAsProject(
   const created = await projects.createProject({
     projectPath: normalizedWorktreePath,
     customName: displayName,
+    ...(input.ownerUserId === undefined ? {} : { ownerUserId: input.ownerUserId }),
   });
 
   // `createProject` intentionally keeps reactivated archived rows archived;

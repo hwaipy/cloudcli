@@ -5,6 +5,7 @@ import os from 'node:os';
 import mime from 'mime-types';
 import multer from 'multer';
 
+import { requireOwnedProject, requireUserId } from '@/modules/access/index.js';
 import { projectsDb } from '@/modules/database/index.js';
 import { createFileTreeRouter } from '@/modules/file-tree/file-tree.routes.js';
 import { createFileTreeService } from '@/modules/file-tree/file-tree.service.js';
@@ -114,4 +115,5 @@ export const fileTreeRoutes = createFileTreeRouter(
     maximumFileCount: MAXIMUM_UPLOAD_FILE_COUNT,
   },
   fileTreeLogger,
+  (request, projectId) => requireOwnedProject(requireUserId(request), projectId),
 );

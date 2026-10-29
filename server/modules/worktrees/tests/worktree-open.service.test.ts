@@ -120,3 +120,26 @@ test('openWorktreeAsProject registers a worktree that has no project record', as
     customName: 'repo · feature/login',
   }]);
 });
+
+test('opening a worktree preserves the requesting account and rejects another account’s project', async () => {
+  let createdFor: number | undefined;
+  let existingRow: ProjectRepositoryRow | null = null;
+  const dependencies = {
+    runGit: createFakeRunner(),
+    projects: {
+      getProjectByPath: () => existingRow,
+      createProject: async (input: { projectPath: string; customName: string; ownerUserId?: number }) => {
+        createdFor = input.ownerUserId;
+        existingRow = { ...createProjectRow(), owner_user_id: input.ownerUserId };
+        return { outcome: 'created' as const, project: { projectId: 'project-1' } };
+      },
+      restoreProject: () => undefined,
+    },
+  };
+  await openWorktreeAsProject({ projectPath: MAIN_PATH, worktreePath: WORKTREE_PATH, ownerUserId: 2 }, dependencies);
+  assert.equal(createdFor, 2);
+  await assert.rejects(
+    openWorktreeAsProject({ projectPath: MAIN_PATH, worktreePath: WORKTREE_PATH, ownerUserId: 1 }, dependencies),
+    (error: unknown) => error instanceof Error && error.message === 'Project not found',
+  );
+});

@@ -45,13 +45,13 @@ export function createAgentModule(externalDependencies: AgentExternalDependencie
       getActiveGithubToken: (userId) => githubTokensDb.getActiveGithubToken(userId),
     },
     projects: {
-      createProjectPath: (projectPath, customName) =>
-        projectsDb.createProjectPath(projectPath, customName),
+      createProjectPath: (projectPath, customName, ownerUserId) =>
+        projectsDb.createProjectPath(projectPath, customName, ownerUserId),
     },
     models: providerModelsService,
     sessions: {
-      getSessionById: (sessionId) => sessionsDb.getSessionById(sessionId),
-      getSessionByProviderSessionId: (providerSessionId) => sessionsDb.getSessionByProviderSessionId(providerSessionId),
+      getSessionById: (sessionId, ownerUserId) => sessionsDb.getSessionById(sessionId, ownerUserId),
+      getSessionByProviderSessionId: (providerSessionId, ownerUserId) => sessionsDb.getSessionByProviderSessionId(providerSessionId, ownerUserId),
       createAppSession: (provider, projectPath, initialMessage) =>
         sessionsService.createAppSession(provider as LLMProvider, projectPath, initialMessage),
     },

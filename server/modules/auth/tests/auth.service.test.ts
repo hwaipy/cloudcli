@@ -12,6 +12,7 @@ function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDepe
     users: {
       hasUsers: () => false,
       createUser: (username, passwordHash) => ({ id: 1, username, password_hash: passwordHash }),
+      listUsers: () => [{ id: 1, username: 'alice' }],
       getUserByUsername: () => undefined,
       updateLastLogin: () => undefined,
     },
@@ -45,6 +46,7 @@ test('register hashes credentials and commits through injected dependencies', as
         operations.push(`create:${username}:${passwordHash}`);
         return { id: 1, username, password_hash: passwordHash };
       },
+      listUsers: () => [{ id: 1, username: 'alice' }],
       getUserByUsername: () => undefined,
       updateLastLogin: (userId) => operations.push(`login:${userId}`),
     },
@@ -62,6 +64,7 @@ test('login rejects an invalid password without issuing a token', async () => {
     users: {
       hasUsers: () => true,
       createUser: () => { throw new Error('unused'); },
+      listUsers: () => [{ id: 1, username: 'alice' }],
       getUserByUsername: () => ({ id: 1, username: 'alice', password_hash: 'hash' }),
       updateLastLogin: () => undefined,
     },
@@ -92,4 +95,22 @@ test('refreshSession issues a replacement token for the authenticated user', () 
 
   assert.deepEqual(result, { token: 'replacement-token' });
   assert.deepEqual(tokenUser, { id: 7, username: 'alice' });
+});
+
+test('only the original administrator can add an account', async () => {
+  const service = createAuthService(createDependencies());
+  await assert.rejects(
+    service.createManagedUser({ id: 2 }, 'bob', 'secret12'),
+    (error: unknown) => error instanceof AppError && error.code === 'ADMIN_REQUIRED',
+  );
+  const created = await service.createManagedUser({ id: 1 }, 'bob', 'secret12');
+  assert.equal(created.user.username, 'bob');
+});
+
+test('platform authentication cannot add accounts it cannot distinguish', async () => {
+  const service = createAuthService(createDependencies({ platformMode: true }));
+  await assert.rejects(
+    service.createManagedUser({ id: 1 }, 'bob', 'secret12'),
+    (error: unknown) => error instanceof AppError && error.code === 'MULTI_USER_UNAVAILABLE',
+  );
 });

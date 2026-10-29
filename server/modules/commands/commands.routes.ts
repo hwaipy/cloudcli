@@ -1,11 +1,12 @@
 // @ts-nocheck -- temporary while command handlers are extracted into the injected service.
 import path from "path";
 
-import express from "express";
+import express, { type RequestHandler } from "express";
 
 import { parseFrontMatter } from "../../shared/frontmatter.js";
 
 type CommandsRouterDependencies = {
+  authorizeContext?: RequestHandler;
   fileSystem: typeof import('node:fs/promises');
   homeDirectory(): string;
   appRoot: string;
@@ -44,6 +45,7 @@ const APP_ROOT = dependencies.appRoot;
 const providerModelsService = dependencies.models;
 const process = dependencies.runtime;
 const router = express.Router();
+if (dependencies.authorizeContext) router.use(dependencies.authorizeContext);
 
 const MODEL_PROVIDERS = ["claude", "cursor", "codex", "opencode"];
 

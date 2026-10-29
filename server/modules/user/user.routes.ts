@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type RequestHandler } from 'express';
 
 import type { createUserService } from './user.service.js';
 
@@ -10,7 +10,10 @@ function readUserId(request: express.Request): number {
 }
 
 /** Creates thin user routes that parse authenticated input and call the service. */
-export function createUserRouter(service: ReturnType<typeof createUserService>): express.Router {
+export function createUserRouter(
+  service: ReturnType<typeof createUserService>,
+  authorizeDraftScope?: RequestHandler,
+): express.Router {
   const router = express.Router();
 
   router.get('/git-config', async (req, res, next) => {
@@ -61,6 +64,8 @@ export function createUserRouter(service: ReturnType<typeof createUserService>):
       next(error);
     }
   });
+
+  if (authorizeDraftScope) router.use('/drafts', authorizeDraftScope);
 
   router.get('/drafts', (req, res, next) => {
     try {

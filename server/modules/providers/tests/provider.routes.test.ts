@@ -8,7 +8,7 @@ import test from 'node:test';
 
 import express, { type NextFunction, type Request, type Response } from 'express';
 
-import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
+import { closeConnection, initializeDatabase, projectsDb, sessionsDb, userDb } from '@/modules/database/index.js';
 import providerRouter from '@/modules/providers/provider.routes.js';
 import { codexPlanUsageService } from '@/modules/providers/services/codex-plan-usage.service.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
@@ -26,8 +26,13 @@ async function withProviderServer(
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await writeFile(process.env.DATABASE_PATH, '');
   await initializeDatabase();
+  userDb.createUser('owner', 'test-hash');
+  projectsDb.createProjectPath(path.join(tempDirectory, 'workspace'), null, 1);
 
-  const app = express().use(express.json()).use('/api/providers', providerRouter);
+  const app = express().use(express.json()).use((req, _res, next) => {
+    (req as Request & { user?: { id: number } }).user = { id: 1 };
+    next();
+  }).use('/api/providers', providerRouter);
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof AppError) {
       res.status(error.statusCode).json({
@@ -79,6 +84,32 @@ test('session creation route names a CloudCLI session from the initial message',
       sessionsDb.getSessionById(payload.data.sessionId)?.custom_name,
       'abcd efg hij klm',
     );
+  });
+});
+
+test('session routes do not expose another account’s sessions', async () => {
+  await withProviderServer(async (baseUrl, workspacePath) => {
+    const secondUserId = Number(userDb.createUser('second', 'test-hash').id);
+    const secondPath = path.join(path.dirname(workspacePath), 'second-workspace');
+    projectsDb.createProjectPath(secondPath, null, secondUserId);
+    sessionsDb.createAppSession('owner-session', 'codex', workspacePath);
+    sessionsDb.createAppSession('second-session', 'codex', secondPath);
+
+    const recent = await fetch(`${baseUrl}/api/providers/sessions/recent`);
+    const recentPayload = await recent.json() as { data: { conversations: Array<{ sessionId: string }> } };
+    assert.equal(recent.status, 200);
+    assert.deepEqual(recentPayload.data.conversations.map((session) => session.sessionId), ['owner-session']);
+
+    const privateSession = await fetch(`${baseUrl}/api/providers/sessions/second-session`);
+    assert.equal(privateSession.status, 404);
+    const privateHistory = await fetch(`${baseUrl}/api/providers/sessions/second-session/messages`);
+    assert.equal(privateHistory.status, 404);
+
+    const createInOtherProject = await fetch(`${baseUrl}/api/providers/sessions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'codex', projectPath: secondPath, initialMessage: 'hello' }),
+    });
+    assert.equal(createInOtherProject.status, 404);
   });
 });
 
@@ -502,7 +533,8 @@ test('the running-sessions route reports a session held open for background work
   } as unknown as IProvider];
 
   try {
-    await withProviderServer(async (baseUrl) => {
+    await withProviderServer(async (baseUrl, workspacePath) => {
+      sessionsDb.createAppSession('held-session', 'claude', workspacePath);
       const response = await fetch(`${baseUrl}/api/providers/sessions/running`);
       const payload = await response.json() as { data: { sessions: unknown[] } };
 

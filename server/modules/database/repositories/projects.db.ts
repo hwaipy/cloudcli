@@ -15,20 +15,27 @@ function normalizeProjectDisplayName(projectPath: string, customProjectName: str
     return directoryName || projectPath;
 }
 
+function resolveProjectOwner(db: ReturnType<typeof getConnection>, ownerUserId?: number): number | null {
+    if (ownerUserId !== undefined) return ownerUserId;
+    const firstUser = db.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get() as { id: number } | undefined;
+    return firstUser?.id ?? null;
+}
+
 export const projectsDb = {
-    createProjectPath(projectPath: string, customProjectName: string | null = null): CreateProjectPathResult {
+    createProjectPath(projectPath: string, customProjectName: string | null = null, ownerUserId?: number): CreateProjectPathResult {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
         const normalizedProjectName = normalizeProjectDisplayName(normalizedProjectPath, customProjectName);
         const attemptedId = randomUUID();
+        const ownerId = resolveProjectOwner(db, ownerUserId);
         const row = db.prepare(`
-        INSERT INTO projects (project_id, project_path, custom_project_name, isArchived)
-            VALUES (?, ?, ?, 0)
+        INSERT INTO projects (project_id, project_path, custom_project_name, owner_user_id, isArchived)
+            VALUES (?, ?, ?, ?, 0)
             ON CONFLICT(project_path) DO UPDATE SET
             isArchived = 0
-            WHERE projects.isArchived = 1
-            RETURNING project_id, project_path, custom_project_name, isStarred, isArchived
-        `).get(attemptedId, normalizedProjectPath, normalizedProjectName) as ProjectRepositoryRow | undefined;
+            WHERE projects.isArchived = 1 AND projects.owner_user_id IS excluded.owner_user_id
+            RETURNING project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
+        `).get(attemptedId, normalizedProjectPath, normalizedProjectName, ownerId) as ProjectRepositoryRow | undefined;
 
         if (row) {
             return {
@@ -48,7 +55,7 @@ export const projectsDb = {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
         const row = db.prepare(`
-            SELECT project_id, project_path, custom_project_name, isStarred, isArchived
+            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
             FROM projects
             WHERE project_path = ?
         `).get(normalizedProjectPath) as ProjectRepositoryRow | undefined;
@@ -56,13 +63,13 @@ export const projectsDb = {
         return row ?? null;
     },
 
-    getProjectById(projectId: string): ProjectRepositoryRow | null {
+    getProjectById(projectId: string, ownerUserId?: number): ProjectRepositoryRow | null {
         const db = getConnection();
         const row = db.prepare(`
-            SELECT project_id, project_path, custom_project_name, isStarred, isArchived
+            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
             FROM projects
-            WHERE project_id = ?
-        `).get(projectId) as ProjectRepositoryRow | undefined;
+            WHERE project_id = ? AND (? IS NULL OR owner_user_id = ?)
+        `).get(projectId, ownerUserId ?? null, ownerUserId ?? null) as ProjectRepositoryRow | undefined;
 
         return row ?? null;
     },
@@ -86,26 +93,26 @@ export const projectsDb = {
         return row?.project_path ?? null;
     },
 
-    getProjectPaths(): ProjectRepositoryRow[] {
+    getProjectPaths(ownerUserId?: number): ProjectRepositoryRow[] {
         const db = getConnection();
         return db.prepare(`
-            SELECT project_id, project_path, custom_project_name, isStarred, isArchived
+            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
             FROM projects
-            WHERE isArchived = 0
-        `).all() as ProjectRepositoryRow[];
+            WHERE isArchived = 0 AND (? IS NULL OR owner_user_id = ?)
+        `).all(ownerUserId ?? null, ownerUserId ?? null) as ProjectRepositoryRow[];
     },
 
     /**
      * Archived rows are queried separately so archive-focused UIs can present
      * hidden workspaces without reintroducing them into the active sidebar list.
      */
-    getArchivedProjectPaths(): ProjectRepositoryRow[] {
+    getArchivedProjectPaths(ownerUserId?: number): ProjectRepositoryRow[] {
         const db = getConnection();
         return db.prepare(`
-            SELECT project_id, project_path, custom_project_name, isStarred, isArchived
+            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
             FROM projects
-            WHERE isArchived = 1
-        `).all() as ProjectRepositoryRow[];
+            WHERE isArchived = 1 AND (? IS NULL OR owner_user_id = ?)
+        `).all(ownerUserId ?? null, ownerUserId ?? null) as ProjectRepositoryRow[];
     },
 
     getCustomProjectName(projectPath: string): string | null {
@@ -124,10 +131,10 @@ export const projectsDb = {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
         db.prepare(`
-            INSERT INTO projects (project_id, project_path, custom_project_name)
-            VALUES (?, ?, ?)
+            INSERT INTO projects (project_id, project_path, custom_project_name, owner_user_id)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(project_path) DO UPDATE SET custom_project_name = excluded.custom_project_name
-        `).run(randomUUID(), normalizedProjectPath, customProjectName);
+        `).run(randomUUID(), normalizedProjectPath, customProjectName, resolveProjectOwner(db));
     },
 
     updateCustomProjectNameById(projectId: string, customProjectName: string | null): void {

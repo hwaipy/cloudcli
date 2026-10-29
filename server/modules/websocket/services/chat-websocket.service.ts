@@ -2,11 +2,13 @@ import path from 'node:path';
 
 import type { WebSocket } from 'ws';
 
+import { canReadAsset } from '@/modules/assets/index.js';
 import { sessionDraftsDb, sessionsDb } from '@/modules/database/index.js';
 import { providerCapabilitiesService, providerModelsService, sessionsService } from '@/modules/providers/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { broadcastSessionUpserted } from '@/modules/websocket/services/session-upsert-broadcast.service.js';
-import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
+import { clientUserIds, connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
+import { ownsSession } from '@/modules/access/index.js';
 import {
   getGlobalImageAssetsDir,
   isImageAttachmentDescriptor,
@@ -38,6 +40,7 @@ const sessionSubscribers = new Map<string, Set<WebSocket>>();
 export function filterAttachmentsToUploadStore(
   attachments: unknown,
   assetsRootOverride?: string,
+  userId?: number,
 ): ChatAttachmentDescriptor[] {
   const assetsRoot = path.resolve(assetsRootOverride ?? getGlobalImageAssetsDir());
 
@@ -55,7 +58,7 @@ export function filterAttachmentsToUploadStore(
     if (!isDirectChild) {
       console.warn(`[Chat] Dropping attachment outside the upload store: ${descriptor.path}`);
     }
-    return isDirectChild;
+    return isDirectChild && (userId === undefined || canReadAsset(path.basename(resolved), userId));
   });
 }
 
@@ -285,7 +288,12 @@ async function dispatchRun(
     ...normalizeAttachmentDescriptors(clientOptions.files),
     ...normalizeAttachmentDescriptors(clientOptions.attachments),
   ];
-  const verifiedAttachments = filterAttachmentsToUploadStore(attachmentCandidates);
+  const attachmentOwnerId = Number(userId);
+  const verifiedAttachments = filterAttachmentsToUploadStore(
+    attachmentCandidates,
+    undefined,
+    Number.isSafeInteger(attachmentOwnerId) && attachmentOwnerId > 0 ? attachmentOwnerId : undefined,
+  );
   const uniqueAttachments = verifiedAttachments.filter(
     (descriptor, index, all) => all.findIndex((candidate) => candidate.path === descriptor.path) === index,
   );
@@ -602,6 +610,7 @@ async function handleChatStopTask(
  */
 function handleChatSubscribe(
   ws: WebSocket,
+  userId: number,
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies
 ): void {
@@ -616,6 +625,10 @@ function handleChatSubscribe(
       ? ((target as AnyRecord).sessionId as string).trim()
       : '';
     if (!sessionId) {
+      continue;
+    }
+    if (!ownsSession(userId, sessionId)) {
+      sendProtocolError(ws, 'SESSION_NOT_FOUND', 'Session not found.', sessionId);
       continue;
     }
 
@@ -674,8 +687,22 @@ function handleChatSubscribe(
  * pending approval resolver (Claude is the only provider with interactive
  * approvals today, but the message is intentionally provider-neutral).
  */
-function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDependencies): void {
+function handlePermissionResponse(
+  ws: WebSocket,
+  userId: number,
+  data: AnyRecord,
+  dependencies: ChatWebSocketDependencies,
+): void {
   if (typeof data.requestId !== 'string' || data.requestId.length === 0) {
+    return;
+  }
+
+  const matchingRun = chatRunRegistry.listRunningRuns().find((run) =>
+    dependencies.runtime.getPendingApprovalsForSession(run.sessionId).some((request) =>
+      typeof request === 'object' && request !== null && 'requestId' in request
+      && request.requestId === data.requestId));
+  if (!matchingRun || !ownsSession(userId, matchingRun.sessionId)) {
+    sendProtocolError(ws, 'PERMISSION_NOT_FOUND', 'Permission request not found.');
     return;
   }
 
@@ -732,7 +759,7 @@ export async function runDetachedChatTurn(
   dependencies: ChatWebSocketDependencies,
 ): Promise<{ started: boolean; error: string | null }> {
   const session = sessionsDb.getSessionById(input.sessionId);
-  if (!session) {
+  if (!session || session.owner_user_id !== Number(input.userId)) {
     return { started: false, error: 'The session no longer exists.' };
   }
 
@@ -780,6 +807,8 @@ export function handleChatConnection(
   connectedClients.add(ws);
 
   const userId = readRequestUserId(request);
+  const numericUserId = Number(userId);
+  if (Number.isSafeInteger(numericUserId) && numericUserId > 0) clientUserIds.set(ws, numericUserId);
 
   ws.on('message', async (rawMessage) => {
     try {
@@ -790,6 +819,18 @@ export function handleChatConnection(
 
       const data = parsed as AnyRecord;
       const messageType = typeof data.type === 'string' ? data.type : '';
+
+      if (!Number.isSafeInteger(numericUserId) || numericUserId < 1) {
+        sendProtocolError(ws, 'AUTH_REQUIRED', 'Authentication required.');
+        return;
+      }
+      if (messageType !== 'chat.subscribe' && messageType !== 'chat.permission-response') {
+        const sessionId = readRequiredSessionId(data);
+        if (sessionId && !ownsSession(numericUserId, sessionId)) {
+          sendProtocolError(ws, 'SESSION_NOT_FOUND', 'Session not found.', sessionId);
+          return;
+        }
+      }
 
       switch (messageType) {
         case 'chat.edit-send':
@@ -808,10 +849,10 @@ export function handleChatConnection(
           await handleChatStopTask(ws, data, dependencies);
           return;
         case 'chat.subscribe':
-          handleChatSubscribe(ws, data, dependencies);
+          handleChatSubscribe(ws, numericUserId, data, dependencies);
           return;
         case 'chat.permission-response':
-          handlePermissionResponse(data, dependencies);
+          handlePermissionResponse(ws, numericUserId, data, dependencies);
           return;
         default:
           sendProtocolError(ws, 'UNKNOWN_MESSAGE_TYPE', `Unknown message type "${messageType}".`);

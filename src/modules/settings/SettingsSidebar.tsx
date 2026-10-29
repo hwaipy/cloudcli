@@ -1,4 +1,4 @@
-import { Bell, Bot, GitBranch, Info, Key, ListChecks, Mic, MonitorPlay, Palette, Puzzle } from 'lucide-react';
+import { Bell, Bot, GitBranch, Info, Key, ListChecks, Mic, MonitorPlay, Palette, Puzzle, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/shared/utils';
@@ -8,6 +8,7 @@ import type { SettingsMainTab } from '@/shared/types';
 type SettingsSidebarProps = {
   activeTab: SettingsMainTab;
   onChange: (tab: SettingsMainTab) => void;
+  isAdmin: boolean;
 };
 
 type NavItem = {
@@ -26,19 +27,21 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'browser', labelKey: 'mainTabs.browser', icon: MonitorPlay },
   { id: 'plugins', labelKey: 'mainTabs.plugins', icon: Puzzle },
   { id: 'notifications', labelKey: 'mainTabs.notifications', icon: Bell },
+  { id: 'users', labelKey: 'mainTabs.users', icon: Users },
   { id: 'about', labelKey: 'mainTabs.about', icon: Info },
 ];
 
 /** Rendered by Settings to switch between the settings dialog's main sections. */
-export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebarProps) {
+export default function SettingsSidebar({ activeTab, onChange, isAdmin }: SettingsSidebarProps) {
   const { t } = useTranslation('settings');
+  const visibleItems = NAV_ITEMS.filter((item) => isAdmin || (item.id !== 'users' && item.id !== 'browser'));
 
   return (
     <>
       {/* Desktop sidebar */}
       <aside className="hidden w-56 flex-shrink-0 border-r border-border bg-muted/30 md:flex md:flex-col">
         <nav className="flex flex-col gap-1 p-3">
-          {NAV_ITEMS.map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
 
@@ -64,7 +67,7 @@ export default function SettingsSidebar({ activeTab, onChange }: SettingsSidebar
       {/* Mobile horizontal nav — pill bar */}
       <div className="flex-shrink-0 border-b border-border px-3 py-2 md:hidden">
         <PillBar className="scrollbar-hide w-full overflow-x-auto">
-          {NAV_ITEMS.map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon;
 
             return (

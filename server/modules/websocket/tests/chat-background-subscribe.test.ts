@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { mock } from 'node:test';
 
-import { closeConnection, getConnection, initializeDatabase, sessionDraftsDb, sessionsDb } from '@/modules/database/index.js';
+import { closeConnection, initializeDatabase, sessionDraftsDb, sessionsDb, userDb } from '@/modules/database/index.js';
 import { handleChatConnection, runDetachedChatTurn } from '@/modules/websocket/services/chat-websocket.service.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
@@ -40,6 +40,7 @@ async function withIsolatedDatabase(runTest: () => Promise<void>): Promise<void>
   closeConnection();
   process.env.DATABASE_PATH = path.join(tempDirectory, 'auth.db');
   await initializeDatabase();
+  userDb.createUser('owner', 'test-hash');
   try {
     sessionsDb.createAppSession(SESSION_ID, 'claude', tempDirectory);
     await runTest();
@@ -96,6 +97,26 @@ test('a tab that subscribes during background work receives the run\'s later eve
       newTab.frames.some((frame) => frame.kind === 'task_status'),
       'the task event must reach the tab that subscribed after the turn ended',
     );
+  });
+});
+
+test('another account cannot subscribe to or send into an owned session', async () => {
+  await withIsolatedDatabase(async () => {
+    const otherUserId = Number(userDb.createUser('other', 'test-hash').id);
+    const tab = createFakeSocket();
+    handleChatConnection(tab as never, { user: { id: otherUserId } } as never, {
+      runtime: {
+        hasRuntime: () => true,
+        hasBackgroundWork: () => false,
+        getPendingApprovalsForSession: () => [],
+      } as never,
+    });
+    tab.emit('message', JSON.stringify({ type: 'chat.subscribe', sessions: [{ sessionId: SESSION_ID }] }));
+    tab.emit('message', JSON.stringify({ type: 'chat.send', sessionId: SESSION_ID, content: 'forged' }));
+    await settle();
+    assert.equal(tab.frames.filter((frame) => frame.kind === 'protocol_error').length, 2);
+    assert.equal(tab.frames.some((frame) => frame.kind === 'chat_subscribed'), false);
+    assert.equal(chatRunRegistry.getRun(SESSION_ID), undefined);
   });
 });
 
@@ -216,7 +237,6 @@ test('steering a live Codex turn acknowledges and publishes the accepted text', 
 
 test('steering a queued turn takes exactly that item and restores it when refused', async () => {
   await withIsolatedDatabase(async () => {
-    getConnection().prepare('INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)').run(1, 'tester', 'hash');
     const first = sessionDraftsDb.appendQueuedMessage(1, SESSION_ID, { content: 'first', attachments: [] });
     const second = sessionDraftsDb.appendQueuedMessage(1, SESSION_ID, { content: 'second', attachments: [] });
     const tab = createFakeSocket();

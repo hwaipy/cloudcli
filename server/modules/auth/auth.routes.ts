@@ -41,6 +41,19 @@ export function createAuthRouter(
     }
   });
 
+  router.get('/users', authenticateToken, (req, res, next) => {
+    try {
+      res.json(service.listUsers((req as AuthenticatedRequest).user));
+    } catch (error) { next(error); }
+  });
+
+  router.post('/users', authenticateToken, async (req, res, next) => {
+    try {
+      const body = req.body as { username?: unknown; password?: unknown };
+      res.status(201).json(await service.createManagedUser((req as AuthenticatedRequest).user, body.username, body.password));
+    } catch (error) { next(error); }
+  });
+
   router.get('/user', authenticateToken, (req, res) => {
     res.json(service.getCurrentUser((req as AuthenticatedRequest).user));
   });

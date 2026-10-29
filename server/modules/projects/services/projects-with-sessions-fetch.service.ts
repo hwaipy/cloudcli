@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/index.js';
-import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
+import { WS_OPEN_STATE, connectedClients, clientUserIds } from '@/modules/websocket/index.js';
 import type { RealtimeClientConnection } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -49,6 +49,7 @@ type ProgressUpdate = {
 };
 
 type GetProjectsWithSessionsOptions = {
+  ownerUserId?: number;
   skipSynchronization?: boolean;
   sessionsLimit?: number;
   sessionsOffset?: number;
@@ -162,14 +163,15 @@ function readProjectSessionsPageByPath(
 
 // Broadcast progress to all connected WebSocket clients.
 // Uses the unified `kind` envelope like every other websocket frame.
-function broadcastProgress(progress: ProgressUpdate) {
+function broadcastProgress(progress: ProgressUpdate, ownerUserId?: number) {
   const message = JSON.stringify({
     kind: 'loading_progress',
     ...progress,
   });
 
   connectedClients.forEach((client: RealtimeClientConnection) => {
-    if (client.readyState === WS_OPEN_STATE) {
+    if (client.readyState === WS_OPEN_STATE &&
+      (ownerUserId === undefined || clientUserIds.get(client) === ownerUserId)) {
       client.send(message);
     }
   });
@@ -185,7 +187,7 @@ export async function getProjectsWithSessions(
     await sessionSynchronizerService.synchronizeSessions();
   }
 
-  const projectRows = projectsDb.getProjectPaths() as Array<{
+  const projectRows = projectsDb.getProjectPaths(options.ownerUserId) as Array<{
     project_id: string;
     project_path: string;
     custom_project_name?: string | null;
@@ -206,7 +208,7 @@ export async function getProjectsWithSessions(
       current: processedProjects,
       total: totalProjects,
       currentProject: projectPath,
-    });
+    }, options.ownerUserId);
 
     const displayName =
       row.custom_project_name && row.custom_project_name.trim().length > 0
@@ -236,7 +238,7 @@ export async function getProjectsWithSessions(
     phase: 'complete',
     current: totalProjects,
     total: totalProjects,
-  });
+  }, options.ownerUserId);
 
   return projects;
 }
@@ -247,13 +249,13 @@ export async function getProjectsWithSessions(
  * conversation history in the archive view regardless of each session's flag.
  */
 export async function getArchivedProjectsWithSessions(
-  options: Pick<GetProjectsWithSessionsOptions, 'skipSynchronization'> = {},
+  options: Pick<GetProjectsWithSessionsOptions, 'skipSynchronization' | 'ownerUserId'> = {},
 ): Promise<ArchivedProjectListItem[]> {
   if (!options.skipSynchronization) {
     await sessionSynchronizerService.synchronizeSessions();
   }
 
-  const projectRows = projectsDb.getArchivedProjectPaths() as Array<{
+  const projectRows = projectsDb.getArchivedProjectPaths(options.ownerUserId) as Array<{
     project_id: string;
     project_path: string;
     custom_project_name?: string | null;

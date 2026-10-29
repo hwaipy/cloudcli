@@ -161,7 +161,7 @@ export const sessionsService = {
    * This is intentionally status-only: callers that only need sidebar activity
    * indicators should not attach to chat streams or request replayed messages.
    */
-  async listRunningSessions(): Promise<RunningSessionEntry[]> {
+  async listRunningSessions(ownerUserId?: number): Promise<RunningSessionEntry[]> {
     const entries: RunningSessionEntry[] = chatRunRegistry.listRunningRuns();
     const runningById = new Map(entries.map((entry) => [entry.sessionId, entry]));
 
@@ -209,14 +209,16 @@ export const sessionsService = {
       runningById.set(session.session_id, entries[entries.length - 1]);
     }
 
-    return entries;
+    return ownerUserId === undefined
+      ? entries
+      : entries.filter((entry) => sessionsDb.getSessionById(entry.sessionId, ownerUserId));
   },
 
   /**
    * Returns the active conversation feed in true global activity order.
    */
-  listRecentSessions(limit: number, offset: number): RecentSessionsPage {
-    const page = sessionsDb.getRecentSessionsPage(limit, offset);
+  listRecentSessions(limit: number, offset: number, ownerUserId?: number): RecentSessionsPage {
+    const page = sessionsDb.getRecentSessionsPage(limit, offset, ownerUserId);
     const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
     const conversations = page.sessions.map((session) => {
       const projectPath = session.project_path?.trim() ? session.project_path : null;
@@ -646,8 +648,8 @@ export const sessionsService = {
    * Returns archived sessions with enough project metadata for the sidebar to
    * group, filter, open, and restore them without a per-row follow-up query.
    */
-  listArchivedSessions(): ArchivedSessionListItem[] {
-    const archivedSessions = sessionsDb.getArchivedSessions();
+  listArchivedSessions(ownerUserId?: number): ArchivedSessionListItem[] {
+    const archivedSessions = sessionsDb.getArchivedSessions(ownerUserId);
     const projectCache = new Map<string, ReturnType<typeof projectsDb.getProjectPath>>();
 
     return archivedSessions.map((session) => {

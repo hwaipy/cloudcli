@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import express from 'express';
 
-import { connectedClients } from '@/modules/websocket/index.js';
+import { closeConnection, getConnection, initializeDatabase, projectsDb, userDb } from '@/modules/database/index.js';
+import { clientUserIds, connectedClients } from '@/modules/websocket/index.js';
 
 import { createTaskmasterRouter } from '../taskmaster.routes.js';
 
@@ -146,6 +150,16 @@ test('TaskMaster process errors use the endpoint failure response and settle onc
 });
 
 test('TaskMaster broadcasts reach only the tracked chat clients', async () => {
+  const previousDatabasePath = process.env.DATABASE_PATH;
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'taskmaster-broadcast-'));
+  closeConnection();
+  process.env.DATABASE_PATH = path.join(directory, 'auth.db');
+  await initializeDatabase();
+  const ownerId = Number(userDb.createUser('owner', 'hash').id);
+  const project = projectsDb.createProjectPath(path.join(directory, 'project'), null, ownerId).project;
+  assert.ok(project);
+  getConnection().prepare('UPDATE projects SET project_id = ? WHERE project_id = ?')
+    .run('project-1', project.project_id);
   const child = new EventEmitter() as EventEmitter & {
     stdin: PassThrough;
     stdout: PassThrough;
@@ -182,6 +196,8 @@ test('TaskMaster broadcasts reach only the tracked chat clients', async () => {
 
   connectedClients.add(chatClient as never);
   connectedClients.add(closingClient as never);
+  clientUserIds.set(chatClient as never, ownerId);
+  clientUserIds.set(closingClient as never, ownerId);
   try {
     const address = server.address() as AddressInfo;
     const response = await fetch(`http://127.0.0.1:${address.port}/api/taskmaster/init/project-1`, {
@@ -197,5 +213,9 @@ test('TaskMaster broadcasts reach only the tracked chat clients', async () => {
   } finally {
     connectedClients.clear();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    closeConnection();
+    if (previousDatabasePath === undefined) delete process.env.DATABASE_PATH;
+    else process.env.DATABASE_PATH = previousDatabasePath;
+    await rm(directory, { recursive: true, force: true });
   }
 });

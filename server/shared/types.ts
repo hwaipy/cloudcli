@@ -281,6 +281,7 @@ export type SessionUpsertedProject = {
 export type SessionUpsertedEvent = {
   kind: 'session_upserted';
   sessionId: string;
+  ownerUserId?: number | null;
   providerSessionId: string | null;
   provider: LLMProvider;
   session: {
@@ -1009,6 +1010,7 @@ export type QueuedChatMessage = {
 export type ProjectRepositoryRow = {
   project_id: string;
   project_path: string;
+  owner_user_id?: number | null;
   custom_project_name: string | null;
   isStarred: number;
   isArchived: number;
@@ -1160,6 +1162,7 @@ export type ListWorktreesInput = {
  */
 export type CreateWorktreeInput = {
   projectPath: string;
+  ownerUserId?: number;
   branch: string;
   baseBranch?: string | null;
 };
@@ -1195,6 +1198,7 @@ export type CreateAndOpenWorktreeResult = CreateWorktreeResult & {
 export type OpenWorktreeInput = {
   projectPath: string;
   worktreePath: string;
+  ownerUserId?: number;
 };
 
 /**
@@ -1294,6 +1298,7 @@ export type WorktreeProjectGateway = {
   createProject(input: {
     projectPath: string;
     customName: string;
+    ownerUserId?: number;
   }): Promise<{
     outcome: 'created' | 'reactivated_archived';
     project: { projectId: string };

@@ -7,7 +7,7 @@ import test from 'node:test';
 import { closeConnection, initializeDatabase, scheduledMessagesDb, sessionDraftsDb, sessionsDb, userDb } from '@/modules/database/index.js';
 import { dispatchDueScheduledMessages, dispatchQueuedMessages } from '@/modules/scheduled-messages/services/scheduled-message-dispatcher.service.js';
 import { scheduledMessagesService } from '@/modules/scheduled-messages/services/scheduled-messages.service.js';
-import { chatRunRegistry, connectedClients } from '@/modules/websocket/index.js';
+import { chatRunRegistry, clientUserIds, connectedClients } from '@/modules/websocket/index.js';
 
 const SESSION_ID = 'scheduled-session';
 
@@ -78,6 +78,7 @@ class FakeConnection {
 function openTab(): FakeConnection {
   const connection = new FakeConnection();
   connectedClients.add(connection as never);
+  clientUserIds.set(connection as never, userDb.getFirstUser()!.id);
   return connection;
 }
 

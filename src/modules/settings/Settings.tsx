@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { ProviderLoginModal } from '@/modules/provider-auth';
+import { useAuth } from '@/modules/auth';
 import { Button } from '@/shared/ui';
 import SettingsSidebar from '@/modules/settings/SettingsSidebar';
 import AgentsSettingsTab from '@/modules/settings/tabs/agents-settings/AgentsSettingsTab';
@@ -15,9 +16,11 @@ import NotificationsSettingsTab from '@/modules/settings/tabs/NotificationsSetti
 import TasksSettingsTab from '@/modules/settings/tabs/tasks-settings/TasksSettingsTab';
 import { PluginSettingsTab } from '@/modules/plugins';
 import AboutTab from '@/modules/settings/tabs/AboutTab';
+import UsersSettingsTab from '@/modules/settings/tabs/UsersSettingsTab';
 import { useSettingsController } from '@/modules/settings/hooks/useSettingsController';
 import { useWebPush } from '@/modules/settings/hooks/useWebPush';
 import type { AgentSettingsProject } from '@/shared/types';
+import { IS_PLATFORM } from '@/shared/utils';
 
 type SettingsProps = {
   isOpen: boolean;
@@ -37,6 +40,8 @@ type DesktopNotificationsState = {
 /** Exported as the settings module's public entry point and rendered by the sidebar module as its settings dialog. */
 function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: SettingsProps) {
   const { t } = useTranslation('settings');
+  const { user } = useAuth();
+  const isAdmin = user?.isAdmin === true && !IS_PLATFORM;
   const desktopNotificationsBridge = useMemo(() => (
     typeof window === 'undefined'
       ? null
@@ -69,6 +74,10 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     isOpen,
     initialTab
   });
+
+  useEffect(() => {
+    if (!isAdmin && (activeTab === 'users' || activeTab === 'browser')) setActiveTab('agents');
+  }, [activeTab, isAdmin, setActiveTab]);
 
   const {
     permission: pushPermission,
@@ -215,7 +224,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
         {/* Body: sidebar + content */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
-          <SettingsSidebar activeTab={activeTab} onChange={setActiveTab} />
+          <SettingsSidebar activeTab={activeTab} onChange={setActiveTab} isAdmin={isAdmin} />
 
           {/* Content */}
           <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -273,6 +282,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               {activeTab === 'voice' && <VoiceSettingsTab />}
 
               {activeTab === 'plugins' && <PluginSettingsTab />}
+
+              {activeTab === 'users' && isAdmin && <UsersSettingsTab />}
 
               {activeTab === 'about' && <AboutTab />}
             </div>

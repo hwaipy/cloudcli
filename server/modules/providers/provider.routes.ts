@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from 'express';
+import { requireOwnedProjectPath, requireOwnedSession, requireUserId } from '@/modules/access/index.js';
 
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
 import { claudeSettingsPermissionsService } from '@/modules/providers/services/claude-settings-permissions.service.js';
@@ -24,6 +25,13 @@ import type {
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 
 const router = express.Router();
+
+router.param('sessionId', (req, _res, next, sessionId) => {
+  try {
+    requireOwnedSession(requireUserId(req), String(sessionId));
+    next();
+  } catch (error) { next(error); }
+});
 
 const readPathParam = (value: unknown, name: string): string => {
   if (typeof value === 'string') {
@@ -932,6 +940,7 @@ router.post(
     const body = (req.body ?? {}) as Record<string, unknown>;
     const provider = parseProvider(body.provider);
     const projectPath = typeof body.projectPath === 'string' ? body.projectPath : '';
+    requireOwnedProjectPath(requireUserId(req), projectPath);
     const initialMessage = typeof body.initialMessage === 'string' ? body.initialMessage : '';
     const permissionMode = typeof body.permissionMode === 'string' ? body.permissionMode.trim() : undefined;
     const result = sessionsService.createAppSession(provider, projectPath, initialMessage, permissionMode);
@@ -941,8 +950,8 @@ router.post(
 
 router.get(
   '/sessions/running',
-  asyncHandler(async (_req: Request, res: Response) => {
-    const sessions = await sessionsService.listRunningSessions();
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessions = await sessionsService.listRunningSessions(requireUserId(req));
     res.json(createApiSuccessResponse({ sessions }));
   }),
 );
@@ -952,15 +961,15 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const limit = parseBoundedIntegerQuery(req.query.limit, 'limit', 40, 1, 100);
     const offset = parseBoundedIntegerQuery(req.query.offset, 'offset', 0, 0);
-    const page = sessionsService.listRecentSessions(limit, offset);
+    const page = sessionsService.listRecentSessions(limit, offset, requireUserId(req));
     res.json(createApiSuccessResponse(page));
   }),
 );
 
 router.get(
   '/sessions/archived',
-  asyncHandler(async (_req: Request, res: Response) => {
-    const sessions = sessionsService.listArchivedSessions();
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessions = sessionsService.listArchivedSessions(requireUserId(req));
     res.json(createApiSuccessResponse({ sessions }));
   }),
 );
@@ -1089,6 +1098,7 @@ router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) 
     await sessionConversationsSearchService.search({
       query,
       limit,
+      ownerUserId: requireUserId(req),
       signal: abortController.signal,
       onTitleResults: (titleResults) => {
         if (!closed) {

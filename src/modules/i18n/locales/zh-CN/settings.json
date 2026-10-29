@@ -133,7 +133,17 @@
     "browser": "浏览器",
     "notifications": "通知",
     "plugins": "插件",
+    "users": "用户",
     "about": "关于"
+  },
+  "users": {
+    "title": "用户",
+    "description": "每个账号有各自的项目和会话列表。CLI 凭据与主机文件系统仍然共用。",
+    "add": "新增用户",
+    "username": "用户名",
+    "password": "初始密码",
+    "create": "创建账号",
+    "creating": "创建中…"
   },
   "notifications": {
     "title": "通知",

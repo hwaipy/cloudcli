@@ -27,6 +27,7 @@ export async function createAndOpenWorktree(
     const project = await dependencies.openWorktree({
       projectPath: input.projectPath,
       worktreePath: created.worktreePath,
+      ...(input.ownerUserId === undefined ? {} : { ownerUserId: input.ownerUserId }),
     });
     return { ...created, project };
   } catch (openError) {

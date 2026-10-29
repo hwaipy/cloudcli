@@ -12,12 +12,13 @@ import { AppError, normalizeProjectPath, validateWorkspacePath } from '@/shared/
 type CreateProjectInput = {
   projectPath: string;
   customName?: string | null;
+  ownerUserId?: number;
 };
 
 type CreateProjectDependencies = {
   validatePath: (projectPath: string) => Promise<WorkspacePathValidationResult>;
   ensureWorkspaceDirectory: (projectPath: string) => Promise<void>;
-  persistProjectPath: (projectPath: string, customName: string | null) => CreateProjectPathResult;
+  persistProjectPath: (projectPath: string, customName: string | null, ownerUserId?: number) => CreateProjectPathResult;
   getProjectByPath: (projectPath: string) => ProjectRepositoryRow | null;
 };
 
@@ -53,8 +54,8 @@ const defaultDependencies: CreateProjectDependencies = {
       });
     }
   },
-  persistProjectPath: (projectPath: string, customName: string | null): CreateProjectPathResult =>
-    projectsDb.createProjectPath(projectPath, customName),
+  persistProjectPath: (projectPath: string, customName: string | null, ownerUserId?: number): CreateProjectPathResult =>
+    projectsDb.createProjectPath(projectPath, customName, ownerUserId),
   getProjectByPath: (projectPath: string): ProjectRepositoryRow | null =>
     projectsDb.getProjectPath(projectPath),
 };
@@ -110,7 +111,7 @@ export async function createProject(
   await dependencies.ensureWorkspaceDirectory(resolvedProjectPath);
 
   const normalizedCustomName = resolveDisplayName(input.customName ?? null, resolvedProjectPath);
-  const persistedProject = dependencies.persistProjectPath(resolvedProjectPath, normalizedCustomName);
+  const persistedProject = dependencies.persistProjectPath(resolvedProjectPath, normalizedCustomName, input.ownerUserId);
 
   if (persistedProject.outcome === 'active_conflict') {
     throw new AppError('Project path already exists and is active', {

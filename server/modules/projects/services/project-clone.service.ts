@@ -49,7 +49,7 @@ type CloneProjectDependencies = {
     clonePath: string,
     environment: NodeJS.ProcessEnv,
   ) => GitCloneProcess;
-  registerProject: (projectPath: string, customName: string) => Promise<{ project: Record<string, unknown> }>;
+  registerProject: (projectPath: string, customName: string, userId: number | string) => Promise<{ project: Record<string, unknown> }>;
   logError: (message: string, error: unknown) => void;
 };
 
@@ -164,10 +164,12 @@ const defaultDependencies: CloneProjectDependencies = {
   registerProject: async (
     projectPath: string,
     customName: string,
+    userId: number | string,
   ): Promise<{ project: Record<string, unknown> }> =>
     createProject({
       projectPath,
       customName,
+      ownerUserId: Number(userId),
     }) as Promise<{ project: Record<string, unknown> }>,
   logError: (message: string, error: unknown): void => {
     console.error(message, error);
@@ -329,7 +331,7 @@ export async function startCloneProject(
     gitProcess.on('close', async (code) => {
       if (code === 0) {
         try {
-          const createdProject = await dependencies.registerProject(clonePath, repoName);
+          const createdProject = await dependencies.registerProject(clonePath, repoName, input.userId);
           handlers.onComplete({
             project: createdProject.project,
             message: 'Repository cloned successfully',

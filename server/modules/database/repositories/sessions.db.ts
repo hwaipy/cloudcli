@@ -4,6 +4,7 @@ import { normalizeProjectPath } from '@/shared/utils.js';
 
 type SessionRow = {
   session_id: string;
+  owner_user_id?: number | null;
   provider: string;
   provider_session_id: string | null;
   project_path: string | null;
@@ -29,7 +30,7 @@ type RecentSessionsPage = {
 };
 
 const SESSION_ROW_COLUMNS =
-  'session_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, permission_mode, forked_from_session_id, isArchived, created_at, updated_at, last_user_message_at';
+  'session_id, owner_user_id, provider, provider_session_id, project_path, jsonl_path, custom_name, model, effort, permission_mode, forked_from_session_id, isArchived, created_at, updated_at, last_user_message_at';
 
 const SQLITE_UTC_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
@@ -109,6 +110,7 @@ export const sessionsDb = {
       // First, ensure the project path is recorded in the projects table,
       // since it's a foreign key in the sessions table.
       projectsDb.createProjectPath(normalizedProjectPath);
+      const ownerUserId = projectsDb.getProjectPath(normalizedProjectPath)?.owner_user_id ?? null;
 
       const existing = db
         .prepare(
@@ -149,8 +151,8 @@ export const sessionsDb = {
       // keyed by the provider-native id for both columns. The ON CONFLICT path
       // covers legacy rows that predate the provider_session_id mapping.
       db.prepare(
-        `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
+        `INSERT INTO sessions (session_id, owner_user_id, provider, provider_session_id, custom_name, project_path, jsonl_path, isArchived, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, COALESCE(?, CURRENT_TIMESTAMP), COALESCE(?, CURRENT_TIMESTAMP))
          ON CONFLICT(session_id) DO UPDATE SET
            provider = excluded.provider,
            provider_session_id = excluded.provider_session_id,
@@ -165,6 +167,7 @@ export const sessionsDb = {
            END`
       ).run(
         providerSessionId,
+        ownerUserId,
         provider,
         providerSessionId,
         customName ?? null,
@@ -201,11 +204,12 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPathForProvider(provider, projectPath);
 
     projectsDb.createProjectPath(normalizedProjectPath);
+    const ownerUserId = projectsDb.getProjectPath(normalizedProjectPath)?.owner_user_id ?? null;
 
     db.prepare(
-      `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, permission_mode, isArchived, created_at, updated_at)
-       VALUES (?, ?, NULL, ?, ?, NULL, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-    ).run(sessionId, provider, customName ?? null, normalizedProjectPath, permissionMode ?? null);
+      `INSERT INTO sessions (session_id, owner_user_id, provider, provider_session_id, custom_name, project_path, jsonl_path, permission_mode, isArchived, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, ?, ?, NULL, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    ).run(sessionId, ownerUserId, provider, customName ?? null, normalizedProjectPath, permissionMode ?? null);
 
     return sessionId;
   },
@@ -234,6 +238,8 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPathForProvider(input.provider, input.projectPath);
 
     projectsDb.createProjectPath(normalizedProjectPath);
+    const ownerUserId = sessionsDb.getSessionById(input.forkedFromSessionId)?.owner_user_id
+      ?? projectsDb.getProjectPath(normalizedProjectPath)?.owner_user_id ?? null;
 
     // The watcher may already have created a row for the new transcript. Its
     // id is the provider-native one, which is what this row claims, so replace
@@ -242,10 +248,11 @@ export const sessionsDb = {
       db.prepare('DELETE FROM sessions WHERE session_id = ? AND session_id <> ?')
         .run(input.providerSessionId, input.sessionId);
       db.prepare(
-        `INSERT INTO sessions (session_id, provider, provider_session_id, custom_name, project_path, jsonl_path, model, effort, permission_mode, forked_from_session_id, isArchived, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+        `INSERT INTO sessions (session_id, owner_user_id, provider, provider_session_id, custom_name, project_path, jsonl_path, model, effort, permission_mode, forked_from_session_id, isArchived, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
       ).run(
         input.sessionId,
+        ownerUserId,
         input.provider,
         input.providerSessionId,
         input.customName,
@@ -473,17 +480,17 @@ export const sessionsDb = {
     ).run(customName, sessionId);
   },
 
-  getSessionById(sessionId: string): SessionRow | null {
+  getSessionById(sessionId: string, ownerUserId?: number): SessionRow | null {
     const db = getConnection();
     const row = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
-         WHERE session_id = ?
+         WHERE session_id = ? AND (? IS NULL OR owner_user_id = ?)
          ORDER BY updated_at DESC
          LIMIT 1`
       )
-      .get(sessionId) as SessionRow | undefined;
+      .get(sessionId, ownerUserId ?? null, ownerUserId ?? null) as SessionRow | undefined;
 
     return normalizeSessionRow(row) ?? null;
   },
@@ -495,17 +502,17 @@ export const sessionsDb = {
    * file names), so it uses this lookup to translate disk artifacts back to
    * the app-facing session row before broadcasting sidebar updates.
    */
-  getSessionByProviderSessionId(providerSessionId: string): SessionRow | null {
+  getSessionByProviderSessionId(providerSessionId: string, ownerUserId?: number): SessionRow | null {
     const db = getConnection();
     const row = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
-         WHERE provider_session_id = ?
+         WHERE provider_session_id = ? AND (? IS NULL OR owner_user_id = ?)
          ORDER BY updated_at DESC
          LIMIT 1`
       )
-      .get(providerSessionId) as SessionRow | undefined;
+      .get(providerSessionId, ownerUserId ?? null, ownerUserId ?? null) as SessionRow | undefined;
 
     return normalizeSessionRow(row) ?? null;
   },
@@ -547,15 +554,15 @@ export const sessionsDb = {
     return normalizeSessionRow(row) ?? null;
   },
 
-  getAllSessions(): SessionRow[] {
+  getAllSessions(ownerUserId?: number): SessionRow[] {
     const db = getConnection();
     const rows = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
-         WHERE isArchived = 0`
+         WHERE isArchived = 0 AND (? IS NULL OR owner_user_id = ?)`
       )
-      .all() as SessionRow[];
+      .all(ownerUserId ?? null, ownerUserId ?? null) as SessionRow[];
 
     return normalizeSessionRows(rows);
   },
@@ -568,11 +575,12 @@ export const sessionsDb = {
    * and correctly ordered across projects instead of flattening only the
    * per-project slices already loaded by the client.
    */
-  getRecentSessionsPage(limit: number, offset: number): RecentSessionsPage {
+  getRecentSessionsPage(limit: number, offset: number, ownerUserId?: number): RecentSessionsPage {
     const db = getConnection();
     const visibilityClause = `
       sessions.isArchived = 0
       AND (projects.isArchived IS NULL OR projects.isArchived = 0)
+      AND (? IS NULL OR sessions.owner_user_id = ?)
     `;
     const rows = db
       .prepare(
@@ -584,7 +592,7 @@ export const sessionsDb = {
                   sessions.session_id DESC
          LIMIT ? OFFSET ?`
       )
-      .all(limit, offset) as SessionRow[];
+      .all(ownerUserId ?? null, ownerUserId ?? null, limit, offset) as SessionRow[];
     const countRow = db
       .prepare(
         `SELECT COUNT(*) AS count
@@ -592,7 +600,7 @@ export const sessionsDb = {
          LEFT JOIN projects ON projects.project_path = sessions.project_path
          WHERE ${visibilityClause}`
       )
-      .get() as { count: number } | undefined;
+      .get(ownerUserId ?? null, ownerUserId ?? null) as { count: number } | undefined;
 
     return {
       sessions: normalizeSessionRows(rows),
@@ -604,16 +612,16 @@ export const sessionsDb = {
    * Archived rows are intentionally queried separately so the caller can render
    * them in a dedicated view without reintroducing them into active session lists.
    */
-  getArchivedSessions(): SessionRow[] {
+  getArchivedSessions(ownerUserId?: number): SessionRow[] {
     const db = getConnection();
     const rows = db
       .prepare(
         `SELECT ${SESSION_ROW_COLUMNS}
          FROM sessions
-         WHERE isArchived = 1
+         WHERE isArchived = 1 AND (? IS NULL OR owner_user_id = ?)
          ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC`
       )
-      .all() as SessionRow[];
+      .all(ownerUserId ?? null, ownerUserId ?? null) as SessionRow[];
 
     return normalizeSessionRows(rows);
   },

@@ -113,24 +113,24 @@ export default function App() {
     <I18nextProvider i18n={i18n}>
       <ThemeProvider>
         <UiPreferencesProvider>
-        <AuthProvider>
-          <WebSocketProvider>
-            <PluginsProvider>
-              <TasksSettingsProvider>
-                <TaskMasterProvider>
-                <ProtectedRoute>
-                  <Router basename={routerBasename}>
-                    <Routes>
-                      <Route path="/" element={<ProjectWorkspaceRoute />} />
-                      <Route path="/session/:sessionId" element={<ProjectWorkspaceRoute />} />
-                    </Routes>
-                  </Router>
-                </ProtectedRoute>
-                </TaskMasterProvider>
-              </TasksSettingsProvider>
-            </PluginsProvider>
-          </WebSocketProvider>
-        </AuthProvider>
+          <AuthProvider>
+            <ProtectedRoute>
+              <WebSocketProvider>
+                <PluginsProvider>
+                  <TasksSettingsProvider>
+                    <TaskMasterProvider>
+                      <Router basename={routerBasename}>
+                        <Routes>
+                          <Route path="/" element={<ProjectWorkspaceRoute />} />
+                          <Route path="/session/:sessionId" element={<ProjectWorkspaceRoute />} />
+                        </Routes>
+                      </Router>
+                    </TaskMasterProvider>
+                  </TasksSettingsProvider>
+                </PluginsProvider>
+              </WebSocketProvider>
+            </ProtectedRoute>
+          </AuthProvider>
         </UiPreferencesProvider>
       </ThemeProvider>
     </I18nextProvider>

@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { type Request } from 'express';
 
 import type { WorktreeServices } from '@/shared/types.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
@@ -38,8 +38,19 @@ function readRequiredString(value: unknown, name: string): string {
  * Keeping construction explicit lets route tests supply deterministic services
  * and ensures parsing remains the route layer's only responsibility.
  */
-export function createWorktreesRouter(services: WorktreeServices): express.Router {
+export function createWorktreesRouter(
+  services: WorktreeServices,
+  authorizeProject?: (request: Request, projectId: string) => number,
+): express.Router {
   const router = express.Router();
+
+  router.use((request, _response, next) => {
+    try {
+      const projectId = request.method === 'GET' ? request.query.project : request.body?.project;
+      _response.locals.ownerUserId = authorizeProject?.(request, readProjectId(projectId));
+      next();
+    } catch (error) { next(error); }
+  });
 
   router.get(
     '/',
@@ -58,7 +69,10 @@ export function createWorktreesRouter(services: WorktreeServices): express.Route
       const branch = readRequiredString(body.branch, 'branch');
       const baseBranch = typeof body.baseBranch === 'string' ? body.baseBranch : null;
 
-      const result = await services.createAndOpen({ projectPath, branch, baseBranch });
+      const result = await services.createAndOpen({
+        projectPath, branch, baseBranch,
+        ...(res.locals.ownerUserId === undefined ? {} : { ownerUserId: res.locals.ownerUserId }),
+      });
       res.json(createApiSuccessResponse(result));
     }),
   );
@@ -70,7 +84,10 @@ export function createWorktreesRouter(services: WorktreeServices): express.Route
       const projectPath = services.resolveProjectPath(readProjectId(body.project));
       const worktreePath = readRequiredString(body.worktreePath, 'worktreePath');
 
-      const project = await services.open({ projectPath, worktreePath });
+      const project = await services.open({
+        projectPath, worktreePath,
+        ...(res.locals.ownerUserId === undefined ? {} : { ownerUserId: res.locals.ownerUserId }),
+      });
       res.json(createApiSuccessResponse({ project }));
     }),
   );

@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
+import { closeConnection, initializeDatabase, sessionsDb, userDb } from '@/modules/database/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
-import { connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
+import { clientUserIds, connectedClients } from '@/modules/websocket/services/websocket-state.service.js';
 
 /**
  * Minimal stand-in for a websocket connection: collects every JSON frame the
@@ -29,6 +29,7 @@ async function withIsolatedDatabase(runTest: () => void | Promise<void>): Promis
   closeConnection();
   process.env.DATABASE_PATH = databasePath;
   await initializeDatabase();
+  userDb.createUser('owner', 'test-hash');
 
   try {
     await runTest();
@@ -74,6 +75,7 @@ test('session_created is swallowed and persisted as the provider-id mapping', as
     sessionsDb.createAppSession('app-run-2', 'cursor', '/workspace/demo');
     const connection = new FakeConnection();
     connectedClients.add(connection as never);
+    clientUserIds.set(connection as never, 1);
     const run = chatRunRegistry.startRun({
       appSessionId: 'app-run-2',
       provider: 'cursor',

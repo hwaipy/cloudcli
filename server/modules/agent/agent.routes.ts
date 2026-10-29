@@ -27,12 +27,12 @@ type AgentRouterDependencies = {
   users: { getFirstUser(): unknown };
   apiKeys: { validateApiKey(apiKey: string): unknown };
   githubTokens: { getActiveGithubToken(userId: number): string | null };
-  projects: { createProjectPath(projectPath: string, customName: string | null): unknown };
+  projects: { createProjectPath(projectPath: string, customName: string | null, ownerUserId: number): { outcome: string; project?: { owner_user_id?: number | null } | null } };
   models: typeof import('../providers/index.js').providerModelsService;
   /** The session gateway: an API run gets an app session row like a chat send, so the UI can list, open and subscribe to it. */
   sessions: {
-    getSessionById(sessionId: string): AgentSessionRow | null;
-    getSessionByProviderSessionId(providerSessionId: string): AgentSessionRow | null;
+    getSessionById(sessionId: string, ownerUserId: number): AgentSessionRow | null;
+    getSessionByProviderSessionId(providerSessionId: string, ownerUserId: number): AgentSessionRow | null;
     createAppSession(provider: string, projectPath: string, initialMessage: string): { sessionId: string };
   };
   /** The live-run registry the chat socket uses; registering here is what puts an API run on the running-sessions list. */
@@ -909,7 +909,8 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
     // it does for a chat send; a request that names another is refused.
     let sessionRow = null;
     if (sessionId) {
-      sessionRow = sessionGateway.getSessionById(sessionId) ?? sessionGateway.getSessionByProviderSessionId(sessionId);
+      sessionRow = sessionGateway.getSessionById(sessionId, req.user.id)
+        ?? sessionGateway.getSessionByProviderSessionId(sessionId, req.user.id);
       if (!sessionRow) {
         return res.status(404).json({ error: `Session "${sessionId}" was not found` });
       }
@@ -970,7 +971,11 @@ export function createAgentRouter(dependencies: AgentRouterDependencies): expres
       }
 
       // Register project path in DB (or reuse existing active registration)
-      const registrationResult = projectsDb.createProjectPath(finalProjectPath, null);
+      const registrationResult = projectsDb.createProjectPath(finalProjectPath, null, req.user.id);
+      if (registrationResult.project?.owner_user_id != null
+        && registrationResult.project.owner_user_id !== req.user.id) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
       if (registrationResult.outcome === 'active_conflict') {
         console.log('Project registration already exists for:', finalProjectPath);
       } else {

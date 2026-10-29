@@ -614,6 +614,26 @@ export const runMigrations = (db: Database) => {
     addLastUserMessageAtColumn(db);
     addForkedFromSessionIdColumn(db);
     ensureProjectsForSessionPaths(db);
+    // Existing single-user installs keep every project and session under the
+    // original account. New accounts never inherit previously indexed data.
+    const projectColumns = getTableInfo(db, 'projects').map((column) => column.name);
+    const sessionColumns = getTableInfo(db, 'sessions').map((column) => column.name);
+    addColumnToTableIfNotExists(db, 'projects', projectColumns, 'owner_user_id', 'INTEGER REFERENCES users(id)');
+    addColumnToTableIfNotExists(db, 'sessions', sessionColumns, 'owner_user_id', 'INTEGER REFERENCES users(id)');
+    db.exec(`
+      UPDATE projects SET owner_user_id = (SELECT id FROM users ORDER BY id LIMIT 1)
+      WHERE owner_user_id IS NULL;
+      UPDATE sessions SET owner_user_id = COALESCE(
+        (SELECT owner_user_id FROM projects WHERE projects.project_path = sessions.project_path),
+        (SELECT id FROM users ORDER BY id LIMIT 1)
+      ) WHERE owner_user_id IS NULL;
+    `);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_user_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id)');
+    db.exec(`CREATE TABLE IF NOT EXISTS asset_owners (
+      filename TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id)
+    )`);
     db.exec(SCHEDULED_MESSAGES_TABLE_SCHEMA_SQL);
 
     mergeDuplicateProviderSessions(db);

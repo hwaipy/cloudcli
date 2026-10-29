@@ -1,5 +1,6 @@
 import express from 'express';
 import type { Request, Response } from 'express';
+import { requireOwnedSession } from '@/modules/access/index.js';
 
 import { scheduledMessagesService } from '@/modules/scheduled-messages/services/scheduled-messages.service.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
@@ -34,6 +35,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
     const userId = readUserId(req);
+    if (sessionId) requireOwnedSession(userId, sessionId);
     res.json(createApiSuccessResponse(
       sessionId
         ? scheduledMessagesService.listForSession(userId, sessionId)
@@ -46,9 +48,12 @@ router.post(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
+    const userId = readUserId(req);
+    const sessionId = readString(body.sessionId, 'sessionId');
+    requireOwnedSession(userId, sessionId);
     const result = scheduledMessagesService.schedule({
-      userId: readUserId(req),
-      sessionId: readString(body.sessionId, 'sessionId'),
+      userId,
+      sessionId,
       content: readString(body.content, 'content'),
       options: body.options,
       scheduledFor: readString(body.scheduledFor, 'scheduledFor'),

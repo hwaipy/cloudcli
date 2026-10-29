@@ -17,6 +17,7 @@ type GitRouterDependencies = {
   resolveProjectPathById(projectId: string): string | null;
   queryClaude: ProviderRunFunction;
   queryCursor: ProviderRunFunction;
+  authorizeProject?: (request: express.Request, projectId: string) => void;
 };
 
 /** Creates Git routes around explicit repository, filesystem, subprocess, and AI adapters. */
@@ -27,6 +28,14 @@ const projectsDb = { getProjectPathById: dependencies.resolveProjectPathById };
 const queryClaudeSDK = dependencies.queryClaude;
 const spawnCursor = dependencies.queryCursor;
 const router = express.Router();
+
+router.use((request, _response, next) => {
+  try {
+    const projectId = request.method === 'GET' ? request.query.project : request.body?.project;
+    dependencies.authorizeProject?.(request, String(projectId ?? ''));
+    next();
+  } catch (error) { next(error); }
+});
 const COMMIT_DIFF_CHARACTER_LIMIT = 500_000;
 
 function spawnAsync(command, args, options = {}) {

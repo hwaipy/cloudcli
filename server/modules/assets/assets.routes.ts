@@ -1,6 +1,8 @@
 import express from 'express';
 import multer from 'multer';
 
+import { requireUserId } from '@/modules/access/index.js';
+import { canReadAsset, recordAssetOwners } from '@/modules/assets/services/asset-ownership.service.js';
 import {
   buildStoredAttachmentRecords,
   buildStoredImageRecords,
@@ -10,6 +12,9 @@ import {
 } from '@/modules/assets/services/image-assets.service.js';
 
 const router = express.Router();
+router.use((req, _res, next) => {
+  try { requireUserId(req); next(); } catch (error) { next(error); }
+});
 
 // Multer writes uploads straight into the global assets folder; the service
 // owns the folder location and the response record shape.
@@ -65,6 +70,13 @@ router.post('/images', (req, res) => {
       return res.status(400).json({ error: 'No image files provided' });
     }
 
+    try {
+      recordAssetOwners(files, requireUserId(req));
+    } catch (error) {
+      console.error('Failed to record image owner:', error);
+      return res.status(500).json({ error: 'Upload failed' });
+    }
+
     res.json({ images: buildStoredImageRecords(files) });
   });
 });
@@ -86,6 +98,13 @@ router.post('/files', (req, res) => {
       return res.status(400).json({ error: 'No files provided' });
     }
 
+    try {
+      recordAssetOwners(files, requireUserId(req));
+    } catch (error) {
+      console.error('Failed to record attachment owner:', error);
+      return res.status(500).json({ error: 'Upload failed' });
+    }
+
     res.json({ attachments: buildStoredAttachmentRecords(files) });
   });
 });
@@ -95,6 +114,7 @@ router.post('/files', (req, res) => {
  * global assets folder are reachable; traversal attempts resolve to null.
  */
 router.get('/images/:filename', async (req, res) => {
+  if (!canReadAsset(req.params.filename, requireUserId(req))) return res.status(404).json({ error: 'Asset not found' });
   const asset = await openStoredAttachmentAsset(req.params.filename);
   if (asset.status === 'invalid') {
     return res.status(400).json({ error: 'Invalid asset filename' });
@@ -127,6 +147,7 @@ router.get('/images/:filename', async (req, res) => {
  * uploaded HTML or other active formats from rendering in the application.
  */
 router.get('/files/:filename', async (req, res) => {
+  if (!canReadAsset(req.params.filename, requireUserId(req))) return res.status(404).json({ error: 'Asset not found' });
   const asset = await openStoredAttachmentAsset(req.params.filename);
   if (asset.status === 'invalid') {
     return res.status(400).json({ error: 'Invalid asset filename' });

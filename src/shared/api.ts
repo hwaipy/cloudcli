@@ -213,6 +213,8 @@ export const api = {
     }),
     refresh: () => post('/api/auth/refresh'),
     user: () => get('/api/auth/user'),
+    users: () => get('/api/auth/users'),
+    createUser: (username: string, password: string) => post('/api/auth/users', { username, password }),
   },
 
   // Protected endpoints

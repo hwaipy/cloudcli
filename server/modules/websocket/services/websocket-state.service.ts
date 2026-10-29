@@ -14,3 +14,6 @@ export const WS_OPEN_STATE = 1;
  * Project/session services publish realtime updates by iterating this set.
  */
 export const connectedClients = new Set<RealtimeClientConnection>();
+
+/** Associates each authenticated chat socket with its account for private broadcasts. */
+export const clientUserIds = new WeakMap<RealtimeClientConnection, number>();

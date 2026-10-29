@@ -30,12 +30,12 @@ function uniqueProjectIds(projectIds: string[]): string[] {
  *
  * The operation is idempotent: already-starred projects are ignored, unknown ids are skipped.
  */
-export function applyLegacyStarredProjectIds(projectIds: string[]): ApplyLegacyStarredProjectIdsResult {
+export function applyLegacyStarredProjectIds(projectIds: string[], ownerUserId?: number): ApplyLegacyStarredProjectIdsResult {
   const normalizedProjectIds = uniqueProjectIds(projectIds);
   let updated = 0;
 
   for (const projectId of normalizedProjectIds) {
-    const project = projectsDb.getProjectById(projectId);
+    const project = projectsDb.getProjectById(projectId, ownerUserId);
     if (!project) {
       continue;
     }

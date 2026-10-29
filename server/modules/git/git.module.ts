@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 
 import spawn from 'cross-spawn';
 
+import { requireOwnedProject, requireUserId } from '@/modules/access/index.js';
 import { projectsDb } from '@/modules/database/index.js';
 
 import { createGitRouter } from './git.routes.js';
@@ -17,6 +18,7 @@ export function createGitModule(externalDependencies: GitExternalDependencies) {
     fileSystem: fs,
     spawnProcess: spawn,
     resolveProjectPathById: (projectId) => projectsDb.getProjectPathById(projectId),
+    authorizeProject: (request, projectId) => requireOwnedProject(requireUserId(request), projectId),
     ...externalDependencies,
   });
 }

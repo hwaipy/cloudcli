@@ -1,5 +1,6 @@
 import spawn from 'cross-spawn';
 
+import { requireOwnedProject, requireOwnedSession, requireUserId } from '@/modules/access/index.js';
 import { sessionDraftsDb, sessionsDb, userDb, userPreferencesDb } from '@/modules/database/index.js';
 import { broadcastSessionUpserted } from '@/modules/websocket/index.js';
 
@@ -76,4 +77,19 @@ const userService = createUserService({
 });
 
 /** User router assembled for the authenticated server mount. */
-export const userRoutes = createUserRouter(userService);
+export const userRoutes = createUserRouter(userService, (req, _res, next) => {
+  try {
+    if (req.method !== 'GET') {
+      const scope = req.body?.scope;
+      const userId = requireUserId(req);
+      if (typeof scope !== 'string') {
+        // The service returns its existing validation error for malformed scopes.
+        next();
+        return;
+      }
+      if (scope.startsWith('project:')) requireOwnedProject(userId, scope.slice('project:'.length));
+      else requireOwnedSession(userId, scope);
+    }
+    next();
+  } catch (error) { next(error); }
+});

@@ -4,6 +4,7 @@ import os from 'node:os';
 
 import spawn from 'cross-spawn';
 
+import { requireOwnedProject, requireUserId } from '@/modules/access/index.js';
 import { projectsDb } from '@/modules/database/index.js';
 
 import { createTaskmasterRouter } from './taskmaster.routes.js';
@@ -20,5 +21,6 @@ export const taskmasterRoutes = createTaskmasterRouter({
   fileSystemPromises: fsPromises,
   spawnProcess: spawn,
   resolveProjectPathById: (projectId) => projectsDb.getProjectPathById(projectId),
+  authorizeProject: (request, projectId) => requireOwnedProject(requireUserId(request), projectId),
   taskmasterService,
 });

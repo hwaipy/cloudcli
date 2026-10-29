@@ -90,6 +90,7 @@ export const PROJECTS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
     project_id TEXT PRIMARY KEY NOT NULL,
     project_path TEXT NOT NULL UNIQUE,
+    owner_user_id INTEGER REFERENCES users(id),
     custom_project_name TEXT DEFAULT NULL,
     isStarred BOOLEAN DEFAULT 0,
     isArchived BOOLEAN DEFAULT 0
@@ -123,6 +124,7 @@ CREATE TABLE IF NOT EXISTS scheduled_messages (
 export const SESSIONS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT NOT NULL,
+    owner_user_id INTEGER REFERENCES users(id),
     provider TEXT NOT NULL DEFAULT 'claude',
     -- The session id used by the provider CLI/SDK on disk (JSONL file name,
     -- store.db folder, sqlite row id, ...). \`session_id\` is the stable

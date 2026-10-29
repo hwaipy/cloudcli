@@ -112,8 +112,16 @@ export function createFileTreeRouter(
   uploadFilesMiddleware: RequestHandler,
   uploadLimits: FileTreeUploadLimits,
   logger: FileTreeLogger,
+  authorizeProject?: (request: Request, projectId: string) => void,
 ): express.Router {
   const router = express.Router();
+
+  router.param('projectId', (request, _response, next, projectId) => {
+    try {
+      authorizeProject?.(request, String(projectId));
+      next();
+    } catch (error) { next(error); }
+  });
 
   router.get('/browse-filesystem', createRouteHandler(async (request, response) => {
     response.json(await services.browseWorkspace(readOptionalString(request.query.path)));

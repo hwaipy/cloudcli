@@ -1,6 +1,6 @@
 import { scheduledMessagesDb, sessionsDb } from '@/modules/database/index.js';
 import type { ScheduledMessageRow } from '@/modules/database/index.js';
-import { WS_OPEN_STATE, connectedClients } from '@/modules/websocket/index.js';
+import { WS_OPEN_STATE, connectedClients, clientUserIds } from '@/modules/websocket/index.js';
 import { AppError } from '@/shared/utils.js';
 
 /** How far ahead a message may be scheduled. Beyond this it is almost certainly a mistake. */
@@ -48,6 +48,8 @@ function readOptions(raw: string): Record<string, unknown> {
  * after claiming messages it still has to send.
  */
 export function announceScheduledMessagesChanged(sessionId: string): void {
+  const ownerUserId = sessionsDb.getSessionById(sessionId)?.owner_user_id;
+  if (!ownerUserId) return;
   const frame = JSON.stringify({
     kind: 'scheduled_messages_changed',
     sessionId,
@@ -55,7 +57,7 @@ export function announceScheduledMessagesChanged(sessionId: string): void {
   });
 
   connectedClients.forEach((client) => {
-    if (client.readyState !== WS_OPEN_STATE) {
+    if (client.readyState !== WS_OPEN_STATE || clientUserIds.get(client) !== ownerUserId) {
       return;
     }
     try {

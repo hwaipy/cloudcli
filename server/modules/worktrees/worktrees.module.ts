@@ -1,5 +1,6 @@
 import { access } from 'node:fs/promises';
 
+import { requireOwnedProject, requireUserId } from '@/modules/access/index.js';
 import { projectsDb } from '@/modules/database/index.js';
 import {
   createProject,
@@ -110,4 +111,18 @@ const worktreeServices: WorktreeServices = {
  * It is assembled here so other modules consume only the Worktrees barrel and
  * cannot depend on route or service implementation files.
  */
-export const worktreesRoutes = createWorktreesRouter(worktreeServices);
+export const worktreesRoutes = createWorktreesRouter(
+  worktreeServices,
+  (request, projectId) => {
+    const userId = requireUserId(request);
+    requireOwnedProject(userId, projectId);
+    const worktreePath = request.body?.worktreePath;
+    if (typeof worktreePath === 'string') {
+      const linkedProject = projectsDb.getProjectPath(worktreePath);
+      if (linkedProject && linkedProject.owner_user_id !== userId) {
+        throw new AppError('Project not found', { code: 'PROJECT_NOT_FOUND', statusCode: 404 });
+      }
+    }
+    return userId;
+  },
+);

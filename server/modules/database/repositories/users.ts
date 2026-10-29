@@ -2,8 +2,7 @@
  * User repository.
  *
  * Provides typed CRUD operations for the `users` table.
- * This is a single-user system, but the schema supports multiple
- * users for forward compatibility.
+ * User records back both sign-in and administrator-managed accounts.
  */
 
 import { getConnection } from '@/modules/database/connection.js';
@@ -52,7 +51,19 @@ export const userDb = {
     const result = db
       .prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
       .run(username, passwordHash);
+    const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get() as { count: number };
+    if (userCount.count === 1) {
+      db.prepare('UPDATE projects SET owner_user_id = ? WHERE owner_user_id IS NULL').run(result.lastInsertRowid);
+      db.prepare('UPDATE sessions SET owner_user_id = ? WHERE owner_user_id IS NULL').run(result.lastInsertRowid);
+    }
     return { id: result.lastInsertRowid, username };
+  },
+
+  /** Lists public account details for the administrator's user-management page. */
+  listUsers(): UserPublicRow[] {
+    return getConnection().prepare(
+      'SELECT id, username, created_at, last_login FROM users WHERE is_active = 1 ORDER BY id'
+    ).all() as UserPublicRow[];
   },
 
   /**
@@ -94,7 +105,7 @@ export const userDb = {
     const db = getConnection();
     return db
       .prepare(
-        'SELECT id, username, created_at, last_login FROM users WHERE is_active = 1 LIMIT 1'
+        'SELECT id, username, created_at, last_login FROM users WHERE is_active = 1 ORDER BY id LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
   },

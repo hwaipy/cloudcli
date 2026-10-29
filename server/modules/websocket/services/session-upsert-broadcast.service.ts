@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { generateDisplayName } from '@/modules/projects/index.js';
-import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
+import { clientUserIds, connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
 import type { SessionUpsertedEvent } from '@/shared/types.js';
 
 /**
@@ -40,6 +40,7 @@ async function buildSessionUpsertedEvent(
   return {
     kind: 'session_upserted',
     sessionId: row.session_id,
+    ownerUserId: row.owner_user_id ?? null,
     providerSessionId: row.provider_session_id ?? null,
     // The column is a plain TEXT and typed as `string` on the row, but only
     // provider adapters ever write it.
@@ -63,15 +64,15 @@ async function buildSessionUpsertedEvent(
   };
 }
 
-function sendToConnectedClients(payloads: string[]): void {
+function sendToConnectedClients(payloads: Array<{ payload: string; ownerUserId: number | null }>): void {
   if (payloads.length === 0) {
     return;
   }
 
   connectedClients.forEach((client) => {
     if (client.readyState === WS_OPEN_STATE) {
-      for (const payload of payloads) {
-        client.send(payload);
+      for (const { payload, ownerUserId } of payloads) {
+        if (ownerUserId !== null && clientUserIds.get(client) === ownerUserId) client.send(payload);
       }
     }
   });
@@ -81,7 +82,7 @@ function sendToConnectedClients(payloads: string[]): void {
 export async function broadcastSessionUpserted(sessionIdOrProviderSessionId: string): Promise<void> {
   const event = await buildSessionUpsertedEvent(sessionIdOrProviderSessionId);
   if (event) {
-    sendToConnectedClients([JSON.stringify(event)]);
+    sendToConnectedClients([{ payload: JSON.stringify(event), ownerUserId: event.ownerUserId ?? null }]);
   }
 }
 
@@ -93,11 +94,11 @@ export async function broadcastSessionUpserted(sessionIdOrProviderSessionId: str
 export async function broadcastSessionUpsertedBatch(
   sessionIds: Iterable<string>,
 ): Promise<void> {
-  const payloads: string[] = [];
+  const payloads: Array<{ payload: string; ownerUserId: number | null }> = [];
   for (const sessionId of sessionIds) {
     const event = await buildSessionUpsertedEvent(sessionId);
     if (event) {
-      payloads.push(JSON.stringify(event));
+      payloads.push({ payload: JSON.stringify(event), ownerUserId: event.ownerUserId ?? null });
     }
   }
 

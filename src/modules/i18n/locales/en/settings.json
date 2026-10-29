@@ -133,7 +133,17 @@
     "browser": "Browser",
     "notifications": "Notifications",
     "plugins": "Plugins",
+    "users": "Users",
     "about": "About"
+  },
+  "users": {
+    "title": "Users",
+    "description": "Each account has its own project and session list. CLI credentials and the host filesystem remain shared.",
+    "add": "Add user",
+    "username": "Username",
+    "password": "Initial password",
+    "create": "Create account",
+    "creating": "Creating…"
   },
   "notifications": {
     "title": "Notifications",
