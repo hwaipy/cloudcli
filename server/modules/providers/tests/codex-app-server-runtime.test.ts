@@ -120,12 +120,30 @@ test('App Server streams cumulative token usage for the active session and turn'
   await runtime.shutdownAll();
 });
 
-test('App Server turn without completion times out and releases its child', async () => {
+test('a configured App Server turn limit reports the limit and releases its child', async () => {
   const { connection, events, start } = setup({ turnTimeoutMs: 20 });
   await start();
   assert.equal(connection.closed, true);
-  assert.ok(events.some((event) => event.kind === 'error' && String(event.content).includes('timed out')));
+  assert.ok(events.some((event) => event.kind === 'error' && String(event.content).includes('configured running limit (20 ms)')));
   assert.ok(events.some((event) => event.kind === 'complete' && event.exitCode === 1));
+});
+
+test('a turn with no duration limit keeps running until App Server completes it', async () => {
+  const { connection, runtime, events, start } = setup({ turnTimeoutMs: 0 });
+  const running = start();
+  await waitForStart(connection);
+  let settled = false;
+  void running.then(() => { settled = true; });
+
+  await delay(40);
+  assert.equal(settled, false);
+  assert.equal(connection.closed, false);
+  assert.equal(events.some((event) => event.kind === 'error'), false);
+
+  connection.emit('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  await running;
+  assert.ok(events.some((event) => event.kind === 'complete' && event.exitCode === 0));
+  await runtime.shutdownAll();
 });
 
 test('accepted interrupt without completion releases its child after grace period', async () => {

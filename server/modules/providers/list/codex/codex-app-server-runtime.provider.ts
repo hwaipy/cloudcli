@@ -37,7 +37,12 @@ type LiveThread = {
 };
 
 const IDLE_MS = 10 * 60_000;
-const TURN_TIMEOUT_MS = 30 * 60_000;
+// A live turn can legitimately run for hours. Leave the total duration uncapped
+// unless an operator explicitly sets a positive limit in minutes.
+const configuredTurnTimeoutMinutes = Number(process.env.CLOUDCLI_CODEX_TURN_TIMEOUT_MINUTES ?? 0);
+const TURN_TIMEOUT_MS = Number.isFinite(configuredTurnTimeoutMinutes) && configuredTurnTimeoutMinutes > 0
+  ? Math.min(configuredTurnTimeoutMinutes * 60_000, 2_147_483_647)
+  : 0;
 const INTERRUPT_GRACE_MS = 5_000;
 
 function send(writer: ProviderRuntimeWriter, message: unknown): void {
@@ -287,12 +292,17 @@ return {
       turnTimer: null, interruptTimer: null,
     };
     live.active = active;
-    active.turnTimer = setTimeout(() => {
-      if (live.active !== active) return;
-      active.connectionError = new Error('Codex App Server turn timed out without a completion event.');
-      active.resolve('failed');
-    }, turnTimeoutMs);
-    active.turnTimer.unref();
+    if (turnTimeoutMs > 0) {
+      active.turnTimer = setTimeout(() => {
+        if (live.active !== active) return;
+        const limit = turnTimeoutMs >= 60_000
+          ? `${Number((turnTimeoutMs / 60_000).toFixed(2))} minutes`
+          : `${turnTimeoutMs} ms`;
+        active.connectionError = new Error(`Codex App Server turn reached its configured running limit (${limit}).`);
+        active.resolve('failed');
+      }, turnTimeoutMs);
+      active.turnTimer.unref();
+    }
     let failure: Error | null = null;
     try {
       const cwd = String(options.cwd || options.projectPath || process.cwd());
