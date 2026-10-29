@@ -31,6 +31,29 @@ export function isStorableChatMessage(value: unknown): value is NormalizedMessag
  */
 export const IS_PLATFORM = import.meta.env?.VITE_IS_PLATFORM === 'true';
 
+/** Returns the backend pinned into this page by Hub; direct installs have no backend selector. */
+export function getHubBackendId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__ ?? null;
+}
+
+/** Namespaces a browser cache or credential by backend while retaining legacy keys outside Hub. */
+export function getHubStorageKey(key: string): string {
+  const backendId = getHubBackendId();
+  return backendId ? `${key}:${backendId}` : key;
+}
+
+/** Pins an API, EventSource, or WebSocket URL to this page's backend, including across other-tab switches. */
+export function withHubBackendUrl(url: string): string {
+  const backendId = getHubBackendId();
+  if (!backendId) return url;
+  const parsed = new URL(url, window.location.origin);
+  parsed.searchParams.set('hub_backend', backendId);
+  return url.startsWith('http:') || url.startsWith('https:') || url.startsWith('ws:') || url.startsWith('wss:')
+    ? parsed.toString()
+    : `${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
 // ---------------------------
 
 //----------------- TAILWIND CLASS COMPOSITION ------------

@@ -1,4 +1,4 @@
-import { FolderPlus, Plus, RefreshCw, Search, Settings, X, PanelLeftClose } from 'lucide-react';
+import { FolderPlus, Plus, RefreshCw, Search, Settings, X, PanelLeftClose, Server } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Button, Input } from '@/shared/ui';
@@ -72,6 +72,9 @@ export default function SidebarHeader({
   onCollapseSidebar,
   t,
 }: SidebarHeaderProps) {
+  const hubBackendId = typeof window === 'undefined'
+    ? null
+    : (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__;
   const showSearchTools = (projectsCount > 0 || runningSessionsCount > 0 || archivedSessionsCount > 0 || isArchivedSessionsLoading) && !isLoading;
   const searchPlaceholder = searchMode === 'conversations'
     ? t('search.conversationsPlaceholder')
@@ -102,6 +105,11 @@ export default function SidebarHeader({
           )}
 
           <div className="flex flex-shrink-0 items-center gap-0.5">
+            {hubBackendId && (
+              <a href="/hub/" className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent/80 hover:text-foreground" title={t('hub.switchBackend', { backend: hubBackendId })} aria-label={t('hub.switchBackend', { backend: hubBackendId })}>
+                <Server className="h-3.5 w-3.5" />
+              </a>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -213,6 +221,11 @@ export default function SidebarHeader({
           )}
 
           <div className="flex flex-shrink-0 gap-1.5">
+            {hubBackendId && (
+              <a href="/hub/" className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground" title={t('hub.switchBackend', { backend: hubBackendId })} aria-label={t('hub.switchBackend', { backend: hubBackendId })}>
+                <Server className="h-4 w-4" />
+              </a>
+            )}
             <button
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50 transition-all active:scale-95"
               onClick={onRefresh}

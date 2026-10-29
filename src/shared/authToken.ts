@@ -7,8 +7,13 @@
  * AuthContext, the shell socket and the file-tree uploader actually import.
  */
 
+import { getHubStorageKey } from '@/shared/utils';
+
 export const AUTH_TOKEN_REFRESHED_EVENT = 'auth-token-refreshed';
 export const AUTH_SESSION_EXPIRED_EVENT = 'auth-session-expired';
+
+/** The Hub gives every backend its own browser credential slot; direct installs keep the legacy key. */
+export const getAuthTokenStorageKey = (): string => getHubStorageKey('auth-token');
 
 // Only accept a refreshed token that has this app's issued JWT shape
 // (three base64url segments). An attacker-injected/malformed header value
@@ -72,14 +77,14 @@ export const getAuthTokenRefreshDelay = (token: unknown): number | null => {
 };
 
 export const expireAuthSession = (): void => {
-  localStorage.removeItem('auth-token');
+  localStorage.removeItem(getAuthTokenStorageKey());
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
   }
 };
 
 export const getStoredAuthToken = (): string | null => {
-  const token = localStorage.getItem('auth-token');
+  const token = localStorage.getItem(getAuthTokenStorageKey());
   if (token && isAuthTokenExpired(token)) {
     expireAuthSession();
     return null;
@@ -100,7 +105,7 @@ export const storeAuthToken = (token: unknown): boolean => {
     return false;
   }
 
-  localStorage.setItem('auth-token', token);
+  localStorage.setItem(getAuthTokenStorageKey(), token);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent(AUTH_TOKEN_REFRESHED_EVENT, { detail: token }));
   }

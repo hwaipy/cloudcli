@@ -1,4 +1,7 @@
 {
+  "hub": {
+    "switchBackend": "Switch server, current: {{backend}}"
+  },
   "projects": {
     "title": "Projects",
     "newProject": "New Project",

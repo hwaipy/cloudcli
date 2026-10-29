@@ -30,6 +30,8 @@
     "dev": "concurrently --kill-others \"npm run server:dev\" \"npm run client\"",
     "preserver": "node scripts/promote-dist-server.mjs recover",
     "server": "node dist-server/server/index.js",
+    "hub": "node dist-server/server/hub.js",
+    "hub:dev": "tsx --tsconfig server/tsconfig.json server/hub.ts",
     "server:dev": "tsx --tsconfig server/tsconfig.json server/index.ts",
     "server:dev-watch": "tsx watch --tsconfig server/tsconfig.json server/index.ts",
     "client": "vite",

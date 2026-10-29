@@ -60,6 +60,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__;
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -72,6 +73,20 @@ test('a live token is sent as a bearer credential', async () => {
   await (await loadFetch(false))('/api/projects');
 
   assert.equal(sentHeaders().Authorization, `Bearer ${token}`);
+});
+
+test('a Hub tab pins both its bearer token and API route to its backend', async () => {
+  (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__ = 'office';
+  const token = liveToken();
+  localStorage.setItem('auth-token:office', token);
+  localStorage.setItem('auth-token:lab', liveToken());
+  const request = respondWith();
+
+  await (await loadFetch(false))('/api/projects?limit=10');
+
+  assert.equal(request.mock.calls[0][0], '/api/projects?limit=10&hub_backend=office');
+  assert.equal(sentHeaders().Authorization, `Bearer ${token}`);
+  assert.equal(sentHeaders()['X-CloudCLI-Backend'], 'office');
 });
 
 test('platform builds send no bearer token, because the session is a cookie', async () => {

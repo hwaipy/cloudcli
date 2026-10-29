@@ -1,4 +1,7 @@
 {
+  "hub": {
+    "switchBackend": "切换服务器，当前：{{backend}}"
+  },
   "projects": {
     "title": "项目",
     "newProject": "新建项目",

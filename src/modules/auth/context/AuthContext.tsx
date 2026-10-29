@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 
 import { IS_PLATFORM } from '@/shared/utils';
 import { api, readApiErrorMessage } from '@/shared/api';
-import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT, getAuthTokenRefreshDelay, isValidRefreshedToken, storeAuthToken } from '@/shared/authToken';
+import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT, getAuthTokenRefreshDelay, getAuthTokenStorageKey, isValidRefreshedToken, storeAuthToken } from '@/shared/authToken';
 import { hydrateChatDrafts, resetChatDrafts } from '@/shared/chatDrafts';
 import { hydrateUserPreferences, resetUserPreferences } from '@/shared/userSettings';
 /** The signed-in account held by AuthContext - a required `username` plus an optional id and any additional fields the auth API returns - and should be read through `useAuth()` rather than re-derived from raw auth responses. */
@@ -14,8 +14,6 @@ type AuthUser = {
   avatar?: string | null;
   [key: string]: unknown;
 };
-
-const AUTH_TOKEN_STORAGE_KEY = 'auth-token';
 
 const AUTH_ERROR_MESSAGES = {
   authStatusCheckFailed: 'errors.authStatusCheckFailed',
@@ -72,14 +70,14 @@ async function parseJsonSafely<T>(response: Response): Promise<T | null> {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const readStoredToken = (): string | null => localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+const readStoredToken = (): string | null => localStorage.getItem(getAuthTokenStorageKey());
 
 const persistToken = (token: string) => {
   storeAuthToken(token);
 };
 
 const clearStoredToken = () => {
-  localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(getAuthTokenStorageKey());
 };
 
 export function useAuth(): AuthContextValue {

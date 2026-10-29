@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { IS_PLATFORM } from '@/shared/utils';
+import { IS_PLATFORM, getHubBackendId } from '@/shared/utils';
 
 type AuthScreenLayoutProps = {
   title: string;
@@ -20,6 +20,7 @@ export default function AuthScreenLayout({
   logo,
 }: AuthScreenLayoutProps) {
   const { t } = useTranslation('auth');
+  const hubBackendId = getHubBackendId();
   return (
     <div className="relative h-screen overflow-y-auto bg-background">
       {/* Ambient, on-brand backdrop that gives the screen depth without
@@ -49,6 +50,11 @@ export default function AuthScreenLayout({
 
           <div className="mt-6 border-t border-border/60 pt-5 text-center">
             <p className="text-xs leading-relaxed text-muted-foreground">{footerText}</p>
+            {hubBackendId && (
+              <a href="/hub/" className="mt-3 inline-block text-xs text-primary hover:underline">
+                {t('hub.switchBackend', { backend: hubBackendId })}
+              </a>
+            )}
           </div>
 
           {!IS_PLATFORM && (

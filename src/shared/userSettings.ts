@@ -1,5 +1,6 @@
 import { api } from '@/shared/api';
 import { CODE_EDITOR_STORAGE_KEYS } from '@/shared/constants';
+import { getHubBackendId, getHubStorageKey } from '@/shared/utils';
 
 /**
  * The one reader and writer for the settings that used to live in browser
@@ -36,7 +37,7 @@ export type UserPreferenceKey = keyof UserPreferences;
 export const USER_PREFERENCES_CHANGED_EVENT = 'user-preferences:changed';
 
 /** The single localStorage blob mirroring the server's copy. */
-const MIRROR_STORAGE_KEY = 'user-preferences';
+const MIRROR_STORAGE_KEY = getHubStorageKey('user-preferences');
 
 /**
  * Long enough to collapse a burst of edits (dragging the font-size select,
@@ -297,6 +298,9 @@ export async function hydrateUserPreferences(): Promise<void> {
 
   const migrated: PreferenceRecord = {};
   for (const key of PREFERENCE_KEYS) {
+    // Legacy browser keys belong to the old single-backend install. Copying
+    // them to every Hub backend would leak permission and account preferences.
+    if (getHubBackendId()) continue;
     if (serverPreferences[key] !== undefined) {
       continue;
     }

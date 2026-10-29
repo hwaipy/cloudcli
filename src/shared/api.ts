@@ -3,7 +3,7 @@ import {
   getStoredAuthToken,
   storeAuthToken,
 } from '@/shared/authToken';
-import { IS_PLATFORM } from '@/shared/utils';
+import { IS_PLATFORM, getHubBackendId, withHubBackendUrl } from '@/shared/utils';
 import { readVoiceConfig, voiceConfigHeaders } from '@/shared/voiceConfig';
 
 // Headers are a plain record rather than the full `HeadersInit` union so the
@@ -29,8 +29,10 @@ export const authenticatedFetch = (
   if (!IS_PLATFORM && token) {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
+  const hubBackendId = getHubBackendId();
+  if (hubBackendId) defaultHeaders['X-CloudCLI-Backend'] = hubBackendId;
 
-  return fetch(url, {
+  return fetch(withHubBackendUrl(url), {
     ...options,
     // Every response here can carry X-Refreshed-Token or X-Auth-Error, and a
     // served-from-cache response replays the headers it was stored with. Those
@@ -41,6 +43,7 @@ export const authenticatedFetch = (
     headers: {
       ...defaultHeaders,
       ...options.headers,
+      ...(hubBackendId ? { 'X-CloudCLI-Backend': hubBackendId } : {}),
     },
   }).then((response) => {
     const refreshedToken = response.headers.get('X-Refreshed-Token');
@@ -191,7 +194,15 @@ const fileContentPath = (projectId: string, filePath: string) =>
   `/api/file-tree/projects/${projectId}/files/content${query({ path: filePath })}`;
 
 const pluginAssetPath = (pluginName: string, assetFile: string) =>
-  `/api/plugins/${encodeURIComponent(pluginName)}/assets/${encodeURIComponent(assetFile)}`;
+  withHubBackendUrl(`/api/plugins/${encodeURIComponent(pluginName)}/assets/${encodeURIComponent(assetFile)}`);
+
+const hubFetch = (url: string, options: RequestInit = {}) => {
+  const backendId = getHubBackendId();
+  return fetch(withHubBackendUrl(url), {
+    ...options,
+    headers: { ...options.headers, ...(backendId ? { 'X-CloudCLI-Backend': backendId } : {}) },
+  });
+};
 
 // ─── API endpoints ──────────────────────────────────────────────────────────
 // Every `/api/...` path the frontend talks to is declared here; components
@@ -200,13 +211,13 @@ const pluginAssetPath = (pluginName: string, assetFile: string) =>
 export const api = {
   // Auth endpoints (no token required)
   auth: {
-    status: () => fetch('/api/auth/status'),
-    login: (username: string, password: string) => fetch('/api/auth/login', {
+    status: () => hubFetch('/api/auth/status'),
+    login: (username: string, password: string) => hubFetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     }),
-    register: (username: string, password: string) => fetch('/api/auth/register', {
+    register: (username: string, password: string) => hubFetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
@@ -261,13 +272,13 @@ export const api = {
   // EventSource cannot send an Authorization header, so the token rides along as
   // a query parameter on the streaming endpoints below.
   cloneProjectProgressUrl: ({ cloneId }: { cloneId: string }) =>
-    `/api/projects/clone-progress${query({ cloneId, token: getStoredAuthToken() })}`,
+    withHubBackendUrl(`/api/projects/clone-progress${query({ cloneId, token: getStoredAuthToken() })}`),
   searchConversationsUrl: (searchQuery: string, limit = 50) =>
-    `/api/providers/search/sessions${query({
+    withHubBackendUrl(`/api/providers/search/sessions${query({
       q: searchQuery,
       limit,
       token: getStoredAuthToken(),
-    })}`,
+    })}`),
 
   // Session endpoints. Provider/project metadata are resolved by the backend
   // from the session id.
@@ -333,7 +344,7 @@ export const api = {
 
   // Uploads with a progress bar go through XMLHttpRequest, which needs the URL.
   uploadFilesUrl: (projectId: string) =>
-    `/api/file-tree/projects/${encodeURIComponent(projectId)}/files/upload`,
+    withHubBackendUrl(`/api/file-tree/projects/${encodeURIComponent(projectId)}/files/upload`),
 
   // Browse filesystem for project suggestions
   browseFilesystem: (dirPath: string | null = null) =>

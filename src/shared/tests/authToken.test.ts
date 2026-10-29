@@ -6,6 +6,7 @@ import {
   AUTH_SESSION_EXPIRED_EVENT,
   AUTH_TOKEN_REFRESHED_EVENT,
   getAuthTokenRefreshDelay,
+  getAuthTokenStorageKey,
   getStoredAuthToken,
   isAuthTokenExpired,
   storeAuthToken,
@@ -111,6 +112,27 @@ test('getStoredAuthToken: a live token is returned and left in storage', () => {
 
   assert.equal(getStoredAuthToken(), token);
   assert.equal(localStorage.getItem('auth-token'), token);
+});
+
+test('Hub backend credentials use separate browser storage slots', () => {
+  localStorage.clear();
+  const hubWindow = window as Window & { __CLOUDCLI_BACKEND_ID__?: string };
+  const now = Math.floor(Date.now() / 1000);
+  const officeToken = makeToken({ iat: now, exp: now + 600, backend: 'office' });
+  const labToken = makeToken({ iat: now, exp: now + 600, backend: 'lab' });
+  try {
+    hubWindow.__CLOUDCLI_BACKEND_ID__ = 'office';
+    assert.equal(getAuthTokenStorageKey(), 'auth-token:office');
+    assert.equal(storeAuthToken(officeToken), true);
+    hubWindow.__CLOUDCLI_BACKEND_ID__ = 'lab';
+    assert.equal(getStoredAuthToken(), null);
+    assert.equal(storeAuthToken(labToken), true);
+    assert.equal(getStoredAuthToken(), labToken);
+    hubWindow.__CLOUDCLI_BACKEND_ID__ = 'office';
+    assert.equal(getStoredAuthToken(), officeToken);
+  } finally {
+    delete hubWindow.__CLOUDCLI_BACKEND_ID__;
+  }
 });
 
 test('getAuthTokenRefreshDelay: refresh is scheduled at the halfway point of the lifetime', () => {

@@ -1,5 +1,6 @@
 import { api, ApiRequestError, readApiErrorMessage } from '@/shared/api';
 import type { QueuedSendOptions } from '@/shared/types';
+import { getHubStorageKey } from '@/shared/utils';
 
 /**
  * Unsent composer text and queued messages, stored in `auth.db` rather than in
@@ -43,7 +44,7 @@ type DraftRecord = {
 /** Fired after any draft changes, from a local write or from a hydrate. */
 export const CHAT_DRAFTS_CHANGED_EVENT = 'chat-drafts:changed';
 
-const MIRROR_STORAGE_KEY = 'chat-drafts';
+const MIRROR_STORAGE_KEY = getHubStorageKey('chat-drafts');
 
 /**
  * Longer than the preference debounce: this fires on every keystroke, and a
