@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { createRef } from 'react';
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 import { test, vi } from 'vitest';
 
 import ChatMessagesPane from '@/modules/chat/transcript/ChatMessagesPane';
@@ -94,6 +94,12 @@ function paneProps(chatMessages: ChatMessage[]) {
     sessionMessagesCount: chatMessages.length,
     visibleMessageCount: 1000,
     visibleMessages: chatMessages,
+    queuedDrafts: [],
+    canSteerQueuedDrafts: false,
+    onEditQueuedDraft: noop,
+    onDeleteQueuedDraft: noop,
+    onReorderQueuedDraft: noop,
+    onSteerQueuedDraft: noop,
     loadEarlierMessages: noop,
     revealMessage: noop,
     sendMessage: noop,
@@ -161,4 +167,46 @@ test('the active work indicator is the last item in the scrolling transcript', (
   assert.ok(workRow);
   assert.equal(workRow.parentElement?.lastElementChild, workRow);
   assert.match(workRow.textContent ?? '', /Computing/);
+});
+
+test('queued turns follow the active response inside the scrolling transcript and retain their actions', () => {
+  const chatMessages = [assistantRow(0)];
+  const onEditQueuedDraft = vi.fn();
+  const onDeleteQueuedDraft = vi.fn();
+  const onReorderQueuedDraft = vi.fn();
+  const onSteerQueuedDraft = vi.fn();
+  const view = render(
+    <UiPreferencesProvider>
+      <ChatMessagesPane
+        {...(paneProps(chatMessages) as any)}
+        activity={{ statusText: 'Computing', canInterrupt: true, startedAt: Date.now() }}
+        queuedDrafts={[
+          { id: 'first', content: 'First follow-up', attachments: [] },
+          { id: 'second', content: 'Second follow-up', attachments: [] },
+        ]}
+        canSteerQueuedDrafts
+        onEditQueuedDraft={onEditQueuedDraft}
+        onDeleteQueuedDraft={onDeleteQueuedDraft}
+        onReorderQueuedDraft={onReorderQueuedDraft}
+        onSteerQueuedDraft={onSteerQueuedDraft}
+      />
+    </UiPreferencesProvider>,
+  );
+
+  const transcript = view.container.querySelector('.chat-messages-pane');
+  const workRow = transcript?.querySelector('[role="status"]');
+  const queue = transcript?.querySelector('[aria-label="Queued messages"]');
+  assert.ok(workRow);
+  assert.ok(queue);
+  assert.equal(workRow.nextElementSibling, queue);
+  assert.match(queue.textContent ?? '', /First follow-up.*Second follow-up/);
+
+  fireEvent.click(view.getAllByRole('button', { name: 'Steer' })[0]);
+  fireEvent.click(view.getAllByRole('button', { name: 'Edit queued message' })[0]);
+  fireEvent.click(view.getAllByRole('button', { name: 'Delete queued message' })[0]);
+  fireEvent.click(view.getAllByRole('button', { name: 'Move queued message down' })[0]);
+  assert.deepEqual(onSteerQueuedDraft.mock.calls[0], ['first']);
+  assert.deepEqual(onEditQueuedDraft.mock.calls[0], ['first']);
+  assert.deepEqual(onDeleteQueuedDraft.mock.calls[0], ['first']);
+  assert.deepEqual(onReorderQueuedDraft.mock.calls[0], ['first', 'second']);
 });

@@ -14,7 +14,7 @@ import { PaperclipIcon, MessageSquareIcon, Loader2, ArrowUpIcon, PencilIcon } fr
 
 import { useVoiceInput } from '@/modules/chat/hooks/useVoiceInput';
 import { useVoiceAvailable } from '@/modules/chat/hooks/useVoiceAvailable';
-import type { BackgroundSendChoice, BackgroundSendPrompt, QueuedDraft, ScheduledMessage, SlashCommand,PendingPermissionRequest,PermissionMode,ProviderModelOption } from '@/shared/types';
+import type { BackgroundSendChoice, BackgroundSendPrompt, ScheduledMessage, SlashCommand,PendingPermissionRequest,PermissionMode,ProviderModelOption } from '@/shared/types';
 import {
   PromptInput,
   PromptInputHeader,
@@ -30,7 +30,6 @@ import ComposerAttachment from '@/modules/chat/composer/ComposerAttachment';
 import VoiceInputButton from '@/modules/chat/composer/VoiceInputButton';
 import PermissionRequestsBanner from '@/modules/chat/composer/PermissionRequestsBanner';
 import TokenUsageSummary from '@/modules/chat/composer/TokenUsageSummary';
-import QueuedMessageCard from '@/modules/chat/composer/QueuedMessageCard';
 import BackgroundSendDialog from '@/modules/chat/composer/BackgroundSendDialog';
 import { ScheduledMessageList } from '@/modules/chat/composer/ScheduledMessageList';
 import { ComposerModelMenu } from '@/modules/chat/composer/ComposerModelMenu';
@@ -70,7 +69,6 @@ type ChatComposerProps = {
   onToggleCommandMenu: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement> | MouseEvent<HTMLButtonElement> | TouchEvent<HTMLButtonElement>) => void;
   isDragActive: boolean;
-  queuedDrafts: QueuedDraft[];
   backgroundSendPrompt: BackgroundSendPrompt | null;
   onResolveBackgroundSendPrompt: (choice: BackgroundSendChoice) => void;
   /** Set while the composer is replacing an already-sent message. */
@@ -79,10 +77,6 @@ type ChatComposerProps = {
   /** Messages waiting to be sent to this session later. */
   scheduledMessages: ScheduledMessage[];
   onCancelScheduledMessage: (id: string) => void;
-  onEditQueuedDraft: (id: string) => void;
-  onDeleteQueuedDraft: (id: string) => void;
-  onReorderQueuedDraft: (sourceId: string, targetId: string) => void;
-  onSteerQueuedDraft: (id: string) => void;
   attachedFiles: File[];
   onRemoveAttachment: (index: number) => void;
   fileErrors: Map<string, string>;
@@ -116,7 +110,7 @@ type ChatComposerProps = {
 
 /**
  * Rendered by chat's ChatInterface as the whole input area: textarea, pending
- * attachments, queued message, permission banner, voice input and the
+ * attachments, permission banner, voice input and the
  * model/permission popovers that drive the next turn.
  */
 export default function ChatComposer({
@@ -143,17 +137,12 @@ export default function ChatComposer({
   onToggleCommandMenu,
   onSubmit,
   isDragActive,
-  queuedDrafts,
   backgroundSendPrompt,
   onResolveBackgroundSendPrompt,
   isEditingSentMessage,
   onCancelEditMessage,
   scheduledMessages,
   onCancelScheduledMessage,
-  onEditQueuedDraft,
-  onDeleteQueuedDraft,
-  onReorderQueuedDraft,
-  onSteerQueuedDraft,
   attachedFiles,
   onRemoveAttachment,
   fileErrors,
@@ -187,15 +176,12 @@ export default function ChatComposer({
   const { t } = useTranslation('chat');
   const fileDropdownRef = useRef<HTMLDivElement | null>(null);
   const selectedFileRef = useRef<HTMLDivElement | null>(null);
-  const draggedQueueIdRef = useRef<string | null>(null);
   const footerRef = useRef<HTMLDivElement | null>(null);
   const toolsRef = useRef<HTMLDivElement | null>(null);
   // The footer width decides how many secondary controls move into the overflow menu.
   const [footerWidth, setFooterWidth] = useState(Number.POSITIVE_INFINITY);
   // The attachment and command controls consume variable space, especially when voice is enabled.
   const [toolsWidth, setToolsWidth] = useState(0);
-  // Highlights the row that will receive the dragged queued turn.
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   useEffect(() => {
     const footer = footerRef.current;
     const tools = toolsRef.current;
@@ -336,48 +322,6 @@ export default function ChatComposer({
         prompt={backgroundSendPrompt}
         onResolve={onResolveBackgroundSendPrompt}
       />
-
-      {queuedDrafts.length > 0 && (
-        <div className="mx-auto mb-2 max-w-[54.25rem] overflow-hidden rounded-lg border border-border/70 bg-muted/20">
-          {queuedDrafts.map((queuedDraft, index) => {
-            const id = queuedDraft.id ?? 'legacy';
-            return (
-              <QueuedMessageCard
-                key={id}
-                content={queuedDraft.content}
-                attachmentCount={queuedDraft.uploadedAttachments?.length ?? queuedDraft.attachments.length}
-                position={index + 1}
-                total={queuedDrafts.length}
-                isDropTarget={dropTargetId === id}
-                canSteer={canSteer && isLoading && id !== 'legacy' && !!queuedDraft.content.trim() && queuedDraft.attachments.length === 0 && (queuedDraft.uploadedAttachments?.length ?? 0) === 0}
-                onEdit={() => onEditQueuedDraft(id)}
-                onSteer={() => onSteerQueuedDraft(id)}
-                onDelete={() => onDeleteQueuedDraft(id)}
-                onMoveUp={() => onReorderQueuedDraft(id, queuedDrafts[index - 1]?.id ?? id)}
-                onMoveDown={() => onReorderQueuedDraft(id, queuedDrafts[index + 1]?.id ?? id)}
-                onDragStart={(event) => {
-                  draggedQueueIdRef.current = id;
-                  event.dataTransfer.effectAllowed = 'move';
-                  event.dataTransfer.setData('text/plain', id);
-                }}
-                onDragOver={(event) => {
-                  if (!draggedQueueIdRef.current || draggedQueueIdRef.current === id) return;
-                  event.preventDefault();
-                  setDropTargetId(id);
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const sourceId = draggedQueueIdRef.current;
-                  draggedQueueIdRef.current = null;
-                  setDropTargetId(null);
-                  if (sourceId && sourceId !== id) onReorderQueuedDraft(sourceId, id);
-                }}
-                onDragEnd={() => { draggedQueueIdRef.current = null; setDropTargetId(null); }}
-              />
-            );
-          })}
-        </div>
-      )}
 
       {!hasQuestionPanel && <div className="relative mx-auto max-w-[54.25rem]">
         {showFileDropdown && filteredFiles.length > 0 && (

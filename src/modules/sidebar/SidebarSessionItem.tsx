@@ -1,10 +1,11 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { Check, CheckSquare, Edit2, Loader2, MoreHorizontal, Square, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Dialog, DialogContent, DialogTitle, LLMProviderLogo, Tooltip, buttonVariants } from '@/shared/ui';
 import { cn } from '@/shared/utils';
+import { useOptionalAuth } from '@/modules/auth';
 import type { LLMProvider, Project, ProjectSession, SessionWithProvider } from '@/shared/types';
 import { PROVIDER_LABELS, createSessionViewModel, formatCompactAge } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import { useCompactSidebar } from '@/modules/sidebar/hooks/useCompactSidebar';
@@ -40,6 +41,16 @@ type SidebarSessionItemProps = {
   t: TFunction;
 };
 
+/** The read marker is scoped to the signed-in account and this session. */
+function readSeenActivity(storageKey: string | null): string | null {
+  if (!storageKey) return null;
+  try {
+    return localStorage.getItem(storageKey);
+  } catch {
+    return null;
+  }
+}
+
 /** Rendered by SidebarProjectSessions for one session row, including its rename, copy and delete controls. */
 function SidebarSessionItem({
   project,
@@ -66,12 +77,36 @@ function SidebarSessionItem({
   const isCompact = useCompactSidebar();
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
+  const account = useOptionalAuth()?.user;
+  const seenStorageKey = account
+    ? `cloudcli-seen-session:${String(account.id ?? account.username)}:${session.id}`
+    : null;
+  // Keep the last viewed activity across row remounts and page refreshes.
+  const [seenActivity, setSeenActivity] = useState(() => ({
+    key: seenStorageKey,
+    timestamp: readSeenActivity(seenStorageKey),
+  }));
+  const seenTimestamp = seenActivity.key === seenStorageKey
+    ? seenActivity.timestamp
+    : readSeenActivity(seenStorageKey);
+  useEffect(() => {
+    // A response that finishes while this session is open has already been
+    // viewed; one finishing after the user leaves should light the dot.
+    if (!isSelected || isProcessing || hasBackgroundWork || !sessionView.sessionTime || seenTimestamp === sessionView.sessionTime) return;
+    setSeenActivity({ key: seenStorageKey, timestamp: sessionView.sessionTime });
+    if (seenStorageKey) {
+      try {
+        localStorage.setItem(seenStorageKey, sessionView.sessionTime);
+      } catch { /* A full or disabled storage only loses read state across reloads. */ }
+    }
+  }, [hasBackgroundWork, isProcessing, isSelected, seenStorageKey, seenTimestamp, sessionView.sessionTime]);
   const compactSessionAge = formatCompactAge(sessionView.sessionTime, currentTime);
   const [isMobileOptionsOpen, setIsMobileOptionsOpen] = useState(false);
   // Background work takes the recent-activity dot's place: the session is
   // still doing something, which says more than that it was touched lately.
   const showBackgroundIndicator = hasBackgroundWork;
-  const showRecentIndicator = !showBackgroundIndicator && !isProcessing && sessionView.isActive;
+  const showRecentIndicator = !showBackgroundIndicator && !isProcessing && !isSelected
+    && sessionView.isActive && seenTimestamp !== sessionView.sessionTime;
   const indicatorLabel = showBackgroundIndicator
     ? t('tooltips.backgroundWorkIndicator', { defaultValue: 'Background work running' })
     : t('tooltips.activeSessionIndicator');
@@ -145,7 +180,7 @@ function SidebarSessionItem({
   return (
     <div className="group relative">
       {(showBackgroundIndicator || showRecentIndicator) && (
-        <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
+        <div className="absolute left-0 top-1/2 flex h-2 w-2 -translate-x-1 -translate-y-1/2 items-center justify-center leading-none">
           <Tooltip content={indicatorLabel} position="right">
             <div
               role="status"

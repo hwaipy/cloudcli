@@ -158,6 +158,7 @@
     "clearInput": "Clear input",
     "scrollToBottom": "Scroll to bottom",
     "queue": {
+      "list": "Queued messages",
       "sendNext": "Queue next message",
       "append": "Add to queued message",
       "notCombinable": "Failed to queue message: A slash command runs as a turn of its own, so it cannot be combined with the queued message. Send it after the queued message has gone.",

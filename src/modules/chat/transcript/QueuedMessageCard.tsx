@@ -20,7 +20,7 @@ type QueuedMessageCardProps = {
   onDragEnd: () => void;
 };
 
-/** Used by ChatComposer to show one queued turn as a compact, reorderable row. */
+/** Used by QueuedMessagesList to show one queued turn as a compact, reorderable row. */
 export default function QueuedMessageCard({
   content, attachmentCount = 0, position, total, isDropTarget, canSteer,
   onEdit, onSteer, onDelete, onMoveUp, onMoveDown, onDragStart, onDragOver, onDrop, onDragEnd,

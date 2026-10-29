@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useDeviceSettings } from '@/shared/hooks/useDeviceSettings';
@@ -76,6 +76,8 @@ function Sidebar({
   // would re-render the whole tree on every provider status frame.
   const activeSessions = useBusySessionIdSet();
   const backgroundSessionIds = useBackgroundSessionIdSet();
+  // Newly created projects stay above the ordinary sort until this sidebar is remounted.
+  const [recentlyCreatedProjectIds, setRecentlyCreatedProjectIds] = useState<string[]>([]);
 
   const {
     isSidebarCollapsed,
@@ -146,6 +148,7 @@ function Sidebar({
     setShowVersionModal,
   } = useSidebarController({
     projects,
+    recentlyCreatedProjectIds,
     selectedProject,
     selectedSession,
     activeSessions,
@@ -174,7 +177,14 @@ function Sidebar({
     document.body.classList.toggle('pwa-mode', isPWA);
   }, [isPWA]);
 
-  const handleProjectCreated = () => {
+  const handleProjectCreated = (project?: Record<string, unknown>) => {
+    const projectId = project?.projectId;
+    if (typeof projectId === 'string') {
+      setRecentlyCreatedProjectIds((previous) => [
+        projectId,
+        ...previous.filter((id) => id !== projectId),
+      ]);
+    }
     void paletteOps.refreshProjects();
   };
 

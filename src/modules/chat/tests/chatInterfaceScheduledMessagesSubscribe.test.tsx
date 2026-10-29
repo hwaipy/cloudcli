@@ -58,7 +58,7 @@ vi.mock('@/modules/chat/hooks/useChatSessionState', () => ({
 }));
 vi.mock('@/modules/chat/hooks/useChatRealtimeHandlers', () => ({ useChatRealtimeHandlers: () => {} }));
 vi.mock('@/modules/chat/hooks/useChatComposerState', () => ({
-  useChatComposerState: () => ({ input: '', setInput: () => {}, textareaRef: { current: null } }),
+  useChatComposerState: () => ({ input: '', setInput: () => {}, textareaRef: { current: null }, queuedDrafts: [] }),
 }));
 vi.mock('@/modules/chat/hooks/useSessionStore', () => ({ useSessionStore: () => ({}) }));
 vi.mock('@/modules/chat/transcript/ChatMessagesPane', () => ({ default: () => null }));

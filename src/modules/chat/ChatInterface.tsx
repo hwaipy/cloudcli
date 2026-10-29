@@ -276,6 +276,17 @@ function ChatInterface({
     resolvePermissionModeForProvider,
   });
 
+  // A newly queued turn is part of the transcript tail. Keep it visible when
+  // already following the conversation, without pulling readers off older rows.
+  const previousQueuedCountRef = useRef(queuedDrafts.length);
+  useEffect(() => {
+    const previousCount = previousQueuedCountRef.current;
+    previousQueuedCountRef.current = queuedDrafts.length;
+    if (!isActive || isUserScrolledUp || queuedDrafts.length <= previousCount) return;
+    const frame = requestAnimationFrame(scrollToBottom);
+    return () => cancelAnimationFrame(frame);
+  }, [isActive, isUserScrolledUp, queuedDrafts.length, scrollToBottom]);
+
   // On WebSocket reconnect, request a bounded persisted-tail sync (deferred
   // while Chat is hidden), then re-subscribe — the
   // `chat_subscribed` ack restores or clears the activity indicator, replays
@@ -463,6 +474,12 @@ function ChatInterface({
               sessionMessagesCount={chatMessages.length}
               visibleMessageCount={visibleMessageCount}
               visibleMessages={visibleMessages}
+              queuedDrafts={queuedDrafts}
+              canSteerQueuedDrafts={provider === 'codex' && codexAppServerEnabled && isProcessing}
+              onEditQueuedDraft={editQueuedDraft}
+              onDeleteQueuedDraft={deleteQueuedDraft}
+              onReorderQueuedDraft={reorderQueuedDraft}
+              onSteerQueuedDraft={steerQueuedDraft}
               loadEarlierMessages={loadEarlierMessages}
               revealMessage={revealMessage}
               backgroundTasks={sessionActivity?.tasks}
@@ -532,13 +549,8 @@ function ChatInterface({
           onToggleCommandMenu={handleToggleCommandMenu}
           onSubmit={handleSubmit}
           isDragActive={isDragActive}
-          queuedDrafts={queuedDrafts}
           backgroundSendPrompt={backgroundSendPrompt}
           onResolveBackgroundSendPrompt={resolveBackgroundSendPrompt}
-          onEditQueuedDraft={editQueuedDraft}
-          onDeleteQueuedDraft={deleteQueuedDraft}
-          onReorderQueuedDraft={reorderQueuedDraft}
-          onSteerQueuedDraft={steerQueuedDraft}
           attachedFiles={attachedFiles}
           onRemoveAttachment={(index) =>
             setAttachedFiles((previous) =>

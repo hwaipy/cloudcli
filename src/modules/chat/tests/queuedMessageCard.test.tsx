@@ -4,7 +4,7 @@ import { fireEvent, render } from '@testing-library/react';
 import { test, vi } from 'vitest';
 
 import '@/modules/i18n';
-import QueuedMessageCard from '@/modules/chat/composer/QueuedMessageCard';
+import QueuedMessageCard from '@/modules/chat/transcript/QueuedMessageCard';
 
 test('queued turn stays on one row and exposes edit, reorder, and delete actions', () => {
   const onEdit = vi.fn();

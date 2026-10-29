@@ -156,6 +156,7 @@ export const sortProjects = (
   projects: Project[],
   projectSortOrder: ProjectSortOrder,
   previousProjectIds?: readonly string[],
+  recentlyCreatedProjectIds: readonly string[] = [],
 ): Project[] => {
   const byName = [...projects];
   const activityById = projectSortOrder === 'date'
@@ -182,17 +183,24 @@ export const sortProjects = (
     return (projectA.displayName || projectA.projectId).localeCompare(projectB.displayName || projectB.projectId);
   });
 
-  if (
+  const sorted = (
     projectSortOrder !== 'date'
     || !activityById
     || !previousProjectIds
     || previousProjectIds.length !== byName.length
     || byName.some((project) => !previousProjectIds.includes(project.projectId))
-  ) {
-    return byName;
-  }
+  ) ? byName : keepNearbyProjectsStable(byName, previousProjectIds, activityById);
 
-  return keepNearbyProjectsStable(byName, previousProjectIds, activityById);
+  if (recentlyCreatedProjectIds.length === 0) return sorted;
+
+  // A newly registered project has no session activity yet. Place it after
+  // starred projects without disturbing the chosen order of existing rows.
+  const createdIndex = new Map(recentlyCreatedProjectIds.map((id, index) => [id, index]));
+  const starred = sorted.filter((project) => project.isStarred);
+  const created = sorted.filter((project) => !project.isStarred && createdIndex.has(project.projectId));
+  created.sort((a, b) => (createdIndex.get(a.projectId) ?? 0) - (createdIndex.get(b.projectId) ?? 0));
+  const remaining = sorted.filter((project) => !project.isStarred && !createdIndex.has(project.projectId));
+  return [...starred, ...created, ...remaining];
 };
 
 export const filterProjects = (projects: Project[], searchFilter: string): Project[] => {

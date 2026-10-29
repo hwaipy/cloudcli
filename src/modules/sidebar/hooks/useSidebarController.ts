@@ -18,6 +18,7 @@ import {
 
 
 const EXPANDED_PROJECTS_STORAGE_KEY = 'cloudcli-expanded-projects';
+const NO_RECENTLY_CREATED_PROJECTS: readonly string[] = [];
 
 /** Read browser-local project expansion, tolerating missing or invalid storage. */
 function readExpandedProjects(): Set<string> | null {
@@ -56,6 +57,7 @@ type RecentConversationsApiPayload = {
 
 type UseSidebarControllerArgs = {
   projects: Project[];
+  recentlyCreatedProjectIds?: readonly string[];
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   activeSessions: ReadonlySet<string>;
@@ -80,6 +82,7 @@ type UseSidebarControllerArgs = {
 /** Used by Sidebar to coordinate project navigation, expansion and session actions. */
 export function useSidebarController({
   projects,
+  recentlyCreatedProjectIds = NO_RECENTLY_CREATED_PROJECTS,
   selectedProject,
   selectedSession: _selectedSession,
   activeSessions,
@@ -787,8 +790,9 @@ export function useSidebarController({
       !isLoading && previousProjectOrderRef.current?.sortOrder === projectSortOrder
         ? previousProjectOrderRef.current.ids
         : undefined,
+      recentlyCreatedProjectIds,
     ),
-    [isLoading, projectSortOrder, projectsWithResolvedStarState],
+    [isLoading, projectSortOrder, projectsWithResolvedStarState, recentlyCreatedProjectIds],
   );
   useEffect(() => {
     previousProjectOrderRef.current = isLoading

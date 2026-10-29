@@ -9,6 +9,7 @@ import type { BackgroundTaskSummary,
   LLMProvider,
   ProviderModelActions,
   ProviderModelsDefinition,
+  QueuedDraft,
   SessionActivity } from '@/shared/types';
 import { getIntrinsicMessageKey } from '@/modules/chat/utils/messageKeys';
 import { groupConsecutiveTools, isToolGroupItem } from '@/modules/chat/utils/toolGrouping';
@@ -22,6 +23,7 @@ import LoadAllMessagesOverlay from '@/modules/chat/transcript/LoadAllMessagesOve
 import ChatExportMenu from '@/modules/chat/transcript/ChatExportMenu';
 import { BackgroundTasksStrip } from '@/modules/chat/transcript/BackgroundTasksStrip';
 import ActivityIndicator from '@/modules/chat/transcript/ActivityIndicator';
+import QueuedMessagesList from '@/modules/chat/transcript/QueuedMessagesList';
 
 /**
  * How many of the newest rows mount with real content on the first commit,
@@ -58,6 +60,12 @@ type ChatMessagesPaneProps = {
   sessionMessagesCount: number;
   visibleMessageCount: number;
   visibleMessages: ChatMessage[];
+  queuedDrafts: QueuedDraft[];
+  canSteerQueuedDrafts: boolean;
+  onEditQueuedDraft: (id: string) => void;
+  onDeleteQueuedDraft: (id: string) => void;
+  onReorderQueuedDraft: (sourceId: string, targetId: string) => void;
+  onSteerQueuedDraft: (id: string) => void;
   loadEarlierMessages: () => void;
   revealMessage: (message: ChatMessage) => void;
   /** The session's running background tasks from the activity map, for the strip to list ones whose rows are not loaded. */
@@ -126,6 +134,12 @@ function ChatMessagesPane({
   sessionMessagesCount,
   visibleMessageCount,
   visibleMessages,
+  queuedDrafts,
+  canSteerQueuedDrafts,
+  onEditQueuedDraft,
+  onDeleteQueuedDraft,
+  onReorderQueuedDraft,
+  onSteerQueuedDraft,
   loadEarlierMessages,
   revealMessage,
   backgroundTasks,
@@ -229,7 +243,7 @@ function ChatMessagesPane({
             <p>{t('session.loading.sessionMessages')}</p>
           </div>
         </div>
-      ) : chatMessages.length === 0 ? (activity ? null : (
+      ) : chatMessages.length === 0 ? (activity || queuedDrafts.length > 0 ? null : (
         <ProviderSelectionEmptyState
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
@@ -366,6 +380,14 @@ function ChatMessagesPane({
       <ActivityIndicator
         key={selectedSession?.id || currentSessionId || 'new-session'}
         activity={activity}
+      />
+      <QueuedMessagesList
+        queuedDrafts={queuedDrafts}
+        canSteer={canSteerQueuedDrafts}
+        onEdit={onEditQueuedDraft}
+        onDelete={onDeleteQueuedDraft}
+        onReorder={onReorderQueuedDraft}
+        onSteer={onSteerQueuedDraft}
       />
       </div>
     </div>

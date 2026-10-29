@@ -55,3 +55,20 @@ test('ten-minute stability still respects wider time gaps and pinned projects', 
   ], 'date', ['recent', 'pinned'])), ['pinned', 'recent']);
   assert.deepEqual(ids(sortProjects(projects, 'name', ['new', 'middle', 'old'])), ['middle', 'new', 'old']);
 });
+
+test('new projects go below pinned projects and above the existing sort order', () => {
+  const projects = [
+    project('alpha', '2026-10-29T10:00:00.000Z'),
+    { ...project('zulu', '2026-10-29T09:00:00.000Z'), sessions: [] },
+    { ...project('yankee', '2026-10-29T09:00:00.000Z'), sessions: [] },
+    project('pinned', '2026-10-29T08:00:00.000Z', true),
+  ];
+
+  assert.deepEqual(ids(sortProjects(projects, 'name', undefined, ['yankee', 'zulu'])), [
+    'pinned', 'yankee', 'zulu', 'alpha',
+  ]);
+  assert.deepEqual(ids(sortProjects(projects, 'date', ['alpha', 'zulu', 'yankee', 'pinned'], ['yankee', 'zulu'])), [
+    'pinned', 'yankee', 'zulu', 'alpha',
+  ]);
+  assert.deepEqual(ids(sortProjects(projects, 'date')), ['pinned', 'alpha', 'zulu', 'yankee']);
+});

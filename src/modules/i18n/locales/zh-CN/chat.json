@@ -145,6 +145,7 @@
     "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部",
     "queue": {
+      "list": "排队消息",
       "sendNext": "排队发送下一条消息",
       "append": "添加到排队消息",
       "notCombinable": "无法排队发送消息：斜杠命令会单独运行，因此不能与排队消息合并。请在排队消息发送后再发送。",
