@@ -54,6 +54,20 @@ export function createAuthRouter(
     } catch (error) { next(error); }
   });
 
+  router.patch('/users/:id', authenticateToken, async (req, res, next) => {
+    try {
+      const body = req.body as { username?: unknown; newPassword?: unknown };
+      res.json(await service.updateManagedUser((req as AuthenticatedRequest).user, req.params.id, body.username, body.newPassword));
+    } catch (error) { next(error); }
+  });
+
+  router.patch('/user', authenticateToken, async (req, res, next) => {
+    try {
+      const body = req.body as { username?: unknown; currentPassword?: unknown; newPassword?: unknown };
+      res.json(await service.updateOwnAccount((req as AuthenticatedRequest).user, body.username, body.currentPassword, body.newPassword));
+    } catch (error) { next(error); }
+  });
+
   router.get('/user', authenticateToken, (req, res) => {
     res.json(service.getCurrentUser((req as AuthenticatedRequest).user));
   });

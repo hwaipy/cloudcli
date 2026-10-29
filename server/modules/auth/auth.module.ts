@@ -25,6 +25,8 @@ const authService = createAuthService({
     createUser: (username, passwordHash) => userDb.createUser(username, passwordHash),
     listUsers: () => userDb.listUsers(),
     getUserByUsername: (username) => userDb.getUserByUsername(username),
+    getCredentialsById: (userId) => userDb.getCredentialsById(userId),
+    updateAccount: (userId, username, passwordHash) => userDb.updateAccount(userId, username, passwordHash),
     updateLastLogin: (userId) => userDb.updateLastLogin(userId),
   },
   transaction: {

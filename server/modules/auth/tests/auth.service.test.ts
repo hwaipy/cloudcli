@@ -14,6 +14,8 @@ function createDependencies(overrides: Partial<AuthDependencies> = {}): AuthDepe
       createUser: (username, passwordHash) => ({ id: 1, username, password_hash: passwordHash }),
       listUsers: () => [{ id: 1, username: 'alice' }],
       getUserByUsername: () => undefined,
+      getCredentialsById: () => ({ id: 1, username: 'alice', password_hash: 'hash' }),
+      updateAccount: () => undefined,
       updateLastLogin: () => undefined,
     },
     transaction: {
@@ -48,6 +50,8 @@ test('register hashes credentials and commits through injected dependencies', as
       },
       listUsers: () => [{ id: 1, username: 'alice' }],
       getUserByUsername: () => undefined,
+      getCredentialsById: () => undefined,
+      updateAccount: () => undefined,
       updateLastLogin: (userId) => operations.push(`login:${userId}`),
     },
   }));
@@ -66,6 +70,8 @@ test('login rejects an invalid password without issuing a token', async () => {
       createUser: () => { throw new Error('unused'); },
       listUsers: () => [{ id: 1, username: 'alice' }],
       getUserByUsername: () => ({ id: 1, username: 'alice', password_hash: 'hash' }),
+      getCredentialsById: () => undefined,
+      updateAccount: () => undefined,
       updateLastLogin: () => undefined,
     },
     comparePassword: async () => false,
@@ -113,4 +119,37 @@ test('platform authentication cannot add accounts it cannot distinguish', async 
     service.createManagedUser({ id: 1 }, 'bob', 'secret12'),
     (error: unknown) => error instanceof AppError && error.code === 'MULTI_USER_UNAVAILABLE',
   );
+});
+
+test('an account can update only itself after verifying its current password', async () => {
+  const changes: unknown[][] = [];
+  const service = createAuthService(createDependencies({
+    comparePassword: async (password) => password === 'current-secret',
+    users: {
+      ...createDependencies().users,
+      getCredentialsById: (id) => id === 1 ? { id, username: 'alice', password_hash: 'hash' } : undefined,
+      updateAccount: (...args) => { changes.push(args); },
+    },
+  }));
+  await assert.rejects(service.updateOwnAccount({ id: 1 }, 'new-alice', 'wrong', undefined));
+  assert.deepEqual(changes, []);
+  assert.deepEqual(await service.updateOwnAccount({ id: 1 }, 'new-alice', 'current-secret', 'new-secret'), {
+    user: { id: 1, username: 'new-alice' },
+  });
+  assert.deepEqual(changes, [[1, 'new-alice', 'hashed-password']]);
+});
+
+test('administrator may edit another account but cannot bypass self verification', async () => {
+  const changes: unknown[][] = [];
+  const service = createAuthService(createDependencies({
+    users: {
+      ...createDependencies().users,
+      getCredentialsById: (id) => ({ id, username: id === 1 ? 'alice' : 'bob', password_hash: 'hash' }),
+      updateAccount: (...args) => { changes.push(args); },
+    },
+  }));
+  await assert.rejects(service.updateManagedUser({ id: 2 }, 3, 'charlie', undefined));
+  await assert.rejects(service.updateManagedUser({ id: 1 }, 1, 'alice-new', undefined));
+  await service.updateManagedUser({ id: 1 }, 2, 'bob-new', undefined);
+  assert.deepEqual(changes, [[2, 'bob-new', undefined]]);
 });

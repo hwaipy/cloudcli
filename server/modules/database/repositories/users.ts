@@ -77,6 +77,21 @@ export const userDb = {
       .get(username) as UserRow | undefined;
   },
 
+  /** Reads an active account's password hash for authenticated profile updates. */
+  getCredentialsById(userId: number): UserRow | undefined {
+    return getConnection().prepare('SELECT * FROM users WHERE id = ? AND is_active = 1').get(userId) as UserRow | undefined;
+  },
+
+  /** Changes only the supplied account fields, leaving the other credential intact. */
+  updateAccount(userId: number, username: string, passwordHash?: string): void {
+    const db = getConnection();
+    if (passwordHash === undefined) {
+      db.prepare('UPDATE users SET username = ? WHERE id = ? AND is_active = 1').run(username, userId);
+    } else {
+      db.prepare('UPDATE users SET username = ?, password_hash = ? WHERE id = ? AND is_active = 1').run(username, passwordHash, userId);
+    }
+  },
+
   /** Updates the last_login timestamp. Non-fatal — logs but does not throw. */
   updateLastLogin(userId: number): void {
     try {

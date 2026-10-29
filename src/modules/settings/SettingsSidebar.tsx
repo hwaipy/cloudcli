@@ -1,7 +1,7 @@
-import { Bell, Bot, GitBranch, Info, Key, ListChecks, Mic, MonitorPlay, Palette, Puzzle, Users } from 'lucide-react';
+import { Bell, Bot, GitBranch, Info, Key, ListChecks, Mic, MonitorPlay, Palette, Puzzle, Shield, UserRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { cn } from '@/shared/utils';
+import { cn, IS_PLATFORM } from '@/shared/utils';
 import { PillBar, Pill } from '@/shared/ui';
 import type { SettingsMainTab } from '@/shared/types';
 
@@ -27,14 +27,18 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'browser', labelKey: 'mainTabs.browser', icon: MonitorPlay },
   { id: 'plugins', labelKey: 'mainTabs.plugins', icon: Puzzle },
   { id: 'notifications', labelKey: 'mainTabs.notifications', icon: Bell },
-  { id: 'users', labelKey: 'mainTabs.users', icon: Users },
+  { id: 'account', labelKey: 'mainTabs.account', icon: UserRound },
+  { id: 'admin', labelKey: 'mainTabs.admin', icon: Shield },
   { id: 'about', labelKey: 'mainTabs.about', icon: Info },
 ];
 
 /** Rendered by Settings to switch between the settings dialog's main sections. */
 export default function SettingsSidebar({ activeTab, onChange, isAdmin }: SettingsSidebarProps) {
   const { t } = useTranslation('settings');
-  const visibleItems = NAV_ITEMS.filter((item) => isAdmin || (item.id !== 'users' && item.id !== 'browser'));
+  const visibleItems = NAV_ITEMS.filter((item) => {
+    if (IS_PLATFORM && item.id === 'account') return false;
+    return isAdmin || (item.id !== 'admin' && item.id !== 'browser');
+  });
 
   return (
     <>

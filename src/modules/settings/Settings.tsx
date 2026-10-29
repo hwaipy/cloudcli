@@ -17,6 +17,7 @@ import TasksSettingsTab from '@/modules/settings/tabs/tasks-settings/TasksSettin
 import { PluginSettingsTab } from '@/modules/plugins';
 import AboutTab from '@/modules/settings/tabs/AboutTab';
 import UsersSettingsTab from '@/modules/settings/tabs/UsersSettingsTab';
+import AccountSettingsTab from '@/modules/settings/tabs/AccountSettingsTab';
 import { useSettingsController } from '@/modules/settings/hooks/useSettingsController';
 import { useWebPush } from '@/modules/settings/hooks/useWebPush';
 import type { AgentSettingsProject } from '@/shared/types';
@@ -76,7 +77,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
   });
 
   useEffect(() => {
-    if (!isAdmin && (activeTab === 'users' || activeTab === 'browser')) setActiveTab('agents');
+    if ((!isAdmin && (activeTab === 'admin' || activeTab === 'browser')) || (IS_PLATFORM && activeTab === 'account')) setActiveTab('agents');
   }, [activeTab, isAdmin, setActiveTab]);
 
   const {
@@ -283,7 +284,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
               {activeTab === 'plugins' && <PluginSettingsTab />}
 
-              {activeTab === 'users' && isAdmin && <UsersSettingsTab />}
+              {activeTab === 'account' && !IS_PLATFORM && <AccountSettingsTab />}
+              {activeTab === 'admin' && isAdmin && <UsersSettingsTab />}
 
               {activeTab === 'about' && <AboutTab />}
             </div>

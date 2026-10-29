@@ -133,17 +133,32 @@
     "browser": "Browser",
     "notifications": "Notifications",
     "plugins": "Plugins",
-    "users": "Users",
+    "account": "Account",
+    "admin": "Admin",
     "about": "About"
   },
   "users": {
-    "title": "Users",
+    "title": "Manage other accounts",
     "description": "Each account has its own project and session list. CLI credentials and the host filesystem remain shared.",
     "add": "Add user",
     "username": "Username",
     "password": "Initial password",
     "create": "Create account",
-    "creating": "Creating…"
+    "creating": "Creating…",
+    "edit": "Edit account",
+    "newPassword": "New password (leave blank to keep current)",
+    "save": "Save changes",
+    "saved": "Saved"
+  },
+  "account": {
+    "title": "Account",
+    "description": "Change your sign-in details. Your current password is required to save.",
+    "username": "Username",
+    "currentPassword": "Current password",
+    "newPassword": "New password (leave blank to keep current)",
+    "save": "Save changes",
+    "saving": "Saving…",
+    "saved": "Saved"
   },
   "notifications": {
     "title": "Notifications",

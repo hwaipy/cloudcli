@@ -133,17 +133,32 @@
     "browser": "浏览器",
     "notifications": "通知",
     "plugins": "插件",
-    "users": "用户",
+    "account": "账户",
+    "admin": "管理员",
     "about": "关于"
   },
   "users": {
-    "title": "用户",
+    "title": "管理其他账户",
     "description": "每个账号有各自的项目和会话列表。CLI 凭据与主机文件系统仍然共用。",
     "add": "新增用户",
     "username": "用户名",
     "password": "初始密码",
     "create": "创建账号",
-    "creating": "创建中…"
+    "creating": "创建中…",
+    "edit": "修改账户",
+    "newPassword": "新密码（留空则不修改）",
+    "save": "保存修改",
+    "saved": "已保存"
+  },
+  "account": {
+    "title": "账户",
+    "description": "修改自己的登录信息。保存时需要输入当前密码。",
+    "username": "用户名",
+    "currentPassword": "当前密码",
+    "newPassword": "新密码（留空则不修改）",
+    "save": "保存修改",
+    "saving": "保存中…",
+    "saved": "已保存"
   },
   "notifications": {
     "title": "通知",

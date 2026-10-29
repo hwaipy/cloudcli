@@ -53,6 +53,7 @@ type AuthContextValue = {
   login: (username: string, password: string) => Promise<AuthActionResult>;
   register: (username: string, password: string) => Promise<AuthActionResult>;
   logout: () => void;
+  refreshUser: () => Promise<void>;
   refreshOnboardingStatus: () => Promise<void>;
 };
 
@@ -355,6 +356,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
     clearSession();
   }, [clearSession]);
 
+  const refreshUser = useCallback(async () => {
+    const response = await api.auth.user();
+    const payload = await parseJsonSafely<AuthUserPayload>(response);
+    if (!response.ok || !payload?.user) throw new Error(readApiErrorMessage(payload) ?? 'Unable to refresh account');
+    setUser(payload.user);
+  }, []);
+
   const contextValue = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -366,6 +374,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       login,
       register,
       logout,
+      refreshUser,
       refreshOnboardingStatus,
     }),
     [
@@ -374,6 +383,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isLoading,
       login,
       logout,
+      refreshUser,
       needsSetup,
       refreshOnboardingStatus,
       register,

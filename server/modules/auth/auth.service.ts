@@ -14,6 +14,8 @@ type AuthDependencies = {
     createUser(username: string, passwordHash: string): AuthUser;
     listUsers(): Array<{ id: number; username: string }>;
     getUserByUsername(username: string): AuthLoginUser | undefined;
+    getCredentialsById(userId: number): AuthLoginUser | undefined;
+    updateAccount(userId: number, username: string, passwordHash?: string): void;
     updateLastLogin(userId: number): void;
   };
   transaction: {
@@ -131,6 +133,45 @@ export function createAuthService(dependencies: AuthDependencies) {
         if (isUniqueConstraintError(error)) {
           throw new AppError('Username already exists', { code: 'AUTH_USERNAME_CONFLICT', statusCode: 409 });
         }
+        throw error;
+      }
+    },
+
+    async updateOwnAccount(actor: unknown, usernameInput: unknown, currentPasswordInput: unknown, newPasswordInput: unknown) {
+      const userId = actor && typeof actor === 'object' && 'id' in actor ? Number(actor.id) : NaN;
+      const account = Number.isSafeInteger(userId) ? dependencies.users.getCredentialsById(userId) : undefined;
+      if (!account) throw new AppError('Account not found.', { code: 'AUTH_USER_REQUIRED', statusCode: 401 });
+      if (typeof currentPasswordInput !== 'string' || !await dependencies.comparePassword(currentPasswordInput, account.password_hash)) {
+        throw new AppError('Current password is incorrect.', { code: 'AUTH_INVALID_CREDENTIALS', statusCode: 401 });
+      }
+      return this.updateAccountRecord(userId, usernameInput, newPasswordInput);
+    },
+
+    async updateManagedUser(actor: unknown, userIdInput: unknown, usernameInput: unknown, newPasswordInput: unknown) {
+      this.listUsers(actor);
+      if (dependencies.platformMode) throw new AppError('Multi-user accounts require token authentication.', { code: 'MULTI_USER_UNAVAILABLE', statusCode: 409 });
+      const userId = Number(userIdInput);
+      if (!Number.isSafeInteger(userId) || userId <= 0 || !dependencies.users.getCredentialsById(userId)) {
+        throw new AppError('Account not found.', { code: 'AUTH_USER_NOT_FOUND', statusCode: 404 });
+      }
+      if (Number((actor as AuthUser).id) === userId) {
+        throw new AppError('Use account settings to change your own profile.', { code: 'AUTH_SELF_UPDATE_REQUIRED', statusCode: 400 });
+      }
+      return this.updateAccountRecord(userId, usernameInput, newPasswordInput);
+    },
+
+    async updateAccountRecord(userId: number, usernameInput: unknown, newPasswordInput: unknown) {
+      const username = typeof usernameInput === 'string' ? usernameInput.trim() : '';
+      const newPassword = typeof newPasswordInput === 'string' ? newPasswordInput : '';
+      if (username.length < 3 || (newPasswordInput !== undefined && newPassword.length < 6)) {
+        throw new AppError('Username must be at least 3 characters, password at least 6 characters', { code: 'AUTH_CREDENTIALS_TOO_SHORT', statusCode: 400 });
+      }
+      try {
+        const passwordHash = newPasswordInput === undefined ? undefined : await dependencies.hashPassword(newPassword);
+        dependencies.users.updateAccount(userId, username, passwordHash);
+        return { user: { id: userId, username } };
+      } catch (error) {
+        if (isUniqueConstraintError(error)) throw new AppError('Username already exists', { code: 'AUTH_USERNAME_CONFLICT', statusCode: 409 });
         throw error;
       }
     },
