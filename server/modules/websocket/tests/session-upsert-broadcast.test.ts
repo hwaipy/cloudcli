@@ -91,6 +91,24 @@ test('a session with no provider id yet reports null rather than omitting the fi
   });
 });
 
+test('upserts broadcast the user-send time, not later transcript writes', async () => {
+  await withIsolatedDatabase(async () => {
+    sessionsDb.createSession('ordered-session', 'codex', '/workspace/demo', 'Ordered',
+      '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z');
+    sessionsDb.recordUserMessage('ordered-session');
+    const sentAt = sessionsDb.getSessionById('ordered-session')?.last_user_message_at;
+    const connection = new FakeConnection();
+    connectedClients.add(connection as never);
+
+    sessionsDb.createSession('ordered-session', 'codex', '/workspace/demo', 'Ordered',
+      '2020-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z');
+    await broadcastSessionUpserted('ordered-session');
+
+    assert.ok(sentAt);
+    assert.equal((connection.frames[0].session as { lastActivity: string }).lastActivity, sentAt);
+  });
+});
+
 test('an unresolvable id broadcasts nothing', async () => {
   await withIsolatedDatabase(async () => {
     const connection = new FakeConnection();

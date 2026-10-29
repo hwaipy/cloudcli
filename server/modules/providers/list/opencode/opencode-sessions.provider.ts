@@ -146,6 +146,8 @@ const buildTokenUsage = (totals: OpenCodeTokenTotals | undefined): AnyRecord | u
 
   return {
     used,
+    contextUsed: null,
+    sessionTotalTokens: used,
     inputTokens: displayInputTokens,
     outputTokens,
     breakdown: {

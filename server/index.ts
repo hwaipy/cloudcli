@@ -384,6 +384,11 @@ async function startServer() {
         // Clean up plugin processes on shutdown
         const shutdownRuntimeServices = async () => {
             try {
+                await providerRuntimeService.shutdown();
+            } catch (err) {
+                console.error('[Providers] Error stopping runtimes during shutdown:', getErrorMessage(err));
+            }
+            try {
                 await browserUseService.stopAllSessions();
             } catch (err) {
                 console.error('[Browser] Error stopping sessions during shutdown:', getErrorMessage(err));

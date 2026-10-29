@@ -325,6 +325,7 @@ export function useChatSessionState({
   // placeholder entry exists anymore. Background-only work shows in the
   // indicator but is not a response in flight: the composer can send.
   const sessionActivity = (activeSessionId && processingSessions?.get(activeSessionId)) || null;
+  const hasSessionActivity = sessionActivity !== null;
   const isProcessing = sessionActivity !== null && !sessionActivity.background;
   const canAbortSession = isProcessing && sessionActivity.canInterrupt;
 
@@ -1003,7 +1004,7 @@ export function useChatSessionState({
 
   useEffect(() => {
     if (!isActive) return;
-    if (!scrollContainerRef.current || chatMessages.length === 0) return;
+    if (!scrollContainerRef.current || (chatMessages.length === 0 && !hasSessionActivity)) return;
     if (isLoadingMoreRef.current || isLoadingMoreMessages || pendingScrollRestoreRef.current) return;
     if (searchScrollActiveRef.current) return;
 
@@ -1014,7 +1015,7 @@ export function useChatSessionState({
         }
       }, 50);
     }
-  }, [chatMessages.length, isActive, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
+  }, [chatMessages.length, hasSessionActivity, isActive, isLoadingMoreMessages, isUserScrolledUp, scrollToBottom]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;

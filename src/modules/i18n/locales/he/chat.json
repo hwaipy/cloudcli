@@ -126,12 +126,12 @@
     "send": "שליחה",
     "stop": "עצירה",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter לשליחה • Shift+Enter לשורה חדשה • Tab להחלפת מצב • / לפקודות סלאש",
-      "enter": "Enter לשליחה • Shift+Enter לשורה חדשה • Tab להחלפת מצב • / לפקודות סלאש",
+      "ctrlEnter": "Ctrl+Enter לשליחה • Shift+Enter לשורה חדשה • / לפקודות סלאש",
+      "enter": "Enter לשליחה • Shift+Enter לשורה חדשה • / לפקודות סלאש",
       "queue": "Enter להוספת ההודעה הבאה לתור",
       "appendQueued": "Enter להוספה להודעה שבתור"
     },
-    "clickToChangeMode": "לחיצה להחלפת מצב ההרשאות (או Tab בשדה הקלט)",
+    "clickToChangeMode": "לחיצה להחלפת מצב ההרשאות",
     "showAllCommands": "הצגת כל הפקודות",
     "clearInput": "ניקוי הקלט",
     "scrollToBottom": "גלילה לסוף",
@@ -152,7 +152,6 @@
     "loadingModels": "טוען מודלים…",
     "modelMenu": "בחירת מודל ורמת חשיבה",
     "permissionHeading": "איך לאשר פעולות של {{provider}}?",
-    "permissionCycleHint": "לחיצה על Tab בשדה הקלט מחליפה מצב",
     "permissionTriggerLabel": "{{mode}}: {{heading}}",
     "editing": {
       "title": "החלפת הודעה קודמת",

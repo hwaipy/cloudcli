@@ -1,5 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { join } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -9,6 +10,38 @@ import { getConnectableHost, normalizeLoopbackHost } from './shared/networkHosts
 // version the server process is actually running. Reading package.json here and
 // injecting it keeps the frontend free of imports that reach outside src/.
 const pkg = createRequire(import.meta.url)('./package.json')
+
+// Publish the initial static graph and its decoded byte sizes for the tiny boot entry.
+let bootFiles = []
+const bootAssetsPlugin = {
+  name: 'boot-assets',
+  apply: 'build',
+  generateBundle(_options, bundle) {
+    const entry = Object.values(bundle).find(item =>
+      item.type === 'chunk' && Object.keys(item.modules).some(id => id.endsWith('/src/main.tsx'))
+    )
+    if (!entry) throw new Error('Could not find the CloudCLI application entry')
+
+    const files = new Set()
+    const visit = fileName => {
+      if (files.has(fileName)) return
+      const item = bundle[fileName]
+      if (!item || item.type !== 'chunk') return
+      files.add(fileName)
+      for (const imported of item.imports) visit(imported)
+      for (const css of item.viteMetadata?.importedCss || []) files.add(css)
+    }
+    visit(entry.fileName)
+
+    bootFiles = [...files]
+  },
+  writeBundle(options) {
+    if (!options.dir) throw new Error('Boot assets need an output directory')
+    // Vite may change JS/CSS after generateBundle; measure the written files.
+    const assets = bootFiles.map(file => ({ file, bytes: statSync(join(options.dir, file)).size }))
+    writeFileSync(join(options.dir, 'boot-assets.json'), JSON.stringify({ assets }))
+  },
+}
 
 export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
@@ -25,25 +58,9 @@ export default defineConfig(({ mode }) => {
   // TODO: Remove support for legacy PORT variables in all locations in a future major release, leaving only SERVER_PORT.
   const serverPort = env.SERVER_PORT || env.PORT || 3001
 
-  const debugBase = env.CLOUDCLI_DEBUG_BASE || ''
-  const debugProxy = debugBase ? Object.fromEntries(
-    ['api', 'ws', 'shell', 'plugin-ws'].map(route => [debugBase + '/' + route, {
-      target: `http://${proxyHost}:${serverPort}`,
-      ws: true,
-      rewrite: path => path.slice(debugBase.length),
-    }])
-  ) : {}
-
   return {
-    base: debugBase ? debugBase + '/' : '/',
-    plugins: [react(), ...(debugBase ? [{
-      name: 'isolated-debug-proxy',
-      transformIndexHtml: {
-        order: 'post',
-        handler: () => [{ tag: 'script', injectTo: 'head-prepend', children:
-          readFileSync(new URL('./scripts/debug-proxy-client.js', import.meta.url), 'utf8') }],
-      },
-    }] : [])],
+    base: '/',
+    plugins: [react(), bootAssetsPlugin],
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version)
     },
@@ -54,10 +71,8 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       host,
-      allowedHosts: debugBase ? ['ai.hwaipy.cn'] : undefined,
       port: parseInt(env.VITE_PORT) || 5173,
       proxy: {
-        ...debugProxy,
         '/api': `http://${proxyHost}:${serverPort}`,
         '/ws': {
           target: `ws://${proxyHost}:${serverPort}`,

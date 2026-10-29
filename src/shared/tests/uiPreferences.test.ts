@@ -35,6 +35,7 @@ test('a fresh install gets the documented defaults', () => {
     showRawParameters: false,
     showThinking: true,
     sendByCtrlEnter: false,
+    codexEnterQueues: false,
     sidebarVisible: true,
     keepProjectsExpanded: false,
     voiceEnabled: false,
@@ -42,11 +43,12 @@ test('a fresh install gets the documented defaults', () => {
 });
 
 test('the stored blob is read back', () => {
-  storeUiPreferences({ showThinking: false, voiceEnabled: true });
+  storeUiPreferences({ showThinking: false, voiceEnabled: true, codexEnterQueues: true });
 
   const preferences = readStoredUiPreferences();
   assert.equal(preferences.showThinking, false);
   assert.equal(preferences.voiceEnabled, true);
+  assert.equal(preferences.codexEnterQueues, true);
   assert.equal(preferences.sidebarVisible, true, 'unlisted keys keep their default');
 });
 

@@ -2,9 +2,10 @@ import path from 'node:path';
 
 import type { WebSocket } from 'ws';
 
-import { sessionsDb } from '@/modules/database/index.js';
-import { providerModelsService, sessionsService } from '@/modules/providers/index.js';
+import { sessionDraftsDb, sessionsDb } from '@/modules/database/index.js';
+import { providerCapabilitiesService, providerModelsService, sessionsService } from '@/modules/providers/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
+import { broadcastSessionUpserted } from '@/modules/websocket/services/session-upsert-broadcast.service.js';
 import { connectedClients, WS_OPEN_STATE } from '@/modules/websocket/services/websocket-state.service.js';
 import {
   getGlobalImageAssetsDir,
@@ -19,7 +20,10 @@ import type {
   ProviderPermissionDecision,
   ProviderRuntimeWriter,
 } from '@/shared/types.js';
-import { parseIncomingJsonObject } from '@/shared/utils.js';
+import { createNormalizedMessage, generateMessageId, parseIncomingJsonObject } from '@/shared/utils.js';
+
+/** Sockets that subscribed before a detached queued turn began. */
+const sessionSubscribers = new Map<string, Set<WebSocket>>();
 
 /**
  * Trust boundary for client-supplied image attachments: chat.send options come
@@ -73,6 +77,7 @@ export type ProviderRuntimeGateway = {
     writer: ProviderRuntimeWriter,
   ): Promise<unknown>;
   abort(provider: LLMProvider, sessionId: string): Promise<boolean>;
+  steer?(provider: LLMProvider, sessionId: string, text: string): Promise<boolean>;
   stopBackgroundTask(provider: LLMProvider, sessionId: string, taskId: string): Promise<boolean>;
   /** Whether a provider runtime still holds background work for the session after its turn ended. */
   hasBackgroundWork(sessionId: string): boolean;
@@ -219,8 +224,18 @@ async function dispatchRun(
   dependencies: ChatWebSocketDependencies,
   extraRuntimeOptions: AnyRecord = {},
   beforeRun?: (run: NonNullable<ReturnType<typeof chatRunRegistry.startRun>>) => void | Promise<void>,
+  recordSendTime = true,
 ): Promise<{ started: boolean; error: string | null }> {
   const provider = session.provider as LLMProvider;
+  const clientOptions = (data.options ?? {}) as AnyRecord;
+  const requestedPermissionMode = typeof clientOptions.permissionMode === 'string'
+    ? clientOptions.permissionMode.trim()
+    : '';
+  if (requestedPermissionMode
+    && !providerCapabilitiesService.getProviderCapabilities(provider).permissionModes.includes(requestedPermissionMode)) {
+    if (ws) sendProtocolError(ws, 'INVALID_PERMISSION_MODE', 'Unsupported permission mode.', sessionId);
+    return { started: false, error: 'Unsupported permission mode.' };
+  }
 
   const run = chatRunRegistry.startRun({
     appSessionId: sessionId,
@@ -242,7 +257,14 @@ async function dispatchRun(
     return { started: false, error: 'A run is already in progress for this session.' };
   }
 
-  const clientOptions = (data.options ?? {}) as AnyRecord;
+  if (!ws) {
+    for (const subscriber of sessionSubscribers.get(sessionId) ?? []) {
+      if (subscriber.readyState === WS_OPEN_STATE) {
+        chatRunRegistry.attachConnection(sessionId, subscriber);
+      }
+    }
+  }
+
   const command = typeof data.content === 'string' ? data.content : '';
 
   // Record what this turn runs with so reopening the session later restores the
@@ -253,6 +275,9 @@ async function dispatchRun(
   }
   if (typeof clientOptions.effort === 'string' && clientOptions.effort.trim()) {
     providerModelsService.setSessionEffort(provider, sessionId, clientOptions.effort);
+  }
+  if (requestedPermissionMode) {
+    providerModelsService.setSessionPermissionMode(provider, sessionId, requestedPermissionMode);
   }
 
   const attachmentCandidates = [
@@ -291,6 +316,22 @@ async function dispatchRun(
     // be taken back. Inside the try so a rewind that throws still releases the
     // run instead of leaving the session processing forever.
     await beforeRun?.(run);
+    if (recordSendTime) {
+      sessionsDb.recordUserMessage(sessionId);
+      void broadcastSessionUpserted(sessionId).catch((error) => {
+        console.error('[Chat] Failed to broadcast user message order', { sessionId, error });
+      });
+    }
+    if (!ws) {
+      // Detached queued turns have no browser-originated optimistic echo.
+      // Publish one before the provider starts so the executing message appears
+      // in the transcript immediately for every subscribed tab.
+      run.writer.send(createNormalizedMessage({
+        id: generateMessageId('local'), kind: 'text', role: 'user',
+        provider, sessionId, content: command,
+        images: runtimeOptions.images, files: runtimeOptions.files,
+      }));
+    }
     await dependencies.runtime.run(provider, command, runtimeOptions, run.writer);
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
@@ -442,6 +483,67 @@ async function handleChatAbort(
   });
 }
 
+/** Appends text to the currently active Codex turn without starting another run. */
+async function handleChatSteer(
+  ws: WebSocket,
+  userId: string | number | null,
+  data: AnyRecord,
+  dependencies: ChatWebSocketDependencies,
+): Promise<void> {
+  const sessionId = readRequiredSessionId(data);
+  const clientMessageId = typeof data.clientMessageId === 'string' ? data.clientMessageId : '';
+  if (!sessionId) {
+    sendProtocolError(ws, 'SESSION_ID_REQUIRED', 'chat.steer requires a sessionId.');
+    return;
+  }
+  const run = chatRunRegistry.getRun(sessionId);
+  if (!run || run.status !== 'running' || run.provider !== 'codex') {
+    sendProtocolError(ws, 'NO_ACTIVE_CODEX_TURN', 'There is no active Codex turn to steer.', sessionId, { clientMessageId });
+    return;
+  }
+  const queuedMessageId = typeof data.queuedMessageId === 'string' ? data.queuedMessageId : null;
+  const numericUserId = Number(userId);
+  if (queuedMessageId && (!Number.isSafeInteger(numericUserId) || numericUserId <= 0)) {
+    sendProtocolError(ws, 'AUTH_REQUIRED', 'A signed-in user is required to steer a queued message.', sessionId, { clientMessageId });
+    return;
+  }
+  const taken = queuedMessageId
+    ? sessionDraftsDb.takeQueuedMessage(numericUserId, sessionId, queuedMessageId)
+    : null;
+  if (queuedMessageId && !taken) {
+    sendProtocolError(ws, 'QUEUED_MESSAGE_NOT_FOUND', 'That queued message is no longer available.', sessionId, { clientMessageId });
+    return;
+  }
+  const content = taken ? taken.message.content.trim() : typeof data.content === 'string' ? data.content.trim() : '';
+  if (!content || (taken?.message.attachments.length ?? 0) > 0) {
+    if (taken) sessionDraftsDb.restoreTakenQueuedMessage(numericUserId, sessionId, taken.message, taken.index);
+    sendProtocolError(ws, 'STEER_CONTENT_UNSUPPORTED', 'Steer requires text without attachments.', sessionId, { clientMessageId });
+    return;
+  }
+  let steerAccepted = false;
+  try {
+    steerAccepted = !!dependencies.runtime.steer && await dependencies.runtime.steer('codex', sessionId, content);
+    if (!steerAccepted) {
+      if (taken) sessionDraftsDb.restoreTakenQueuedMessage(numericUserId, sessionId, taken.message, taken.index);
+      sendProtocolError(ws, 'STEER_UNAVAILABLE', 'Codex App Server could not accept this steering message.', sessionId, { clientMessageId });
+      return;
+    }
+    sessionsDb.recordUserMessage(sessionId);
+    void broadcastSessionUpserted(sessionId).catch((error) => {
+      console.error('[Chat] Failed to broadcast steer message order', { sessionId, error });
+    });
+    run.writer.send(createNormalizedMessage({
+      id: generateMessageId('steer'), kind: 'text', role: 'user',
+      provider: 'codex', sessionId, content,
+    }));
+    sendJson(ws, { kind: 'chat_steer_accepted', sessionId, clientMessageId });
+  } catch (error) {
+    // Once Codex accepted the instruction, restoring it would send it twice.
+    if (taken && !steerAccepted) sessionDraftsDb.restoreTakenQueuedMessage(numericUserId, sessionId, taken.message, taken.index);
+    sendProtocolError(ws, 'STEER_FAILED', error instanceof Error ? error.message : String(error), sessionId, { clientMessageId });
+  }
+}
+
 /**
  * Handles `chat.stop-task`: stops one background task of a session — an
  * agent, a workflow or a backgrounded command that is still going after its
@@ -517,6 +619,13 @@ function handleChatSubscribe(
       continue;
     }
 
+    let subscribers = sessionSubscribers.get(sessionId);
+    if (!subscribers) {
+      subscribers = new Set();
+      sessionSubscribers.set(sessionId, subscribers);
+    }
+    subscribers.add(ws);
+
     const lastSeqRaw = (target as AnyRecord).lastSeq;
     const lastSeq = typeof lastSeqRaw === 'number' && Number.isFinite(lastSeqRaw)
       ? Math.max(0, Math.floor(lastSeqRaw))
@@ -584,6 +693,7 @@ function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDe
  * Inbound protocol (client to server):
  * - `chat.send`                { sessionId, content, options? }
  * - `chat.abort`               { sessionId }
+ * - `chat.steer`               { sessionId, content?, queuedMessageId? }
  * - `chat.stop-task`           { sessionId, taskId }
  * - `chat.subscribe`           { sessions: [{ sessionId, lastSeq? }] }
  * - `chat.permission-response` { requestId, allow, updatedInput?, message?, rememberEntry? }
@@ -596,11 +706,9 @@ function handlePermissionResponse(data: AnyRecord, dependencies: ChatWebSocketDe
 /**
  * Runs a turn for a session with no client attached.
  *
- * Used by scheduled messages, which fire from a timer: there is no socket to
- * report errors to and no audience to stream to. The run is registered exactly
- * like an interactive one, so anyone who opens the session while it is going
- * subscribes and replays it from the start, and the session shows as busy
- * everywhere in the meantime.
+ * Used by queued and scheduled messages, which fire without an originating
+ * socket. Existing subscribers receive the new run; later subscribers replay
+ * it from the start. The queued user turn is emitted before provider output.
  *
  * Resolves when the provider run settles. Returns false when the session has
  * gone away or is busy without `interruptActiveRun`, which the caller reports
@@ -618,6 +726,8 @@ export async function runDetachedChatTurn(
      * land mid-run, so the timer outranks whatever is running.
      */
     interruptActiveRun?: boolean;
+    /** Queued turns were ranked when the user submitted them. */
+    alreadyRecordedUserSend?: boolean;
   },
   dependencies: ChatWebSocketDependencies,
 ): Promise<{ started: boolean; error: string | null }> {
@@ -655,6 +765,9 @@ export async function runDetachedChatTurn(
     session,
     { sessionId: input.sessionId, content: input.content, options: input.options ?? {} },
     dependencies,
+    {},
+    undefined,
+    !input.alreadyRecordedUserSend,
   );
 }
 
@@ -688,6 +801,9 @@ export function handleChatConnection(
         case 'chat.abort':
           await handleChatAbort(ws, data, dependencies);
           return;
+        case 'chat.steer':
+          await handleChatSteer(ws, userId, data, dependencies);
+          return;
         case 'chat.stop-task':
           await handleChatStopTask(ws, data, dependencies);
           return;
@@ -711,5 +827,9 @@ export function handleChatConnection(
   ws.on('close', () => {
     console.log('[INFO] Chat client disconnected');
     connectedClients.delete(ws);
+    for (const [sessionId, subscribers] of sessionSubscribers) {
+      subscribers.delete(ws);
+      if (subscribers.size === 0) sessionSubscribers.delete(sessionId);
+    }
   });
 }

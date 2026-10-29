@@ -13,7 +13,45 @@
     <link
       href="https://fonts.googleapis.com/css2?family=Encode+Sans:wght@400;500;600;700&family=Merriweather:ital,wght@0,400;0,700;1,400;1,700&display=swap"
       rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
     />
+    <style>
+      body { margin: 0; }
+      #boot-screen {
+        position: fixed; inset: 0; z-index: 9999; display: flex;
+        align-items: center; justify-content: center; background: #f8fafc;
+        color: #0f172a; font: 14px system-ui, sans-serif;
+      }
+      #boot-content { width: min(280px, calc(100vw - 48px)); text-align: center; }
+      #boot-logo { display: block; width: 48px; height: 48px; margin: 0 auto 16px; }
+      #boot-name { font-size: 18px; font-weight: 600; letter-spacing: .01em; }
+      #boot-progress { margin-top: 28px; }
+      #boot-progress[hidden], #boot-retry[hidden] { display: none; }
+      #boot-track { height: 4px; overflow: hidden; border-radius: 999px; background: #dbe3ee; }
+      #boot-bar {
+        width: 0; height: 100%; border-radius: inherit; background: #2563eb;
+        transition: width .25s ease; box-shadow: 0 0 10px #2563eb66;
+      }
+      #boot-track[data-indeterminate] #boot-bar {
+        width: 35%; animation: boot-sweep 1.3s ease-in-out infinite;
+      }
+      @keyframes boot-sweep {
+        from { transform: translateX(-110%); }
+        to { transform: translateX(290%); }
+      }
+      #boot-status { min-height: 20px; margin-top: 10px; color: #64748b; font-size: 12px; }
+      #boot-retry { margin-top: 14px; border: 0; border-radius: 6px; padding: 8px 14px; background: #2563eb; color: white; cursor: pointer; }
+      @media (prefers-color-scheme: dark) {
+        #boot-screen { background: #09090b; color: #f8fafc; }
+        #boot-track { background: #27272a; }
+        #boot-status { color: #a1a1aa; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #boot-bar { transition: none; }
+        #boot-track[data-indeterminate] #boot-bar { animation: none; width: 35%; }
+      }
+    </style>
 
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json" crossorigin="use-credentials"  />
@@ -35,8 +73,24 @@
     <meta name="format-detection" content="telephone=no" />
   </head>
   <body>
+    <div id="boot-screen" role="status" aria-live="polite">
+      <div id="boot-content">
+        <svg id="boot-logo" viewBox="0 0 32 32" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+          <rect width="32" height="32" rx="8" fill="#2563eb" />
+          <path d="M8 9a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H12l-4 4V9Z" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div id="boot-name">CloudCLI</div>
+        <div id="boot-progress" hidden>
+          <div id="boot-track" role="progressbar" aria-label="Loading CloudCLI" aria-valuemin="0" aria-valuemax="100" data-indeterminate>
+            <div id="boot-bar"></div>
+          </div>
+          <div id="boot-status"></div>
+          <button id="boot-retry" type="button" hidden></button>
+        </div>
+      </div>
+    </div>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module" src="/src/bootstrap.ts"></script>
     
     <!-- Service Worker Registration -->
     <script>

@@ -1,4 +1,5 @@
 import type { NormalizedMessage } from '@/shared/types';
+import { isStorableChatMessage } from '@/shared/utils';
 
 const LOCAL_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const LOCAL_USER_DEDUPE_CLOCK_SKEW_MS = 10_000;
@@ -103,6 +104,7 @@ export function removeOptimisticUserEchoes(
   const claimedServerIds = new Set<string>();
 
   return realtimeMessages.filter((message) => {
+    if (!isStorableChatMessage(message)) return false;
     if (!message.id.startsWith('local_')) {
       return true;
     }

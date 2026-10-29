@@ -35,8 +35,8 @@ function range(start: number, end: number): NormalizedMessage[] {
 
 test('automatic latest-history URL is explicitly bounded to the newest page', () => {
   assert.equal(
-    buildSessionMessagesUrl('session/1', { limit: 20, offset: 0 }),
-    '/api/providers/sessions/session%2F1/messages?limit=20&offset=0',
+    buildSessionMessagesUrl('session/1', { limit: 100, offset: 0 }),
+    '/api/providers/sessions/session%2F1/messages?limit=100&offset=0',
   );
 });
 
@@ -100,11 +100,11 @@ test('tool-result totals walk bounded bridge chunks until a contiguous anchor', 
   });
   assert.deepEqual(planLatestPageBridge(cached, latest, 100, 115, 1), {
     offset: 21,
-    limit: 20,
+    limit: 100,
   });
   assert.deepEqual(planLatestPageBridge(cached, latest, 100, 115, 21), {
     offset: 41,
-    limit: 20,
+    limit: 100,
   });
 
   const firstBridgeChunk = range(105, 105);

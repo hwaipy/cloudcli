@@ -138,6 +138,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- restores its exact runtime configuration instead of provider defaults.
     model TEXT,
     effort TEXT,
+    -- Permission mode selected for this session; NULL for sessions that have
+    -- never had an app-recorded choice.
+    permission_mode TEXT,
     -- The app session this one was branched from, NULL for sessions created
     -- normally. Informational only: a fork is a fully independent provider
     -- session, and deleting the source does not affect it.
@@ -145,6 +148,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     isArchived BOOLEAN DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    -- Sidebar order changes only when CloudCLI accepts a user message.
+    last_user_message_at DATETIME,
     PRIMARY KEY (session_id),
     FOREIGN KEY (project_path) REFERENCES projects(project_path)
     ON DELETE SET NULL

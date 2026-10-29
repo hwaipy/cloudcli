@@ -8,9 +8,11 @@ import type { BackgroundTaskSummary,
   ProjectSession,
   LLMProvider,
   ProviderModelActions,
-  ProviderModelsDefinition } from '@/shared/types';
+  ProviderModelsDefinition,
+  SessionActivity } from '@/shared/types';
 import { getIntrinsicMessageKey } from '@/modules/chat/utils/messageKeys';
 import { groupConsecutiveTools, isToolGroupItem } from '@/modules/chat/utils/toolGrouping';
+import { foldCodexUpdates } from '@/modules/chat/utils/codexUpdates';
 import { useLazyRowObserver } from '@/modules/chat/hooks/useLazyRowObserver';
 import LazyMessageRow from '@/modules/chat/transcript/LazyMessageRow';
 import MessageComponent from '@/modules/chat/transcript/MessageComponent';
@@ -19,6 +21,7 @@ import ToolGroupContainer from '@/modules/chat/transcript/ToolGroupContainer';
 import LoadAllMessagesOverlay from '@/modules/chat/transcript/LoadAllMessagesOverlay';
 import ChatExportMenu from '@/modules/chat/transcript/ChatExportMenu';
 import { BackgroundTasksStrip } from '@/modules/chat/transcript/BackgroundTasksStrip';
+import ActivityIndicator from '@/modules/chat/transcript/ActivityIndicator';
 
 /**
  * How many of the newest rows mount with real content on the first commit,
@@ -32,10 +35,8 @@ type ChatMessagesPaneProps = {
   onWheel: () => void;
   onTouchMove: () => void;
   isLoadingSessionMessages: boolean;
-  /** True while the viewed session has an active provider run in flight. */
-  isProcessing?: boolean;
-  /** True while ChatComposer's floating activity/stop tab is rendered above the input. */
-  hasActivityIndicator?: boolean;
+  /** The viewed session's current work, shown after its newest message. */
+  activity?: SessionActivity | null;
   chatMessages: ChatMessage[];
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
@@ -103,8 +104,7 @@ function ChatMessagesPane({
   onWheel,
   onTouchMove,
   isLoadingSessionMessages,
-  isProcessing = false,
-  hasActivityIndicator = false,
+  activity = null,
   chatMessages,
   selectedSession,
   currentSessionId,
@@ -148,9 +148,13 @@ function ChatMessagesPane({
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   const lazyRows = useLazyRowObserver(scrollContainerRef);
+  const displayMessages = useMemo(
+    () => foldCodexUpdates(visibleMessages, provider),
+    [visibleMessages, provider],
+  );
   const groupedVisibleMessages = useMemo(
-    () => groupConsecutiveTools(visibleMessages, Boolean(showThinking)),
-    [visibleMessages, showThinking],
+    () => groupConsecutiveTools(displayMessages, Boolean(showThinking)),
+    [displayMessages, showThinking],
   );
 
   // Stable, deterministic keys for the messages rendered this pass.
@@ -190,9 +194,7 @@ function ChatMessagesPane({
       ref={scrollContainerRef}
       onWheel={onWheel}
       onTouchMove={onTouchMove}
-      className={`chat-messages-pane relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden pt-3 sm:pt-4 ${
-        hasActivityIndicator ? 'pb-12 sm:pb-14' : 'pb-3 sm:pb-4'
-      }`}
+      className="chat-messages-pane relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-3 pt-3 sm:pb-4 sm:pt-4"
     >
       {chatMessages.length > 0 && (
         <div className="pointer-events-none sticky right-4 top-3 z-10 mb-2 flex items-start justify-between gap-2 sm:px-4">
@@ -220,14 +222,14 @@ function ChatMessagesPane({
         </div>
       )}
       <div className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
-      {(isLoadingSessionMessages || isProcessing) && chatMessages.length === 0 ? (
+      {isLoadingSessionMessages && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
           <div className="flex items-center justify-center space-x-2">
             <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-gray-400" />
             <p>{t('session.loading.sessionMessages')}</p>
           </div>
         </div>
-      ) : chatMessages.length === 0 ? (
+      ) : chatMessages.length === 0 ? (activity ? null : (
         <ProviderSelectionEmptyState
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
@@ -244,7 +246,7 @@ function ChatMessagesPane({
           onShowAllTasks={onShowAllTasks}
           setInput={setInput}
         />
-      ) : (
+      )) : (
         <>
           {/* Loading indicator for older messages (hide when load-all is active) */}
           {isLoadingMoreMessages && !isLoadingAllMessages && !allMessagesLoaded && (
@@ -361,6 +363,10 @@ function ChatMessagesPane({
           })()}
         </>
       )}
+      <ActivityIndicator
+        key={selectedSession?.id || currentSessionId || 'new-session'}
+        activity={activity}
+      />
       </div>
     </div>
   );

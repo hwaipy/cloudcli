@@ -144,3 +144,21 @@ test('a stream tick re-renders the growing row, not the collapsed tool groups ab
     `only the streaming row may re-render per flush; got ${JSON.stringify(perFlush)}`,
   );
 });
+
+test('the active work indicator is the last item in the scrolling transcript', () => {
+  const chatMessages = [assistantRow(0)];
+  const view = render(
+    <UiPreferencesProvider>
+      <ChatMessagesPane
+        {...(paneProps(chatMessages) as any)}
+        activity={{ statusText: 'Computing', canInterrupt: true, startedAt: Date.now() }}
+      />
+    </UiPreferencesProvider>,
+  );
+
+  const transcript = view.container.querySelector('.chat-messages-pane');
+  const workRow = transcript?.querySelector('[role="status"]');
+  assert.ok(workRow);
+  assert.equal(workRow.parentElement?.lastElementChild, workRow);
+  assert.match(workRow.textContent ?? '', /Computing/);
+});

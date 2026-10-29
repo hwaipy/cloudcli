@@ -21,6 +21,7 @@ type SessionRepositoryRow = {
   custom_name?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
+  last_user_message_at?: string | null;
 };
 
 export type ProjectListItem = {
@@ -123,7 +124,7 @@ function mapSessionRowToSummary(row: SessionRepositoryRow): SessionSummary {
     provider: row.provider,
     summary: row.custom_name || '',
     messageCount: 0,
-    lastActivity: row.updated_at ?? row.created_at ?? new Date().toISOString(),
+    lastActivity: row.last_user_message_at ?? row.created_at ?? new Date().toISOString(),
   };
 }
 

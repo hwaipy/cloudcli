@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDownIcon } from 'lucide-react';
 
@@ -8,7 +8,7 @@ import { useWebSocket } from '@/shared/context/WebSocketContext';
 import PermissionContext from '@/modules/chat/context/PermissionContext';
 import { MarkdownWorkspaceContext } from '@/modules/chat/context/MarkdownWorkspaceContext';
 import { TranscriptSessionContext } from '@/modules/chat/context/TranscriptSessionContext';
-import { api } from '@/shared/api';
+import { api, readApiJson } from '@/shared/api';
 import type {
   ChatMessage,
   Project,
@@ -43,6 +43,7 @@ type ChatInterfaceProps = {
   showRawParameters?: boolean;
   showThinking?: boolean;
   sendByCtrlEnter?: boolean;
+  codexEnterQueues?: boolean;
   externalMessageUpdate?: number;
   newSessionTrigger?: number;
   onTaskClick?: (...args: unknown[]) => void;
@@ -67,6 +68,7 @@ function ChatInterface({
   showRawParameters,
   showThinking,
   sendByCtrlEnter,
+  codexEnterQueues,
   externalMessageUpdate,
   newSessionTrigger,
   onShowAllTasks,
@@ -74,6 +76,7 @@ function ChatInterface({
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { subscribe } = useWebSocket();
   const { t } = useTranslation('chat');
+  const [codexAppServerEnabled, setCodexAppServerEnabled] = useState(false);
   const processingSessions = useProcessingSessions();
   const {
     markSessionProcessing: onSessionProcessing,
@@ -115,7 +118,6 @@ function ChatInterface({
     setPendingPermissionRequests,
     availablePermissionModes,
     selectPermissionMode,
-    cyclePermissionMode,
     providerModelCatalog,
     providerModelsLoading,
     providerModelActions,
@@ -128,6 +130,16 @@ function ChatInterface({
     selectedSession,
     selectedProject,
   });
+
+  useEffect(() => {
+    if (provider !== 'codex') return;
+    let cancelled = false;
+    void api.providers.codexTransport()
+      .then((response) => readApiJson<{ data: { transport: string } }>(response))
+      .then((payload) => { if (!cancelled) setCodexAppServerEnabled(payload.data.transport === 'app-server'); })
+      .catch(() => { if (!cancelled) setCodexAppServerEnabled(false); });
+    return () => { cancelled = true; };
+  }, [provider]);
 
   const {
     chatMessages,
@@ -192,7 +204,6 @@ function ChatInterface({
     textareaRef,
     inputHighlightRef,
     isTextareaExpanded,
-    slashCommandsCount,
     filteredCommands,
     frequentCommands,
     commandQuery,
@@ -216,9 +227,11 @@ function ChatInterface({
     handleSubmit,
     backgroundSendPrompt,
     resolveBackgroundSendPrompt,
-    queuedDraft,
+    queuedDrafts,
     editQueuedDraft,
     deleteQueuedDraft,
+    reorderQueuedDraft,
+    steerQueuedDraft,
     handleVoiceTranscript,
     handleInputChange,
     handleKeyDown,
@@ -226,12 +239,9 @@ function ChatInterface({
     handleTextareaClick,
     handleTextareaInput,
     syncInputOverlayScroll,
-    handleClearInput,
     handleAbortSession,
     handlePermissionDecision,
     handleGrantToolPermission,
-    handleInputFocusChange,
-    isInputFocused,
     commandModalPayload,
     closeCommandModal,
     showCostModal,
@@ -244,7 +254,6 @@ function ChatInterface({
     currentSessionId,
     provider,
     permissionMode,
-    cyclePermissionMode,
     currentProviderModel,
     currentProviderEffort,
     isLoading: isProcessing,
@@ -252,7 +261,10 @@ function ChatInterface({
     canAbortSession,
     tokenBudget,
     sendMessage,
+    subscribe,
     sendByCtrlEnter,
+    codexEnterQueues,
+    canSteer: provider === 'codex' && codexAppServerEnabled,
     onSessionProcessing,
     onSessionEstablished: handleSessionEstablished,
     onFileOpen,
@@ -325,26 +337,6 @@ function ChatInterface({
   usePaletteOpsRegister({ insertComposerText });
 
   useEffect(() => {
-    if (!canAbortSession) {
-      return;
-    }
-
-    const handleGlobalEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.repeat || event.defaultPrevented) {
-        return;
-      }
-
-      event.preventDefault();
-      handleAbortSession();
-    };
-
-    document.addEventListener('keydown', handleGlobalEscape, { capture: true });
-    return () => {
-      document.removeEventListener('keydown', handleGlobalEscape, { capture: true });
-    };
-  }, [canAbortSession, handleAbortSession]);
-
-  useEffect(() => {
     return () => {
       resetStreamingState();
     };
@@ -372,26 +364,8 @@ function ChatInterface({
     }
   }, [onNavigateToSession, selectedSession?.id]);
 
-  const { scheduledMessages, schedule: scheduleMessage, cancel: cancelScheduledMessage } =
+  const { scheduledMessages, cancel: cancelScheduledMessage } =
     useScheduledMessages(currentSessionId || selectedSession?.id || null, subscribe);
-
-  /**
-   * Hands the composer's current text to the server to send later, and clears
-   * the box as a send would — the message has left the composer either way.
-   */
-  const handleScheduleMessage = useCallback(async (scheduledFor: Date) => {
-    const content = input.trim();
-    if (!content) return;
-
-    const scheduled = await scheduleMessage({
-      content,
-      scheduledFor,
-      options: { model: currentProviderModel, effort: currentProviderEffort, permissionMode },
-    });
-    if (scheduled) {
-      setInput('');
-    }
-  }, [currentProviderEffort, currentProviderModel, input, permissionMode, scheduleMessage, setInput]);
 
   const permissionContextValue = useMemo(() => ({
     pendingPermissionRequests,
@@ -424,9 +398,7 @@ function ChatInterface({
     }
   }, [currentSessionId, provider, selectProviderEffort, selectedSession?.id]);
 
-  // Mirrors ChatComposer's own visibility check so the message pane can
-  // reserve enough bottom space to keep the floating status tab from
-  // overlapping the last message.
+  // A permission prompt takes precedence over the transcript's work status.
   const hasActivityIndicator = Boolean(sessionActivity && pendingPermissionRequests.length === 0);
 
   const selectedProviderLabel =
@@ -461,7 +433,7 @@ function ChatInterface({
           <TranscriptSessionContext.Provider value={transcriptSessionValue}>
             <ChatMessagesPane
               scrollContainerRef={scrollContainerRef}
-              // Not redundant with the `scroll` listener. A first page is 20 rows,
+              // Not redundant with the `scroll` listener. A first page is 100 rows,
               // tool results fold into their calls, and the "load earlier" link is
               // hidden while more pages exist — so a short transcript is often not
               // scrollable at all and never emits `scroll`. Wheel and touch are
@@ -469,8 +441,7 @@ function ChatInterface({
               onWheel={handleScroll}
               onTouchMove={handleScroll}
               isLoadingSessionMessages={isLoadingSessionMessages}
-              isProcessing={isProcessing}
-              hasActivityIndicator={hasActivityIndicator}
+              activity={hasActivityIndicator ? sessionActivity : null}
               chatMessages={chatMessages}
               selectedSession={selectedSession}
               currentSessionId={currentSessionId}
@@ -537,8 +508,9 @@ function ChatInterface({
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
-          activity={sessionActivity}
           isLoading={isProcessing}
+          canSteer={provider === 'codex' && codexAppServerEnabled}
+          codexEnterQueues={codexEnterQueues}
           onAbortSession={handleAbortSession}
           permissionMode={permissionMode}
           availablePermissionModes={availablePermissionModes}
@@ -556,19 +528,17 @@ function ChatInterface({
           isEditingSentMessage={Boolean(editingAnchorId)}
           onCancelEditMessage={cancelEditMessage}
           scheduledMessages={scheduledMessages}
-          onScheduleMessage={handleScheduleMessage}
           onCancelScheduledMessage={cancelScheduledMessage}
-          slashCommandsCount={slashCommandsCount}
           onToggleCommandMenu={handleToggleCommandMenu}
-          hasInput={Boolean(input.trim())}
-          onClearInput={handleClearInput}
           onSubmit={handleSubmit}
           isDragActive={isDragActive}
-          queuedDraft={queuedDraft}
+          queuedDrafts={queuedDrafts}
           backgroundSendPrompt={backgroundSendPrompt}
           onResolveBackgroundSendPrompt={resolveBackgroundSendPrompt}
           onEditQueuedDraft={editQueuedDraft}
           onDeleteQueuedDraft={deleteQueuedDraft}
+          onReorderQueuedDraft={reorderQueuedDraft}
+          onSteerQueuedDraft={steerQueuedDraft}
           attachedFiles={attachedFiles}
           onRemoveAttachment={(index) =>
             setAttachedFiles((previous) =>
@@ -600,11 +570,8 @@ function ChatInterface({
           onTextareaPaste={handlePaste}
           onTextareaScrollSync={syncInputOverlayScroll}
           onTextareaInput={handleTextareaInput}
-          isInputFocused={isInputFocused}
-          onInputFocusChange={handleInputFocusChange}
           placeholder={t('input.placeholder', { provider: selectedProviderLabel })}
           isTextareaExpanded={isTextareaExpanded}
-          sendByCtrlEnter={sendByCtrlEnter}
         />
         </div>
       </div>

@@ -386,6 +386,12 @@ export type ChatMessage = {
   model?: string;
   isThinking?: boolean;
   isStreaming?: boolean;
+  /** Codex prose is a progress update or the completed answer; absent for other providers and legacy rows. */
+  codexPhase?: 'commentary' | 'final_answer';
+  /** Ordered Codex progress, tool calls, and reasoning folded after the final answer arrives. */
+  codexUpdates?: ChatMessage[];
+  /** Elapsed time from the user's prompt (or first visible work) to the final answer. */
+  codexWorkDurationMs?: number;
   isToolUse?: boolean;
   toolName?: string;
   toolInput?: unknown;
@@ -539,6 +545,8 @@ export type NormalizedMessage = {
   // kind-specific fields (flat for simplicity)
   role?: 'user' | 'assistant';
   content?: string;
+  /** Codex's persisted prose phase, or commentary for live SDK text before history reconciliation. */
+  codexPhase?: 'commentary' | 'final_answer';
   /**
    * The model that answered this turn, as the backend read it off the
    * provider's own record of the row (today: Claude's `message.model`). Never
@@ -770,6 +778,7 @@ export type CommandModalPayload = {
 
 /** A composer message queued while its session is still busy, holding the text, the in-memory and already-uploaded attachments and the send options snapshotted at queue time so it can be auto-sent unchanged once the session goes idle. */
 export type QueuedDraft = {
+  id?: string;
   content: string;
   /** Browser files retained while this composer stays mounted, for editing. */
   attachments: File[];

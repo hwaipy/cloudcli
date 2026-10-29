@@ -157,12 +157,37 @@ test('recent sessions are globally ordered, paginated, and limited to visible co
     assert.equal(firstPage.total, 4);
     assert.deepEqual(
       firstPage.sessions.map((session) => session.session_id),
-      ['session-newest', 'session-same-second'],
+      ['session-same-second', 'session-newest'],
     );
     assert.equal(secondPage.total, 4);
     assert.deepEqual(
       secondPage.sessions.map((session) => session.session_id),
       ['session-middle', 'session-oldest'],
+    );
+  });
+});
+
+test('transcript updates do not reorder sessions; accepted user messages do', async () => {
+  await withIsolatedDatabase(() => {
+    const project = '/workspace/sidebar-order';
+    sessionsDb.createSession('older', 'codex', project, 'Older', '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z');
+    sessionsDb.createSession('newer', 'codex', project, 'Newer', '2021-01-01T00:00:00.000Z', '2021-01-01T00:00:00.000Z');
+
+    sessionsDb.recordUserMessage('older');
+    const sentAt = sessionsDb.getSessionById('older')?.last_user_message_at;
+    assert.ok(sentAt);
+
+    // A provider reply arrives later, but it is not another user send.
+    sessionsDb.createSession('newer', 'codex', project, 'Newer', '2021-01-01T00:00:00.000Z', '2030-01-01T00:00:00.000Z');
+    assert.equal(sessionsDb.getSessionById('older')?.last_user_message_at, sentAt);
+    assert.equal(sessionsDb.getSessionById('newer')?.last_user_message_at, null);
+    assert.deepEqual(
+      sessionsDb.getSessionsByProjectPathPage(project, 2, 0).map((row) => row.session_id),
+      ['older', 'newer'],
+    );
+    assert.deepEqual(
+      sessionsDb.getRecentSessionsPage(2, 0).sessions.map((row) => row.session_id),
+      ['older', 'newer'],
     );
   });
 });

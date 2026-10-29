@@ -16,7 +16,7 @@ import type { SessionStore } from '@/modules/chat/hooks/useSessionStore';
  * set, without waiting for the running-sessions poll.
  */
 
-type ActivityLog = Array<{ sessionId: string; tasks: BackgroundTaskSummary[] } | { sessionId: string; idle: true }>;
+type ActivityLog = Array<{ sessionId: string; tasks: BackgroundTaskSummary[] } | { sessionId: string; idle: true } | { sessionId: string; processing: true }>;
 
 const renderHandlers = () => {
   let listener: ((event: ServerEvent) => void) | null = null;
@@ -43,6 +43,7 @@ const renderHandlers = () => {
     accumulatedStreamRef: { current: '' },
     lastSeqRef: { current: new Map() },
     statusCheckSentAtRef: { current: new Map() },
+    onSessionProcessing: (sessionId) => { if (sessionId) log.push({ sessionId, processing: true }); },
     onSessionIdle: (sessionId) => {
       if (sessionId) {
         activityBySession.delete(sessionId);
@@ -194,6 +195,16 @@ test('a refused stop request does not idle the session it was sent on', () => {
   // Any other rejection still means the send never became a run.
   dispatch(event({ kind: 'protocol_error', code: 'SESSION_NOT_FOUND', error: 'gone' }));
   assert.deepEqual(log, [{ sessionId: 'viewed-session', idle: true }]);
+});
+
+test('a refused steer or overlapping send does not mark the active turn idle', () => {
+  const { dispatch, log, stored } = renderHandlers();
+
+  dispatch(event({ kind: 'protocol_error', code: 'NO_ACTIVE_CODEX_TURN', error: 'There is no active Codex turn to steer.' }));
+  dispatch(event({ kind: 'protocol_error', code: 'RUN_IN_PROGRESS', error: 'A run is already in progress.' }));
+
+  assert.deepEqual(log, [{ sessionId: 'viewed-session', processing: true }], 'the collision restores busy state without idling it');
+  assert.equal(stored.filter((message) => message.kind === 'error').length, 2);
 });
 
 test('a stop refused for a task whose end never arrived settles its chip instead of erroring', () => {

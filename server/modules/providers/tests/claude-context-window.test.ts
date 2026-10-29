@@ -202,7 +202,7 @@ test('the history-derived usage keeps the window the run reported', async () => 
       assert.equal(reloaded.total, 262_144);
       assert.equal(reloaded.used, 42_512);
 
-      // A session no run has reported on still falls back to the setting.
+      // A session with neither a report nor a configured window stays unknown.
       const otherService = createProviderTokenUsageService({
         getSessionById: () => ({
           session_id: 'app-other',
@@ -212,7 +212,7 @@ test('the history-derived usage keeps the window the run reported', async () => 
         }) as never,
         isProviderSessionSuperseded: () => false,
       });
-      assert.equal((await otherService.getSessionTokenUsage('app-other')).total, 160_000);
+      assert.equal((await otherService.getSessionTokenUsage('app-other')).total, undefined);
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }

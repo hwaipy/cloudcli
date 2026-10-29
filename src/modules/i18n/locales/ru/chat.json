@@ -138,11 +138,11 @@
     "send": "Отправить",
     "stop": "Остановить",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter для отправки • Shift+Enter для новой строки • Tab для смены режима • / для команд",
-      "enter": "Enter для отправки • Shift+Enter для новой строки • Tab для смены режима • / для команд",
+      "ctrlEnter": "Ctrl+Enter для отправки • Shift+Enter для новой строки • / для команд",
+      "enter": "Enter для отправки • Shift+Enter для новой строки • / для команд",
       "appendQueued": "Enter, чтобы добавить к сообщению в очереди"
     },
-    "clickToChangeMode": "Нажмите для смены режима разрешений (или нажмите Tab в поле ввода)",
+    "clickToChangeMode": "Нажмите для смены режима разрешений",
     "showAllCommands": "Показать все команды",
     "clearInput": "Очистить ввод",
     "scrollToBottom": "Прокрутить вниз",
@@ -260,7 +260,6 @@
   },
   "composer": {
     "permissionHeading": "Как подтверждать действия {{provider}}?",
-    "permissionCycleHint": "Нажмите Tab в поле ввода, чтобы переключить режим",
     "permissionTriggerLabel": "{{mode}}: {{heading}}",
     "editing": {
       "title": "Замена предыдущего сообщения",

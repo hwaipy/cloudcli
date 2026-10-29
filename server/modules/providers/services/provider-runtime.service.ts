@@ -91,6 +91,14 @@ export function createProviderRuntimeService(
       return Boolean(await dependencies.resolveProvider(providerName).runtime.abort(sessionId));
     },
 
+    async steer(providerName: LLMProvider, sessionId: string, text: string): Promise<boolean> {
+      return Boolean(await dependencies.resolveProvider(providerName).runtime.steer?.(sessionId, text));
+    },
+
+    async shutdown(): Promise<void> {
+      await Promise.allSettled(dependencies.listProviders().map((provider) => provider.runtime.shutdown?.()));
+    },
+
     async stopBackgroundTask(providerName: LLMProvider, sessionId: string, taskId: string): Promise<boolean> {
       // A runtime that never holds background work has no task to stop.
       const { runtime } = dependencies.resolveProvider(providerName);

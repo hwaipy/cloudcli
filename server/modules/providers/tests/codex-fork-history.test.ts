@@ -73,6 +73,20 @@ test('metadata-only Codex forks show frozen inherited prompts, replies and edit 
   });
 });
 
+test('Codex history retains commentary and final-answer phases', async () => {
+  await withRollouts(async (root) => {
+    await rollout(root, 'phases', [
+      { type: 'event_msg', payload: { type: 'user_message', message: 'Check the build' } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'commentary', content: [{ type: 'output_text', text: 'Checking.' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: 'Build passed.' }] } },
+    ]);
+    const history = await new CodexSessionsProvider().fetchHistory('phases');
+    assert.deepEqual(history.messages.filter((message) => message.role === 'assistant').map((message) => message.codexPhase), [
+      'commentary', 'final_answer',
+    ]);
+  });
+});
+
 test('forks of forks combine frozen ancestors and new local turns in order, including pagination', async () => {
   await withRollouts(async (root) => {
     const source = await rollout(root, 'source', turn('turn-a', 'first'));

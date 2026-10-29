@@ -4,6 +4,7 @@ import { providerAuthService } from '@/modules/providers/services/provider-auth.
 import { claudeSettingsPermissionsService } from '@/modules/providers/services/claude-settings-permissions.service.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { providerCliService } from '@/modules/providers/services/provider-cli.service.js';
+import { codexPlanUsageService } from '@/modules/providers/services/codex-plan-usage.service.js';
 import { providerMcpService } from '@/modules/providers/services/mcp.service.js';
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { providerTokenUsageService } from '@/modules/providers/services/provider-token-usage.service.js';
@@ -633,6 +634,19 @@ router.get(
   }),
 );
 
+/** Returns only quota fields for the Codex account configured on this host. */
+router.get(
+  '/codex/plan-usage',
+  asyncHandler(async (_req: Request, res: Response) => {
+    res.json(createApiSuccessResponse(await codexPlanUsageService.getCodexPlanUsage()));
+  }),
+);
+
+/** Lets the chat composer expose steering only when the experimental runtime is active. */
+router.get('/codex/transport', (_req: Request, res: Response) => {
+  res.json(createApiSuccessResponse({ transport: process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server' ? 'app-server' : 'exec' }));
+});
+
 /** The installed CLI version, the newest npm release, whether this server can update the CLI and whether it is doing so. */
 router.get(
   '/:provider/cli',
@@ -749,6 +763,36 @@ router.post(
     res.json(createApiSuccessResponse(
       stored ?? { provider, sessionId, effort, source: 'session' as const },
     ));
+  }),
+);
+
+/** Reports the permission mode stored for this session. */
+router.get(
+  '/:provider/sessions/:sessionId/permission-mode',
+  asyncHandler(async (req: Request, res: Response) => {
+    const provider = parseProvider(req.params.provider);
+    const sessionId = parseSessionId(req.params.sessionId);
+    res.json(createApiSuccessResponse(providerModelsService.getSessionPermissionMode(provider, sessionId)));
+  }),
+);
+
+/** Persists a permission choice for the next turn in this session. */
+router.post(
+  '/:provider/sessions/:sessionId/permission-mode',
+  asyncHandler(async (req: Request, res: Response) => {
+    const provider = parseProvider(req.params.provider);
+    const sessionId = parseSessionId(req.params.sessionId);
+    const permissionMode = typeof req.body?.permissionMode === 'string'
+      ? req.body.permissionMode.trim()
+      : '';
+    const result = providerModelsService.setSessionPermissionMode(provider, sessionId, permissionMode);
+    if (!result) {
+      throw new AppError('Session not found for this provider.', {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+    res.json(createApiSuccessResponse(result));
   }),
 );
 
@@ -889,7 +933,8 @@ router.post(
     const provider = parseProvider(body.provider);
     const projectPath = typeof body.projectPath === 'string' ? body.projectPath : '';
     const initialMessage = typeof body.initialMessage === 'string' ? body.initialMessage : '';
-    const result = sessionsService.createAppSession(provider, projectPath, initialMessage);
+    const permissionMode = typeof body.permissionMode === 'string' ? body.permissionMode.trim() : undefined;
+    const result = sessionsService.createAppSession(provider, projectPath, initialMessage, permissionMode);
     res.status(201).json(createApiSuccessResponse(result));
   }),
 );

@@ -7,7 +7,7 @@ import Database from 'better-sqlite3';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import type { AnyRecord } from '@/shared/types.js';
-import { AppError, getOpenCodeDatabasePath } from '@/shared/utils.js';
+import { AppError, getOpenCodeDatabasePath, readCodexContextUsage, readCodexSessionTotalTokens } from '@/shared/utils.js';
 
 type SessionRow = NonNullable<ReturnType<typeof sessionsDb.getSessionById>>;
 
@@ -33,6 +33,9 @@ type ProviderTokenUsageServiceDependencies = {
 type TokenUsageResult = {
   used: number;
   total?: number;
+  contextUsed?: null;
+  /** Billable tokens across this session, separate from the latest context occupancy. */
+  sessionTotalTokens?: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
@@ -184,6 +187,7 @@ async function findCodexSessionFile(
 /** Newest `token_count` snapshot in the given JSONL text, or null when it has none. */
 function findCodexTokenUsage(fileContent: string): TokenUsageResult | null {
   const lines = fileContent.trim().split('\n');
+  let latestSessionTotal: number | undefined;
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     try {
@@ -195,34 +199,27 @@ function findCodexTokenUsage(fileContent: string): TokenUsageResult | null {
         continue;
       }
 
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let totalTokens = 0;
-      if (tokenInfo.total_token_usage) {
-        inputTokens = readUsageNumber(tokenInfo.total_token_usage.input_tokens);
-        outputTokens = readUsageNumber(tokenInfo.total_token_usage.output_tokens);
-        totalTokens = readUsageNumber(tokenInfo.total_token_usage.total_tokens)
-          || inputTokens + outputTokens;
+      latestSessionTotal ??= readCodexSessionTotalTokens(tokenInfo);
+      const contextUsage = readCodexContextUsage(tokenInfo);
+      if (contextUsage) {
+        return {
+          ...contextUsage,
+          ...(latestSessionTotal !== undefined ? { sessionTotalTokens: latestSessionTotal } : {}),
+        };
       }
-      return {
-        used: totalTokens,
-        total: readUsageNumber(tokenInfo.model_context_window) || 200_000,
-        inputTokens,
-        outputTokens,
-        breakdown: { input: inputTokens, output: outputTokens },
-      };
     } catch {
       // A provider may be writing the last JSONL line while this read happens.
     }
   }
 
-  return null;
+  return latestSessionTotal === undefined
+    ? null
+    : { ...emptyCodexTokenUsage(), contextUsed: null, sessionTotalTokens: latestSessionTotal };
 }
 
 function emptyCodexTokenUsage(): TokenUsageResult {
   return {
     used: 0,
-    total: 200_000,
     inputTokens: 0,
     outputTokens: 0,
     breakdown: { input: 0, output: 0 },
@@ -254,16 +251,12 @@ export function summarizeClaudeTokenUsage(
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
+  const billedByMessageId = new Map<string, number>();
+  let unkeyedBilledTokens = 0;
+  let foundMainThreadUsage = false;
 
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    // A subagent's turns report the subagent's context window, not this
-    // conversation's; reading one makes the counter drop to the subagent's
-    // number and bounce back on the next main-thread turn.
-    if (entry?.isSidechain === true) {
-      continue;
-    }
-
     const usage = entry?.type === 'assistant' ? entry.message?.usage : null;
     if (!usage) {
       continue;
@@ -289,23 +282,39 @@ export function summarizeClaudeTokenUsage(
       continue;
     }
 
-    cacheReadTokens = rowCacheReadTokens;
-    cacheCreationTokens = rowCacheCreationTokens;
-    inputTokens = rowInputTokens;
-    outputTokens = rowOutputTokens;
-    break;
+    // Streaming snapshots can repeat the same assistant message id with a
+    // growing output count. Bill that request once, at its largest snapshot.
+    const messageId = typeof entry.message?.id === 'string' ? entry.message.id : null;
+    const billedTokens = rowInputTokens + rowOutputTokens;
+    if (messageId) {
+      billedByMessageId.set(messageId, Math.max(billedByMessageId.get(messageId) ?? 0, billedTokens));
+    } else {
+      unkeyedBilledTokens += billedTokens;
+    }
+
+    // Sidechain requests belong to the bill, but not the main conversation's
+    // context window. The newest main-thread request determines occupancy.
+    if (!foundMainThreadUsage && entry?.isSidechain !== true) {
+      cacheReadTokens = rowCacheReadTokens;
+      cacheCreationTokens = rowCacheCreationTokens;
+      inputTokens = rowInputTokens;
+      outputTokens = rowOutputTokens;
+      foundMainThreadUsage = true;
+    }
   }
 
   const parsedContextWindow = Number.parseInt(configuredContextWindow ?? '', 10);
-  const configuredOrDefaultContextWindow = Number.isFinite(parsedContextWindow) ? parsedContextWindow : 160_000;
+  const configuredContextWindowValue = Number.isFinite(parsedContextWindow) && parsedContextWindow > 0
+    ? parsedContextWindow : undefined;
   const contextWindow = reportedContextWindow && reportedContextWindow > 0
     ? reportedContextWindow
-    : configuredOrDefaultContextWindow;
+    : configuredContextWindowValue;
   const cacheTokens = cacheReadTokens + cacheCreationTokens;
 
   return {
     used: inputTokens + outputTokens,
-    total: contextWindow,
+    sessionTotalTokens: unkeyedBilledTokens + [...billedByMessageId.values()].reduce((sum, tokens) => sum + tokens, 0),
+    ...(contextWindow ? { total: contextWindow } : {}),
     inputTokens,
     outputTokens,
     cacheReadTokens,
@@ -325,10 +334,6 @@ function parseClaudeUsageEntries(fileContent: string): AnyRecord[] {
     }
   }
   return entries;
-}
-
-function claudeEntriesHaveUsage(entries: AnyRecord[]): boolean {
-  return entries.some((entry) => entry?.type === 'assistant' && entry.message?.usage);
 }
 
 function readOpenCodeTokenUsage(databasePath: string, providerSessionId: string): TokenUsageResult {
@@ -383,6 +388,10 @@ function readOpenCodeTokenUsage(databasePath: string, providerSessionId: string)
 
     return {
       used,
+      // OpenCode's session counters are cumulative; they do not reveal the
+      // latest request's context occupancy or the model's window.
+      contextUsed: null,
+      sessionTotalTokens: used,
       inputTokens,
       outputTokens,
       breakdown: { input: inputTokens, output: outputTokens },
@@ -524,10 +533,11 @@ export function createProviderTokenUsageService(
       }
 
       const tail = await dependencies.readTextFileTail(sessionFilePath, TOKEN_USAGE_TAIL_BYTES);
-      let entries = parseClaudeUsageEntries(tail.content);
-      if (!claudeEntriesHaveUsage(entries) && !tail.isComplete) {
-        entries = parseClaudeUsageEntries(await dependencies.readTextFile(sessionFilePath));
-      }
+      // Context needs only the newest row, but session-wide billing needs the
+      // complete transcript. Never label a partial tail as a cumulative sum.
+      const entries = parseClaudeUsageEntries(
+        tail.isComplete ? tail.content : await dependencies.readTextFile(sessionFilePath),
+      );
       return summarizeClaudeTokenUsage(
         entries,
         dependencies.getClaudeContextWindow(),

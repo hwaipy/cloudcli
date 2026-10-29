@@ -1,5 +1,5 @@
-import { MessageSquare, Terminal, Folder, GitBranch, ClipboardCheck, MonitorPlay, type LucideIcon } from 'lucide-react';
-import { Fragment } from 'react';
+import { MessageSquare, Terminal, Folder, GitBranch, ClipboardCheck, MonitorPlay, ChevronDown, type LucideIcon } from 'lucide-react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { Dispatch, KeyboardEvent, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -61,6 +61,12 @@ export default function WorkspaceTabs({
 }: WorkspaceTabsProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
+  // The tab strip stays mounted for measurement when it is replaced by the dropdown.
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  // The dropdown is only open while the user is choosing a workspace view.
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const builtInTabs: BuiltInTab[] = [
     ...BASE_TABS,
@@ -79,6 +85,35 @@ export default function WorkspaceTabs({
     }));
 
   const tabs: TabDefinition[] = [...builtInTabs, ...pluginTabs];
+  const selectedTab = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const strip = tabsRef.current;
+    if (!container || !strip || typeof ResizeObserver === 'undefined') return;
+    const measure = () => setIsCollapsed(strip.scrollWidth > container.clientWidth + 1);
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    observer.observe(strip);
+    measure();
+    return () => observer.disconnect();
+  }, [tabs.length, activeTab]);
+
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setIsMenuOpen(false);
+    };
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setIsMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [isMenuOpen]);
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const tabList = event.currentTarget.closest('[role="tablist"]');
@@ -100,6 +135,8 @@ export default function WorkspaceTabs({
   };
 
   return (
+    <div ref={containerRef} className="relative ml-auto w-full min-w-0">
+    <div ref={tabsRef} className={isCollapsed ? 'pointer-events-none invisible absolute right-0 top-0' : 'ml-auto w-max max-w-full'}>
     <PillBar
       role="tablist"
       aria-label={t('tabs.views', { defaultValue: 'Workspace views' })}
@@ -143,5 +180,41 @@ export default function WorkspaceTabs({
         );
       })}
     </PillBar>
+    </div>
+    {isCollapsed && selectedTab && (
+      <div className="ml-auto w-fit max-w-full">
+        <button
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={isMenuOpen}
+          aria-label={t('tabs.views', { defaultValue: 'Workspace views' })}
+          onClick={() => setIsMenuOpen((open) => !open)}
+          className="flex h-8 max-w-full items-center gap-2 rounded-lg border border-border/60 bg-muted/50 px-2.5 text-sm text-foreground"
+        >
+          {selectedTab.kind === 'builtin' ? <selectedTab.icon className="h-4 w-4 shrink-0" /> : <PluginIcon pluginName={selectedTab.pluginName} iconFile={selectedTab.iconFile} className="h-4 w-4 shrink-0" />}
+          <span className="min-w-0 truncate">{selectedTab.kind === 'builtin' ? t(selectedTab.labelKey) : selectedTab.label}</span>
+          <ChevronDown className="h-4 w-4 shrink-0" />
+        </button>
+        {isMenuOpen && (
+          <div role="menu" aria-label={t('tabs.views', { defaultValue: 'Workspace views' })} className="absolute right-0 top-full z-50 mt-1 max-h-[min(70vh,28rem)] min-w-44 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={tab.id === activeTab}
+                onClick={() => { setActiveTab(tab.id); setIsMenuOpen(false); }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
+              >
+                {tab.kind === 'builtin' ? <tab.icon className="h-4 w-4 shrink-0" /> : <PluginIcon pluginName={tab.pluginName} iconFile={tab.iconFile} className="h-4 w-4 shrink-0" />}
+                <span className="truncate">{tab.kind === 'builtin' ? t(tab.labelKey) : tab.label}</span>
+                {tab.id === activeTab && <span className="ml-auto text-primary">✓</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    )}
+    </div>
   );
 }

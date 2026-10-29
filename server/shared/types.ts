@@ -204,6 +204,8 @@ export type ProviderSessionModel = {
   model: string;
   /** NULL means this session has not recorded an effort choice yet. */
   effort: string | null;
+  /** NULL until the app records this session's permission choice. */
+  permissionMode: string | null;
   source: ProviderSessionModelSource;
 };
 
@@ -337,6 +339,8 @@ export type NormalizedMessage = {
   seq?: number;
   role?: 'user' | 'assistant';
   content?: string;
+  /** Codex assistant prose phase from a rollout; live SDK prose is commentary until the persisted final answer is loaded. */
+  codexPhase?: 'commentary' | 'final_answer';
   /**
    * The model that produced this assistant message, as the provider reported
    * it on the transcript row (today: Claude's `message.model`, e.g.
@@ -652,8 +656,8 @@ export type ProviderRuntimeContext = {
    * and background-work paths can be driven without a CLI process.
    */
   createQuery?: (input: { prompt: AsyncIterable<unknown>; options: AnyRecord }) => AsyncIterable<unknown> & {
-    interrupt(): Promise<void>;
-    stopTask?(taskId: string): Promise<void>;
+    interrupt(): Promise<unknown>;
+    stopTask?(taskId: string): Promise<unknown>;
   };
 };
 
@@ -987,6 +991,8 @@ export type CreateCredentialResult = {
  * through `readQueuedChatMessage`).
  */
 export type QueuedChatMessage = {
+  /** Stable per-message identity for editing or deleting one waiting turn. */
+  id?: string;
   content: string;
   options?: Record<string, unknown>;
   attachments: unknown[];

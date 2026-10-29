@@ -10,6 +10,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import providerRouter from '@/modules/providers/provider.routes.js';
+import { codexPlanUsageService } from '@/modules/providers/services/codex-plan-usage.service.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import type { IProvider } from '@/shared/interfaces.js';
 import type { BackgroundTaskSummary, WorkflowAgentActivity } from '@/shared/types.js';
@@ -79,6 +80,77 @@ test('session creation route names a CloudCLI session from the initial message',
       'abcd efg hij klm',
     );
   });
+});
+
+test('session permission mode is read from the database across requests and validates changes', async () => {
+  await withProviderServer(async (baseUrl, workspacePath) => {
+    const created = await fetch(`${baseUrl}/api/providers/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'codex', projectPath: workspacePath,
+        initialMessage: 'hello', permissionMode: 'bypassPermissions',
+      }),
+    });
+    assert.equal(created.status, 201);
+    const { data: { sessionId } } = await created.json() as { data: { sessionId: string } };
+    const url = `${baseUrl}/api/providers/codex/sessions/${sessionId}`;
+
+    const readMode = async () => {
+      const response = await fetch(`${url}/permission-mode`);
+      assert.equal(response.status, 200);
+      return (await response.json() as { data: { permissionMode: string | null } }).data.permissionMode;
+    };
+    assert.equal(await readMode(), 'bypassPermissions');
+
+    const changed = await fetch(`${url}/permission-mode`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ permissionMode: 'acceptEdits' }),
+    });
+    assert.equal(changed.status, 200);
+    assert.equal(await readMode(), 'acceptEdits');
+    assert.equal(sessionsDb.getSessionById(sessionId)?.permission_mode, 'acceptEdits');
+
+    const invalid = await fetch(`${url}/permission-mode`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ permissionMode: 'plan' }),
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal(await readMode(), 'acceptEdits');
+  });
+});
+
+test('Codex plan usage route exposes the normalized account quota', async (t) => {
+  t.mock.method(codexPlanUsageService, 'getCodexPlanUsage', async () => ({
+    buckets: [{ limitId: 'codex', limitName: null, planType: 'prolite', primary: { usedPercent: 24, windowDurationMins: 10080, resetsAt: 1793774154 }, secondary: null, rateLimitReachedType: null }],
+    resetCreditsAvailable: 2,
+    fetchedAt: '2026-10-29T00:00:00.000Z',
+  }));
+  await withProviderServer(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/providers/codex/plan-usage`);
+    const payload = await response.json() as { data: { buckets: Array<{ primary: { usedPercent: number } }> } };
+    assert.equal(response.status, 200);
+    assert.equal(payload.data.buckets[0]?.primary.usedPercent, 24);
+  });
+});
+
+test('Codex transport route reports the opt-in mode without changing the default', async () => {
+  const previous = process.env.CLOUDCLI_CODEX_TRANSPORT;
+  try {
+    await withProviderServer(async (baseUrl) => {
+      delete process.env.CLOUDCLI_CODEX_TRANSPORT;
+      const defaultResponse = await fetch(`${baseUrl}/api/providers/codex/transport`);
+      assert.equal((await defaultResponse.json() as { data: { transport: string } }).data.transport, 'exec');
+      process.env.CLOUDCLI_CODEX_TRANSPORT = 'app-server';
+      const experimentalResponse = await fetch(`${baseUrl}/api/providers/codex/transport`);
+      assert.equal((await experimentalResponse.json() as { data: { transport: string } }).data.transport, 'app-server');
+    });
+  } finally {
+    if (previous === undefined) delete process.env.CLOUDCLI_CODEX_TRANSPORT;
+    else process.env.CLOUDCLI_CODEX_TRANSPORT = previous;
+  }
 });
 
 test('conversation search streams title matches before transcript results', async () => {

@@ -120,11 +120,11 @@
     "send": "送信",
     "stop": "停止",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enterで送信 • Shift+Enterで改行 • Tabでモード切替 • / でスラッシュコマンド",
-      "enter": "Enterで送信 • Shift+Enterで改行 • Tabでモード切替 • / でスラッシュコマンド",
+      "ctrlEnter": "Ctrl+Enterで送信 • Shift+Enterで改行 • / でスラッシュコマンド",
+      "enter": "Enterで送信 • Shift+Enterで改行 • / でスラッシュコマンド",
       "appendQueued": "Enterでキュー内のメッセージに追加"
     },
-    "clickToChangeMode": "クリックで権限モードを変更（または入力欄でTab）",
+    "clickToChangeMode": "クリックで権限モードを変更",
     "showAllCommands": "すべてのコマンドを表示",
     "queue": {
       "append": "キュー内のメッセージに追加",
@@ -229,7 +229,6 @@
   },
   "composer": {
     "permissionHeading": "{{provider}} の操作をどのように承認しますか？",
-    "permissionCycleHint": "入力欄でTabを押すとモードを切り替えられます",
     "permissionTriggerLabel": "{{mode}}：{{heading}}",
     "editing": {
       "title": "以前のメッセージを置き換えています",

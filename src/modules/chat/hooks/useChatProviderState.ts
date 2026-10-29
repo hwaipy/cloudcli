@@ -31,7 +31,7 @@ const toProviderEffortOptions = (
 const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
   claude: 'default',
   cursor: 'gpt-5.3-codex',
-  codex: 'gpt-5.4',
+  codex: 'gpt-5.6-sol',
   opencode: 'anthropic/claude-sonnet-4-5',
 };
 
@@ -104,6 +104,7 @@ type SessionSelectionApiResponse = {
     sessionId?: string | null;
     model?: string | null;
     effort?: string | null;
+    permissionMode?: string | null;
     /**
      * `session` and `provider` are real answers for this session; `default`
      * means the backend had nothing recorded and returned the catalog default,
@@ -168,6 +169,16 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   const sessionSelectionLoadRequestIdRef = useRef(0);
   const sessionModelMutationIdRef = useRef(0);
   const sessionEffortMutationIdRef = useRef(0);
+  const permissionSelectionMutationIdRef = useRef(0);
+  const permissionSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Returning to a browser tab refreshes permission choices made elsewhere.
+  const [permissionRefreshCount, setPermissionRefreshCount] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setPermissionRefreshCount((count) => count + 1);
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
 
   const setStoredProviderModel = useCallback((targetProvider: LLMProvider, model: string) => {
     setProviderModels((previous) => (
@@ -396,18 +407,16 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
   useEffect(() => {
     const validModes = getPermissionModesForProvider(provider);
-    const sessionSavedMode = selectedSession?.id
-      ? (localStorage.getItem(`permissionMode-${selectedSession.id}`) as PermissionMode | null)
-      : null;
-    // Fall back to the last mode picked for this provider: a brand-new chat
-    // only receives its session id after the first send, so without this the
-    // mode chosen beforehand would snap back to the default as soon as the
-    // session id appears.
+    // An existing session uses the backend's recorded choice. Until its GET
+    // completes, show the provider default rather than another browser's
+    // unrelated last choice. New chats still remember the local last choice.
+    if (selectedSession?.id) {
+      setPermissionMode(getDefaultPermissionModeForProvider(provider));
+      return;
+    }
     const providerSavedMode = localStorage.getItem(`permissionMode-last-${provider}`) as PermissionMode | null;
-    const savedMode = [sessionSavedMode, providerSavedMode].find(
-      (mode): mode is PermissionMode => Boolean(mode && validModes.includes(mode)),
-    );
-    setPermissionMode(savedMode ?? getDefaultPermissionModeForProvider(provider));
+    setPermissionMode(providerSavedMode && validModes.includes(providerSavedMode)
+      ? providerSavedMode : getDefaultPermissionModeForProvider(provider));
   }, [selectedSession?.id, provider, getDefaultPermissionModeForProvider, getPermissionModesForProvider]);
 
   useEffect(() => {
@@ -428,24 +437,30 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   }, [selectedSession?.id]);
 
   const selectPermissionMode = useCallback((nextMode: PermissionMode) => {
+    const previousMode = permissionMode;
     setPermissionMode(nextMode);
-
-    // Persist per provider as well as per session: a brand-new chat has no
-    // session id yet, and the per-provider key keeps the choice sticky when
-    // the real id arrives (and for future sessions of this provider).
     localStorage.setItem(`permissionMode-last-${provider}`, nextMode);
-    if (selectedSession?.id) {
-      localStorage.setItem(`permissionMode-${selectedSession.id}`, nextMode);
-    }
-  }, [provider, selectedSession?.id]);
+    const sessionId = selectedSession?.id;
+    if (!sessionId) return;
 
-  const cyclePermissionMode = useCallback(() => {
-    const modes = getPermissionModesForProvider(provider);
-
-    const currentIndex = modes.indexOf(permissionMode);
-    const nextIndex = (currentIndex + 1) % modes.length;
-    selectPermissionMode(modes[nextIndex]);
-  }, [permissionMode, provider, getPermissionModesForProvider, selectPermissionMode]);
+    // A pending session GET describes the state before this click.
+    const mutationId = ++permissionSelectionMutationIdRef.current;
+    const sessionKey = getSessionSelectionKey(provider, sessionId);
+    // Serialize rapid menu changes so an older response cannot write after a
+    // newer choice and leave the database on the wrong mode.
+    permissionSaveQueueRef.current = permissionSaveQueueRef.current.then(async () => {
+      try {
+        const response = await api.providers.setSessionPermissionMode(provider, sessionId, nextMode);
+        if (!response.ok) throw new Error(`Saving permission mode failed: ${response.status}`);
+      } catch (error) {
+        console.error('Error saving the session permission mode:', error);
+        if (permissionSelectionMutationIdRef.current === mutationId
+          && selectedSessionKeyRef.current === sessionKey) {
+          setPermissionMode(previousMode);
+        }
+      }
+    });
+  }, [permissionMode, provider, selectedSession?.id]);
 
   const availablePermissionModes = useMemo(
     () => getPermissionModesForProvider(provider),
@@ -543,6 +558,32 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
       cancelled = true;
     };
   }, [selectedSessionId, selectedSessionProvider]);
+
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    const targetProvider = selectedSessionProvider;
+    const targetKey = getSessionSelectionKey(targetProvider, selectedSessionId);
+    const mutationId = permissionSelectionMutationIdRef.current;
+    let cancelled = false;
+
+    void permissionSaveQueueRef.current
+      .then(() => api.providers.sessionPermissionMode(targetProvider, selectedSessionId))
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Loading permission mode failed: ${response.status}`);
+        return response.json() as Promise<{ success?: boolean; data?: { permissionMode?: string | null } }>;
+      })
+      .then((body) => {
+        if (cancelled || selectedSessionKeyRef.current !== targetKey
+          || permissionSelectionMutationIdRef.current !== mutationId) return;
+        const savedMode = body.success ? body.data?.permissionMode : null;
+        setPermissionMode(resolvePermissionModeForProvider(targetProvider, savedMode || 'default'));
+      })
+      .catch((error) => {
+        if (!cancelled) console.error('Error loading the session permission mode:', error);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedSessionId, selectedSessionProvider, permissionRefreshCount, resolvePermissionModeForProvider]);
 
   /**
    * Applies a model choice.
@@ -828,7 +869,6 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     setPendingPermissionRequests,
     availablePermissionModes,
     selectPermissionMode,
-    cyclePermissionMode,
     providerModelCatalog,
     providerModelsLoading,
     providerModelActions,

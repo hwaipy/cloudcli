@@ -136,12 +136,12 @@
     "send": "Kirim",
     "stop": "Hentikan",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter untuk mengirim • Shift+Enter untuk baris baru • Tab untuk mengganti mode • / untuk slash command",
-      "enter": "Enter untuk mengirim • Shift+Enter untuk baris baru • Tab untuk mengganti mode • / untuk slash command",
+      "ctrlEnter": "Ctrl+Enter untuk mengirim • Shift+Enter untuk baris baru • / untuk slash command",
+      "enter": "Enter untuk mengirim • Shift+Enter untuk baris baru • / untuk slash command",
       "queue": "Enter untuk mengantrekan pesan berikutnya",
       "appendQueued": "Enter untuk menambahkan ke pesan yang diantrekan"
     },
-    "clickToChangeMode": "Klik untuk mengganti mode izin (atau tekan Tab di input)",
+    "clickToChangeMode": "Klik untuk mengganti mode izin",
     "showAllCommands": "Tampilkan semua perintah",
     "clearInput": "Kosongkan input",
     "scrollToBottom": "Gulir ke bawah",
@@ -162,7 +162,6 @@
     "loadingModels": "Memuat model…",
     "modelMenu": "Pilih model dan tingkat penalaran",
     "permissionHeading": "Bagaimana tindakan {{provider}} harus disetujui?",
-    "permissionCycleHint": "Tekan Tab di kolom input untuk mengganti mode",
     "permissionTriggerLabel": "{{mode}}: {{heading}}",
     "editing": {
       "title": "Mengganti pesan sebelumnya",

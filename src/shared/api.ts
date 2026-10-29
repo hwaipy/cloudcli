@@ -419,6 +419,8 @@ export const api = {
     capabilities: () => get('/api/providers/capabilities'),
     authStatus: (provider: string) =>
       get(`/api/providers/${encodeURIComponent(provider)}/auth/status`),
+    codexPlanUsage: () => get('/api/providers/codex/plan-usage'),
+    codexTransport: () => get('/api/providers/codex/transport'),
     cliStatus: (provider: string) =>
       get(`/api/providers/${encodeURIComponent(provider)}/cli`),
     updateCli: (provider: string) =>
@@ -439,6 +441,7 @@ export const api = {
       provider: string;
       projectPath: string;
       initialMessage?: unknown;
+      permissionMode?: string;
     }) => post('/api/providers/sessions', payload),
     sessionMessages: (
       sessionId: string,
@@ -457,6 +460,12 @@ export const api = {
       post(`/api/providers/${provider}/sessions/${encodeURIComponent(sessionId)}/active-effort`, {
         effort,
       }),
+    setSessionPermissionMode: (provider: string, sessionId: string, permissionMode: string) =>
+      post(`/api/providers/${provider}/sessions/${encodeURIComponent(sessionId)}/permission-mode`, {
+        permissionMode,
+      }),
+    sessionPermissionMode: (provider: string, sessionId: string) =>
+      get(`/api/providers/${provider}/sessions/${encodeURIComponent(sessionId)}/permission-mode`),
 
     mcpServers: (
       provider: string,
@@ -541,7 +550,9 @@ export const api = {
     // message that is now queued.
     appendQueuedMessage: (scope: string, queuedMessage: unknown) =>
       post('/api/user/drafts/queued-message', { scope, queuedMessage }),
-    clearQueuedMessage: (scope: string) => del('/api/user/drafts/queued-message', { scope }),
+    reorderQueuedMessages: (scope: string, expectedIds: string[], orderedIds: string[]) =>
+      patch('/api/user/drafts/queued-message/order', { scope, expectedIds, orderedIds }),
+    clearQueuedMessage: (scope: string, messageId?: string) => del('/api/user/drafts/queued-message', { scope, messageId }),
   },
 
   // Server-side settings: API keys, stored credentials, notifications, web push

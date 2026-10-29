@@ -120,11 +120,11 @@
     "send": "傳送",
     "stop": "停止",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter 傳送 • Shift+Enter 換行 • Tab 切換模式 • / 斜線指令",
-      "enter": "Enter 傳送 • Shift+Enter 換行 • Tab 切換模式 • / 斜線指令",
+      "ctrlEnter": "Ctrl+Enter 傳送 • Shift+Enter 換行 • / 斜線指令",
+      "enter": "Enter 傳送 • Shift+Enter 換行 • / 斜線指令",
       "appendQueued": "Enter 加入排隊訊息"
     },
-    "clickToChangeMode": "點擊變更權限模式（或在輸入框中按 Tab）",
+    "clickToChangeMode": "點擊變更權限模式",
     "showAllCommands": "顯示所有指令",
     "clearInput": "清空輸入",
     "scrollToBottom": "捲動到底部",
@@ -278,7 +278,6 @@
   },
   "composer": {
     "permissionHeading": "如何核准 {{provider}} 的操作？",
-    "permissionCycleHint": "在輸入框中按 Tab 切換模式",
     "permissionTriggerLabel": "{{mode}}：{{heading}}",
     "editing": {
       "title": "正在取代先前的訊息",

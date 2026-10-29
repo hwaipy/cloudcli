@@ -3,7 +3,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 
 import type { ServerEvent,MarkSessionIdle,MarkSessionProcessing,PendingPermissionRequest,ProjectSession,LLMProvider,NormalizedMessage,GetSessionActivity,MarkSessionBackground } from '@/shared/types';
 import { showCompletionTitleIndicator } from '@/modules/chat/utils/pageTitleNotification';
-import { playChatCompletionSound, playNotificationSound } from '@/shared/utils';
+import { isStorableChatMessage, playChatCompletionSound, playNotificationSound } from '@/shared/utils';
 import type { SessionStore } from '@/modules/chat/hooks/useSessionStore';
 import { normalizedToChatMessages } from '@/modules/chat/hooks/useChatMessages';
 import { collectRunningBackgroundTasks, listRunningBackgroundLaunches, readBackgroundTaskId, readBackgroundTaskStatus } from '@/modules/chat/utils/backgroundTasks';
@@ -22,7 +22,7 @@ type UseChatRealtimeHandlersArgs = {
   provider: LLMProvider;
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
-  setTokenBudget: (budget: Record<string, unknown> | null) => void;
+  setTokenBudget: Dispatch<SetStateAction<Record<string, unknown> | null>>;
   pendingPermissionRequests: PendingPermissionRequest[];
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   streamTimerRef: MutableRefObject<number | null>;
@@ -128,6 +128,11 @@ export function useChatRealtimeHandlers({
           onWebSocketReconnect?.();
           return;
 
+        // The composer consumes this acknowledgement by clientMessageId. It
+        // is not a transcript row and intentionally carries no message id.
+        case 'chat_steer_accepted':
+          return;
+
         case 'history_truncated': {
           // An already-sent message was replaced. Every client watching this
           // session drops the superseded turns before the replacement streams
@@ -204,12 +209,24 @@ export function useChatRealtimeHandlers({
             }
           }
           if (sid) {
+            if (msg.code === 'RUN_IN_PROGRESS') {
+              // The rejected send raced the activity update. Restore the
+              // server-confirmed busy state so the next submit queues.
+              onSessionProcessing?.(sid);
+            }
             // Surface the failure in the conversation and stop the spinner —
             // the run never started (or was rejected), so no `complete` follows.
             // A refused stop request is not about the run: the task had
             // already settled, and idling here would drop a response in
             // flight on that session.
-            if (msg.code !== 'NO_SUCH_TASK' && msg.code !== 'TASK_ID_REQUIRED') {
+            // A steer refusal is about that extra input, not the running
+            // answer. RUN_IN_PROGRESS proves the original run is still live.
+            // Clearing activity here makes the next submit bypass the queue.
+            if (msg.code !== 'NO_SUCH_TASK'
+              && msg.code !== 'TASK_ID_REQUIRED'
+              && msg.code !== 'NO_ACTIVE_CODEX_TURN'
+              && msg.code !== 'RUN_IN_PROGRESS'
+              && !String(msg.code ?? '').startsWith('STEER_')) {
               onSessionIdle?.(sid);
             }
             sessionStore.appendRealtime(sid, {
@@ -276,15 +293,8 @@ export function useChatRealtimeHandlers({
       }
 
       // --- All other messages: route to store ---
-      const shouldPersist =
-        msg.kind !== 'complete'
-        && msg.kind !== 'status'
-        && msg.kind !== 'permission_request'
-        && msg.kind !== 'permission_resolved'
-        && msg.kind !== 'permission_cancelled';
-
-      if (sid && shouldPersist) {
-        sessionStore.appendRealtime(sid, msg as unknown as NormalizedMessage);
+      if (sid && isStorableChatMessage(msg)) {
+        sessionStore.appendRealtime(sid, msg);
       }
 
       // --- UI side effects for specific kinds ---
@@ -393,7 +403,17 @@ export function useChatRealtimeHandlers({
             // The counter shows the viewed session's context; budgets from
             // other concurrently running sessions must not overwrite it.
             if (sid === activeViewSessionId) {
-              setTokenBudget(msg.tokenBudget as Record<string, unknown>);
+              const liveTokenBudget = msg.tokenBudget as Record<string, unknown>;
+              setTokenBudget((current) => ({
+                ...current,
+                ...liveTokenBudget,
+                // Keep the last known bill when a provider only reports
+                // context usage; a live cumulative total takes precedence.
+                ...(liveTokenBudget.sessionTotalTokens === undefined
+                  && current?.sessionTotalTokens !== undefined
+                  ? { sessionTotalTokens: current.sessionTotalTokens }
+                  : {}),
+              }));
             }
           } else if (msg.text && sid) {
             onSessionProcessing?.(sid, {

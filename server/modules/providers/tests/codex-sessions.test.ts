@@ -8,6 +8,22 @@ import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/datab
 import { CodexSessionSynchronizer } from '@/modules/providers/list/codex/codex-session-synchronizer.provider.js';
 import { CodexSessionsProvider, parseCodexExecScript, readCodexMemoryCitations } from '@/modules/providers/list/codex/codex-sessions.provider.js';
 
+test('live Codex deltas retain their item id and final-answer phase', () => {
+  const sessions = new CodexSessionsProvider();
+  const first = sessions.normalizeMessage({
+    type: 'item', itemType: 'agent_message', itemId: 'agent-42',
+    message: { role: 'assistant', content: 'Working' }, phase: 'commentary',
+  }, 'app-session');
+  const final = sessions.normalizeMessage({
+    type: 'item', itemType: 'agent_message', itemId: 'agent-42',
+    message: { role: 'assistant', content: 'Done' }, phase: 'final_answer',
+  }, 'app-session');
+  assert.equal(first[0]?.id, 'agent-42');
+  assert.equal(final[0]?.id, 'agent-42');
+  assert.equal(first[0]?.codexPhase, 'commentary');
+  assert.equal(final[0]?.codexPhase, 'final_answer');
+});
+
 const patchHomeDir = (nextHomeDir: string) => {
   const original = os.homedir;
   (os as any).homedir = () => nextHomeDir;
@@ -604,6 +620,36 @@ test('Codex history restores user prompts from typed item_completed rows', { con
       assert.equal(users.length, 1, 'the wire user echo must not duplicate the typed prompt');
       assert.equal(users[0]?.content, prompt);
       assert.equal(images?.[0]?.path, '/tmp/prompt-picture.png');
+    });
+  } finally {
+    restoreHomeDir();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('Codex history reports current context, not cumulative thread tokens', { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'codex-context-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  await mkdir(workspacePath, { recursive: true });
+  const restoreHomeDir = patchHomeDir(tempRoot);
+  try {
+    const filePath = await writeCodexTranscript(tempRoot, 'context-thread', workspacePath, 'question');
+    await writeFile(filePath, `${JSON.stringify({ type: 'event_msg', payload: {
+      type: 'token_count', info: {
+        total_token_usage: { input_tokens: 23_952_235, output_tokens: 62_913, total_tokens: 24_015_148 },
+        last_token_usage: { input_tokens: 40_525, output_tokens: 170, total_tokens: 40_695 },
+        model_context_window: 258_400,
+      },
+    } })}\n`, { flag: 'a' });
+    await withIsolatedDatabase(async () => {
+      sessionsDb.createAppSession('context-app', 'codex', workspacePath);
+      sessionsDb.assignProviderSessionId('context-app', 'context-thread');
+      await new CodexSessionSynchronizer().synchronize();
+      const history = await new CodexSessionsProvider().fetchHistory('context-app');
+      assert.deepEqual(history.tokenUsage, {
+        used: 40_695, total: 258_400, sessionTotalTokens: 24_015_148, inputTokens: 40_525, outputTokens: 170,
+        breakdown: { input: 40_525, output: 170 },
+      });
     });
   } finally {
     restoreHomeDir();

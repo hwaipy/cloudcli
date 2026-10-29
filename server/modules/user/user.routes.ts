@@ -74,7 +74,7 @@ export function createUserRouter(service: ReturnType<typeof createUserService>):
   // rather than the path: neither form is guaranteed to be URL-path-safe.
   router.put('/drafts', (req, res, next) => {
     try {
-      const body = req.body as { scope?: unknown };
+      const body = req.body as { scope?: unknown; messageId?: unknown };
       res.json(service.saveDraft(readUserId(req), body?.scope, req.body));
     } catch (error) {
       next(error);
@@ -83,7 +83,7 @@ export function createUserRouter(service: ReturnType<typeof createUserService>):
 
   router.delete('/drafts', (req, res, next) => {
     try {
-      const body = req.body as { scope?: unknown };
+      const body = req.body as { scope?: unknown; messageId?: unknown };
       res.json(service.deleteDraft(readUserId(req), body?.scope));
     } catch (error) {
       next(error);
@@ -102,10 +102,19 @@ export function createUserRouter(service: ReturnType<typeof createUserService>):
     }
   });
 
+  router.patch('/drafts/queued-message/order', (req, res, next) => {
+    try {
+      const body = req.body as { scope?: unknown; expectedIds?: unknown; orderedIds?: unknown };
+      res.json(service.reorderQueuedMessages(readUserId(req), body?.scope, body?.expectedIds, body?.orderedIds));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.delete('/drafts/queued-message', (req, res, next) => {
     try {
-      const body = req.body as { scope?: unknown };
-      res.json(service.clearQueuedMessage(readUserId(req), body?.scope));
+      const body = req.body as { scope?: unknown; messageId?: unknown };
+      res.json(service.clearQueuedMessage(readUserId(req), body?.scope, body?.messageId));
     } catch (error) {
       next(error);
     }

@@ -34,7 +34,11 @@ async function withUserServer(run: (baseUrl: string, calls: DraftCall[]) => Prom
       appendQueuedMessage: (...args) => {
         calls.push(['appendQueuedMessage', ...args]);
         // Stands in for a scope whose waiting message cannot take this one.
-        return args[1] === 'session-with-command' ? null : { queuedMessage: args[2], appended: false };
+        return { queuedMessage: args[2], queuedMessages: [args[2]], appended: false };
+      },
+      reorderQueuedMessages: (...args) => {
+        calls.push(['reorderQueuedMessages', ...args]);
+        return args[3].map((id) => ({ id, content: id, attachments: [] }));
       },
       clearQueuedMessage: (...args) => { calls.push(['clearQueuedMessage', ...args]); },
       deleteDraft: (...args) => { calls.push(['deleteDraft', ...args]); },
@@ -86,6 +90,7 @@ test('POST /drafts/queued-message appends the message for the signed-in user', a
     assert.deepEqual(await response.json(), {
       success: true,
       queuedMessage: { content: 'B', options: { model: 'opus' }, attachments: [] },
+      queuedMessages: [{ content: 'B', options: { model: 'opus' }, attachments: [] }],
       appended: false,
     });
     assert.deepEqual(calls, [[
@@ -107,15 +112,13 @@ test('POST /drafts/queued-message refuses a message with nothing to send', async
   });
 });
 
-test('POST /drafts/queued-message answers 409 when the message cannot be combined with the waiting one', async () => {
-  await withUserServer(async (baseUrl) => {
-    const response = await send(`${baseUrl}/api/user/drafts/queued-message`, 'POST', {
-      scope: 'session-with-command',
-      queuedMessage: { content: 'fix it', attachments: [] },
+test('PATCH queue order forwards a complete permutation for the signed-in user', async () => {
+  await withUserServer(async (baseUrl, calls) => {
+    const response = await send(`${baseUrl}/api/user/drafts/queued-message/order`, 'PATCH', {
+      scope: 'session-a', expectedIds: ['a', 'b'], orderedIds: ['b', 'a'],
     });
-
-    assert.equal(response.status, 409);
-    assert.deepEqual(await response.json(), { code: 'QUEUED_MESSAGE_NOT_COMBINABLE' });
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls, [['reorderQueuedMessages', USER_ID, 'session-a', ['a', 'b'], ['b', 'a']]]);
   });
 });
 
@@ -124,7 +127,17 @@ test('DELETE /drafts/queued-message clears only the queued message, not the draf
     const response = await send(`${baseUrl}/api/user/drafts/queued-message`, 'DELETE', { scope: 'session-a' });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(calls, [['clearQueuedMessage', USER_ID, 'session-a']]);
+    assert.deepEqual(calls, [['clearQueuedMessage', USER_ID, 'session-a', undefined]]);
+  });
+});
+
+test('DELETE /drafts/queued-message forwards a single message ID', async () => {
+  await withUserServer(async (baseUrl, calls) => {
+    const response = await send(`${baseUrl}/api/user/drafts/queued-message`, 'DELETE', {
+      scope: 'session-a', messageId: 'queued-2',
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls, [['clearQueuedMessage', USER_ID, 'session-a', 'queued-2']]);
   });
 });
 

@@ -561,6 +561,8 @@ test('OpenCode sessions provider reads sqlite history and token usage', { concur
     assert.deepEqual(history.messages[3]?.toolResult, { content: 'ok', isError: false });
     assert.deepEqual(history.tokenUsage, {
       used: 42,
+      contextUsed: null,
+      sessionTotalTokens: 42,
       inputTokens: 13,
       outputTokens: 20,
       breakdown: {

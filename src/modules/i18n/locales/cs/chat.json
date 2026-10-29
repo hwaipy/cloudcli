@@ -162,12 +162,12 @@
     "send": "Odeslat",
     "stop": "Zastavit",
     "hintText": {
-      "ctrlEnter": "Ctrl+Enter pro odeslání • Shift+Enter pro nový řádek • Tab pro změnu režimu • / pro příkazy s lomítkem",
-      "enter": "Enter pro odeslání • Shift+Enter pro nový řádek • Tab pro změnu režimu • / pro příkazy s lomítkem",
+      "ctrlEnter": "Ctrl+Enter pro odeslání • Shift+Enter pro nový řádek • / pro příkazy s lomítkem",
+      "enter": "Enter pro odeslání • Shift+Enter pro nový řádek • / pro příkazy s lomítkem",
       "queue": "Enter pro zařazení další zprávy do fronty",
       "appendQueued": "Enter pro přidání ke zprávě ve frontě"
     },
-    "clickToChangeMode": "Kliknutím změníte režim oprávnění (nebo stiskněte Tab ve vstupním poli)",
+    "clickToChangeMode": "Kliknutím změníte režim oprávnění",
     "showAllCommands": "Zobrazit všechny příkazy",
     "clearInput": "Vymazat vstup",
     "scrollToBottom": "Posunout na konec",
@@ -188,7 +188,6 @@
     "loadingModels": "Načítání modelů…",
     "modelMenu": "Vyberte model a úroveň uvažování",
     "permissionHeading": "Jak schvalovat akce, které provádí {{provider}}?",
-    "permissionCycleHint": "Režim přepnete klávesou Tab ve vstupním poli",
     "permissionTriggerLabel": "{{mode}}: {{heading}}",
     "editing": {
       "title": "Nahrazení dřívější zprávy",

@@ -157,37 +157,28 @@ export default function SidebarRecentConversations({
                 onClick={handleClick}
                 data-testid="recent-conversation-row"
                 className={cn(
-                  'flex min-w-0 items-center gap-2 rounded-lg px-2 py-2 pr-11 text-left transition-colors',
+                  'flex h-9 min-w-0 items-center gap-2 rounded-lg bg-transparent px-2 py-1 pr-11 text-left transition-colors',
                   isSelected
-                    ? 'bg-primary/10 text-foreground'
+                    ? 'bg-accent/80 text-foreground'
                     : 'text-foreground hover:bg-accent/60',
                 )}
               >
-                <span className={cn(
-                  'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md',
-                  isSelected ? 'bg-primary/10' : 'bg-muted/60',
-                )}>
-                  <LLMProviderLogo provider={conversation.provider} className="h-3.5 w-3.5" />
+                <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+                  <LLMProviderLogo provider={conversation.provider} className="h-3 w-3" />
                 </span>
 
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-normal leading-4">
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-normal" title={`${conversation.sessionTitle} · ${conversation.projectDisplayName}`}>
                     {conversation.sessionTitle}
                   </span>
-                  <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] leading-3 text-muted-foreground">
-                    <span className="truncate">{conversation.projectDisplayName}</span>
+                  <span className="flex shrink-0 items-center text-[10px] text-muted-foreground">
                     {isProcessing ? (
-                      <>
-                        <span className="flex-shrink-0 text-muted-foreground/40">·</span>
                         <Tooltip content={t('tooltips.processingSessionIndicator', 'Processing session')} position="top">
                           <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" />
                         </Tooltip>
-                      </>
                     ) : hasBackgroundWork ? (
                       // No spinner: nothing is responding. The purple of the
                       // workflow and agent cards says what is still running.
-                      <>
-                        <span className="flex-shrink-0 text-muted-foreground/40">·</span>
                         <Tooltip content={t('tooltips.backgroundWorkIndicator', 'Background work running')} position="top">
                           <span
                             role="status"
@@ -195,14 +186,10 @@ export default function SidebarRecentConversations({
                             className="h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-purple-500 dark:bg-purple-400"
                           />
                         </Tooltip>
-                      </>
                     ) : age && (
-                      <>
-                        <span className="flex-shrink-0 text-muted-foreground/40">·</span>
                         <time className="flex-shrink-0 tabular-nums" dateTime={conversation.lastActivity ?? undefined}>
                           {age}
                         </time>
-                      </>
                     )}
                   </span>
                 </span>

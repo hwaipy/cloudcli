@@ -114,7 +114,6 @@ const renderSessions = (overrides: ListOverrides = {}) =>
       onSessionSelect: noop,
       onDeleteSession: noop,
       onLoadMoreSessions: noop,
-      onNewSession: noop,
       selectedSessionIds: null,
       onSetSessionSelection: noop,
       onToggleSessionSelected: noop,
@@ -151,20 +150,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test('the idle list offers Select and opens an empty selection with it', () => {
+test('the idle list has no selection entry and keeps row options', () => {
   const onSetSessionSelection = vi.fn();
   const { container } = renderSessions({ onSetSessionSelection });
 
   assert.equal(checkboxes(container).length, 0, 'no row acts as a checkbox before selecting');
   assert.equal(recordedOptionsProps.length, SESSIONS.length, 'every row still has its options menu');
 
-  const selectButton = buttonWithText(container, 'sessions.select');
-  assert.ok(selectButton, 'the idle list offers to start selecting');
-
-  fireEvent.click(selectButton);
-  const selection = onSetSessionSelection.mock.calls[0][0] as SidebarSessionSelection;
-  assert.equal(selection.projectId, PROJECT.projectId);
-  assert.deepEqual([...selection.sessionIds], [], 'selection mode opens with nothing ticked');
+  assert.equal(buttonWithText(container, 'sessions.select'), null);
+  assert.equal(onSetSessionSelection.mock.calls.length, 0);
 });
 
 test('a list whose every session is running has nothing to offer Select for', () => {

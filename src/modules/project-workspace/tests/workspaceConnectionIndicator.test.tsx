@@ -9,7 +9,7 @@ import type { AppTab, Project } from '@/shared/types';
 /**
  * Issue #582: a dropped chat socket changed nothing on screen, so the user kept
  * typing into a chat that could not reach the server. The workspace header now
- * says it is reconnecting for as long as the socket is down, on every tab, and
+ * shows a compact reconnecting icon for as long as the socket is down, on every tab, and
  * shows nothing during the first handshake. Wired as App wires it: the real
  * WebSocketProvider driving the real header.
  */
@@ -93,7 +93,7 @@ const header = (activeTab: AppTab) => (
 const latestSocket = () => FakeWebSocket.instances[FakeWebSocket.instances.length - 1] as FakeWebSocket;
 // A boolean, not the element: a failed assertion on a jsdom node makes node:assert
 // inspect the whole DOM tree, which can exhaust the worker's memory.
-const isIndicatorShown = () => screen.queryByText('Reconnecting...') !== null;
+const isIndicatorShown = () => screen.queryByTestId('workspace-reconnecting-indicator') !== null;
 // What a screen reader is told, or null when the header has no polite live region.
 const liveRegionText = () => {
   const region = document.querySelector('header [role="status"][aria-live="polite"]');
@@ -129,12 +129,14 @@ test('the header shows nothing during the first handshake or while connected', (
   assert.equal(liveRegionText(), '', 'an empty polite live region is mounted while connected');
 });
 
-test('the header says it is reconnecting while the chat socket is down, and clears once it is back', () => {
+test('the header shows a pulsing icon while the chat socket is down, and clears once it is back', () => {
   const view = render(header('chat'));
   act(() => latestSocket().serverOpens());
 
   act(() => latestSocket().serverDrops());
   assert.equal(isIndicatorShown(), true, 'a dropped socket is shown');
+  assert.equal(screen.queryByText('Reconnecting...'), null, 'the visible label takes no header space');
+  assert.ok(screen.getByTestId('workspace-reconnecting-indicator').classList.contains('animate-pulse'));
   assert.equal(liveRegionText(), 'Chat connection lost. Reconnecting...', 'and announced, naming the chat connection');
 
   // Still down while the retry handshakes, and on another tab too.

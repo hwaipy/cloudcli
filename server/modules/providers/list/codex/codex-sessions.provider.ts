@@ -21,6 +21,8 @@ import {
   AppError,
   createNormalizedMessage,
   generateMessageId,
+  readCodexContextUsage,
+  readCodexSessionTotalTokens,
   readObjectRecord,
   sliceTailPage,
   truncateSubagentActivity,
@@ -1292,6 +1294,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
 
   const messages: AnyRecord[] = [];
   let tokenUsage: AnyRecord | null = null;
+  let sessionTotalTokens: number | undefined;
 
   /** Call ids whose orchestration wrapper must never reach the transcript. */
   const ignoredToolCallIds = new Set<string>();
@@ -1358,11 +1361,8 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
     // ── event_msg ──────────────────────────────────────────────────────────
     if (entry.type === 'event_msg') {
       if (payload.type === 'token_count' && payload.info) {
-        const info = payload.info as AnyRecord;
-        if (info.total_token_usage) {
-          const usage = info.total_token_usage as AnyRecord;
-          tokenUsage = { used: usage.total_tokens || 0, total: info.model_context_window || 200000 };
-        }
+        tokenUsage = readCodexContextUsage(payload.info) ?? tokenUsage;
+        sessionTotalTokens = readCodexSessionTotalTokens(payload.info) ?? sessionTotalTokens;
         continue;
       }
 
@@ -1516,6 +1516,9 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
         type: 'assistant',
         timestamp,
         message: { role: 'assistant', content: textContent },
+        codexPhase: payload.phase === 'final_answer' || payload.phase === 'commentary'
+          ? payload.phase
+          : undefined,
         memoryCitations: cited.memoryCitations,
       });
       continue;
@@ -1892,7 +1895,14 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
   }
 
   messages.sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
-  return { messages, tokenUsage: tokenUsage ?? undefined };
+  return {
+    messages,
+    tokenUsage: tokenUsage
+      ? { ...tokenUsage, ...(sessionTotalTokens !== undefined ? { sessionTotalTokens } : {}) }
+      : sessionTotalTokens !== undefined
+        ? { used: 0, contextUsed: null, sessionTotalTokens }
+        : undefined,
+  };
 }
 
 /**
@@ -2114,6 +2124,7 @@ export class CodexSessionsProvider implements IProviderSessions {
         kind: 'text',
         role: 'assistant',
         content,
+        codexPhase: raw.codexPhase,
         memoryCitations: raw.memoryCitations,
       })];
     }
@@ -2159,7 +2170,9 @@ export class CodexSessionsProvider implements IProviderSessions {
       return [];
     }
 
-    if (raw.message?.role) {
+    // Live App Server items also carry a `message.role`. They must retain the
+    // provider itemId and phase, unlike persisted history entries.
+    if (raw.type !== 'item' && raw.message?.role) {
       return this.normalizeHistoryEntry(raw, sessionId);
     }
 
@@ -2199,6 +2212,7 @@ export class CodexSessionsProvider implements IProviderSessions {
             kind: 'text',
             role: 'assistant',
             content: text,
+            codexPhase: raw.phase === 'final_answer' ? 'final_answer' : 'commentary',
             memoryCitations: cited.memoryCitations,
           })];
         }

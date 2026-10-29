@@ -122,7 +122,6 @@ type SidebarContentProps = {
   restartRequired: boolean;
   releaseInfo: ReleaseInfo | null;
   latestVersion: string | null;
-  currentVersion: string;
   onShowVersionModal: () => void;
   onShowSettings: () => void;
   projectListProps: SidebarProjectListProps;
@@ -169,7 +168,6 @@ export default function SidebarContent({
   restartRequired,
   releaseInfo,
   latestVersion,
-  currentVersion,
   onShowVersionModal,
   onShowSettings,
   projectListProps,
@@ -205,6 +203,7 @@ export default function SidebarContent({
         onRefresh={onRefresh}
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
+        onShowSettings={onShowSettings}
         onCollapseSidebar={onCollapseSidebar}
         t={t}
       />
@@ -471,23 +470,16 @@ export default function SidebarContent({
               </div>
             </div>
           ) : (
-            <div className="space-y-2.5 px-2 pb-3">
+            <div className="space-y-1 px-2 pb-3">
               <div className="flex items-center justify-between px-1 pb-0.5 pt-0.5">
                 <div className="flex items-center gap-2">
                   <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground">
                     <Archive className="h-3.5 w-3.5" />
                   </span>
-                  <div>
-                    <h2 className="text-xs font-medium leading-none text-foreground">
-                      {t('archived.title', 'Archive')}
-                    </h2>
-                    <p className="mt-1 text-[10px] leading-none text-muted-foreground">
-                      {t('archived.restoreHint', 'Restore items whenever you need them')}
-                    </p>
-                  </div>
+                  <h2 className="text-xs font-medium text-foreground">{t('archived.title', 'Archive')}</h2>
                 </div>
                 <span
-                  className="rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground"
+                  className="text-[10px] tabular-nums text-muted-foreground"
                   title={visibleArchivedItemsCount !== archivedSessionsCount
                     ? `${visibleArchivedItemsCount} of ${archivedSessionsCount}`
                     : undefined}
@@ -503,43 +495,29 @@ export default function SidebarContent({
                 return (
                   <section
                     key={project.projectId}
-                    className="group/archive overflow-hidden rounded-xl border border-border/70 bg-card/45 shadow-[0_1px_0_hsl(var(--border)/0.2)] transition-colors hover:border-border"
+                    className="group/archive"
                   >
-                    <div className="flex items-center gap-2.5 px-2.5 py-2.5">
-                      <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-muted-foreground">
-                        <Folder className="h-4 w-4" />
+                    <div className="flex h-9 items-center gap-2 rounded-lg px-2 transition-colors hover:bg-accent/60">
+                      <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center text-muted-foreground">
+                        <Folder className="h-3 w-3" />
                       </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex min-w-0 items-center gap-1.5">
-                          <h3 className="truncate text-[13px] font-medium text-foreground">
-                            {project.displayName}
-                          </h3>
-                          {projectSessions.length > 0 && (
-                            <span className="flex-shrink-0 rounded-md bg-muted/60 px-1.5 py-0.5 text-[9px] tabular-nums text-muted-foreground">
-                              {projectSessions.length}
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground/70" title={project.fullPath}>
-                          {project.fullPath}
-                        </p>
-                      </div>
+                      <h3 className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground" title={project.fullPath}>{project.displayName}</h3>
+                      {projectSessions.length > 0 && <span className="text-[10px] tabular-nums text-muted-foreground">{projectSessions.length}</span>}
                       <button
-                        className="flex h-7 flex-shrink-0 items-center gap-1.5 rounded-lg border border-emerald-600/15 bg-emerald-500/10 px-2 text-[10px] font-medium text-emerald-700 transition-all hover:border-emerald-600/25 hover:bg-emerald-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 dark:text-emerald-300"
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         onClick={() => onRestoreArchivedProject(project.projectId)}
                         title={t('archived.restoreProject', 'Restore workspace')}
                         aria-label={`${t('archived.restoreProject', 'Restore workspace')}: ${project.displayName}`}
                       >
                         <RotateCcw className="h-3 w-3" />
-                        {t('archived.restoreAction', 'Restore')}
                       </button>
                     </div>
                     {projectSessions.length > 0 && (
-                      <div className="border-t border-border/45 bg-muted/[0.08]">
+                      <div className="ml-3 border-l border-border/60 pl-2">
                         {projectSessions.map((session) => (
                           <button
                             key={String(session.id)}
-                            className="flex w-full items-center gap-2.5 border-b border-border/35 px-2.5 py-2 text-left transition-colors last:border-b-0 hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                            className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                             onClick={() => onArchivedSessionClick({
                               sessionId: String(session.id),
                               provider: session.__provider,
@@ -565,21 +543,18 @@ export default function SidebarContent({
                               isProjectArchived: true,
                             })}
                           >
-                            <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-background/70">
-                              <LLMProviderLogo provider={session.__provider} className="h-3.5 w-3.5" />
+                            <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+                              <LLMProviderLogo provider={session.__provider} className="h-3 w-3" />
                             </span>
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-xs text-foreground">
+                            <div className="flex min-w-0 flex-1 items-center gap-2">
+                              <p className="min-w-0 flex-1 truncate text-xs text-foreground">
                                 {(typeof session.summary === 'string' && session.summary.trim().length > 0
                                   ? session.summary
                                   : typeof session.name === 'string' && session.name.trim().length > 0
                                     ? session.name
                                     : String(session.id))}
                               </p>
-                              <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground/70">
-                                <span className="uppercase tracking-wide">{session.__provider}</span>
-                                <span aria-hidden>·</span>
-                                <span className="tabular-nums">
+                              <div className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
                                   {formatCompactAge(
                                     typeof session.lastActivity === 'string'
                                       ? session.lastActivity
@@ -590,7 +565,6 @@ export default function SidebarContent({
                                           : null,
                                     projectListProps.currentTime,
                                   )}
-                                </span>
                               </div>
                             </div>
                           </button>
@@ -603,56 +577,33 @@ export default function SidebarContent({
               {groupedArchivedSessions.map((group) => (
                 <section
                   key={group.key}
-                  className="group/archive overflow-hidden rounded-xl border border-border/70 bg-card/45 shadow-[0_1px_0_hsl(var(--border)/0.2)] transition-colors hover:border-border"
+                  className="group/archive"
                 >
-                  <div className="flex items-center gap-2.5 px-2.5 py-2.5">
-                    <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-muted-foreground">
-                      <Folder className="h-4 w-4" />
+                  <div className="flex h-9 items-center gap-2 rounded-lg px-2 transition-colors hover:bg-accent/60">
+                    <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center text-muted-foreground">
+                      <Folder className="h-3 w-3" />
                     </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <h3 className="truncate text-[13px] font-medium text-foreground">
-                          {group.projectDisplayName}
-                        </h3>
-                        <span className="flex-shrink-0 rounded-md bg-muted/60 px-1.5 py-0.5 text-[9px] tabular-nums text-muted-foreground">
-                          {group.sessions.length}
-                        </span>
-                      </div>
-                      {group.projectPath && (
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground/70" title={group.projectPath}>
-                          {group.projectPath}
-                        </p>
-                      )}
-                    </div>
+                    <h3 className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground" title={group.projectPath ?? group.projectDisplayName}>{group.projectDisplayName}</h3>
+                    <span className="text-[10px] tabular-nums text-muted-foreground">{group.sessions.length}</span>
                   </div>
-                  <div className="border-t border-border/45 bg-muted/[0.08]">
+                  <div className="ml-3 border-l border-border/60 pl-2">
                     {group.sessions.map((session) => (
                       <div
                         key={session.sessionId}
-                        className="group/session flex items-center gap-1 border-b border-border/35 px-2.5 py-2 last:border-b-0 hover:bg-accent/35"
+                        className="group/session flex h-9 items-center gap-1 rounded-lg px-2 transition-colors hover:bg-accent/60"
                       >
                         <button
-                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           onClick={() => onArchivedSessionClick(session)}
                         >
-                          <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-background/70">
-                            <LLMProviderLogo provider={session.provider} className="h-3.5 w-3.5" />
+                          <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+                            <LLMProviderLogo provider={session.provider} className="h-3 w-3" />
                           </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-xs text-foreground">
+                          <div className="flex min-w-0 flex-1 items-center gap-2">
+                            <p className="min-w-0 flex-1 truncate text-xs text-foreground">
                               {session.sessionTitle}
                             </p>
-                            <div className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground/70">
-                              <span className="uppercase tracking-wide">{session.provider}</span>
-                              {session.lastActivity && (
-                                <>
-                                  <span aria-hidden>·</span>
-                                  <span className="tabular-nums">
-                                    {formatCompactAge(session.lastActivity, projectListProps.currentTime)}
-                                  </span>
-                                </>
-                              )}
-                            </div>
+                            {session.lastActivity && <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">{formatCompactAge(session.lastActivity, projectListProps.currentTime)}</span>}
                           </div>
                         </button>
                         <div className="flex flex-shrink-0 items-center gap-0.5">
@@ -691,9 +642,7 @@ export default function SidebarContent({
           restartRequired={restartRequired}
           releaseInfo={releaseInfo}
           latestVersion={latestVersion}
-          currentVersion={currentVersion}
           onShowVersionModal={onShowVersionModal}
-          onShowSettings={onShowSettings}
           t={t}
         />
       )}
