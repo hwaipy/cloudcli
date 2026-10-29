@@ -332,8 +332,27 @@ function pruneRealtimeSupersededByServer(
 
   const serverIds = new Set(serverMessages.map((message) => message.id));
   const reconciledRealtimeMessages = removeOptimisticUserEchoes(serverMessages, realtimeMessages);
+  // If only one of two identical Steer inputs has reached history, keep both
+  // echoes in the cache. The merge can then claim that history row once and
+  // still display the other echo. Once both persist, both echoes are pruned.
+  const pendingSteerTexts = new Set(
+    reconciledRealtimeMessages
+      .filter((message) => message.id.startsWith('steer_') && message.provider === 'codex' && message.kind === 'text' && message.role === 'user')
+      .map((message) => message.content?.trim()),
+  );
+  const reconciledIds = new Set(reconciledRealtimeMessages.map((message) => message.id));
 
-  return reconciledRealtimeMessages.filter((message) => {
+  return realtimeMessages.filter((message) => {
+    if (!isStorableChatMessage(message)) return false;
+    if (!reconciledIds.has(message.id) && !(
+      message.id.startsWith('steer_')
+      && message.provider === 'codex'
+      && message.kind === 'text'
+      && message.role === 'user'
+      && pendingSteerTexts.has(message.content?.trim())
+    )) {
+      return false;
+    }
     if (serverIds.has(message.id)) {
       return false;
     }

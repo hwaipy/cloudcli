@@ -4,6 +4,9 @@ import { isStorableChatMessage } from '@/shared/utils';
 const LOCAL_USER_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const LOCAL_USER_DEDUPE_CLOCK_SKEW_MS = 10_000;
 const LOCAL_ATTACHMENT_ONLY_DEDUPE_WINDOW_MS = 30_000;
+// App Server can write accepted Steer input near the end of a long turn. Its
+// runtime caps a turn at 30 minutes; keep this separate from ordinary sends.
+const STEER_USER_DEDUPE_WINDOW_MS = 30 * 60 * 1000;
 
 type UserTurnFingerprint = {
   text: string;
@@ -58,14 +61,20 @@ function findServerEchoForLocalUser(
   const firstEligibleIndex = localMessage.replacesAfterRowCount ?? 0;
 
   const dedupeWindow = localFingerprint.text
-    ? LOCAL_USER_DEDUPE_WINDOW_MS
+    ? localMessage.id.startsWith('steer_')
+      ? STEER_USER_DEDUPE_WINDOW_MS
+      : LOCAL_USER_DEDUPE_WINDOW_MS
     : LOCAL_ATTACHMENT_ONLY_DEDUPE_WINDOW_MS;
   let closestMatch: NormalizedMessage | null = null;
   let closestTimeDifference = Number.POSITIVE_INFINITY;
 
   for (let index = firstEligibleIndex; index < serverMessages.length; index++) {
     const serverMessage = serverMessages[index];
-    if (claimedServerIds.has(serverMessage.id)) {
+    if (
+      claimedServerIds.has(serverMessage.id)
+      || serverMessage.sessionId !== localMessage.sessionId
+      || serverMessage.provider !== localMessage.provider
+    ) {
       continue;
     }
 
@@ -94,8 +103,9 @@ function findServerEchoForLocalUser(
 }
 
 /**
- * Removes local optimistic user rows once a corresponding persisted turn is
- * available. Matches are one-to-one so repeated sends cannot claim one row.
+ * Removes local optimistic and Codex Steer user rows once a corresponding
+ * persisted turn is available. Matches are one-to-one so repeated sends
+ * cannot claim one row.
  */
 export function removeOptimisticUserEchoes(
   serverMessages: NormalizedMessage[],
@@ -105,7 +115,12 @@ export function removeOptimisticUserEchoes(
 
   return realtimeMessages.filter((message) => {
     if (!isStorableChatMessage(message)) return false;
-    if (!message.id.startsWith('local_')) {
+    const isLocalEcho = message.id.startsWith('local_');
+    const isCodexSteerEcho = message.id.startsWith('steer_')
+      && message.provider === 'codex'
+      && message.kind === 'text'
+      && message.role === 'user';
+    if (!isLocalEcho && !isCodexSteerEcho) {
       return true;
     }
 

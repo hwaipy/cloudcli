@@ -21,3 +21,10 @@ The preexisting database and deployment backups under `.debug-local/` have been 
 ## Production frontend build path
 
 Build with `vite build --base=/cloudcli/`. The default Vite base `/` cannot be served at this public subpath. Before release, verify `index.html` points to `/cloudcli/assets/`, and test the actual entry script as well as boot-assets.json.
+
+## 2026-10-29 Steer message reconciliation release
+
+- Frontend release: `/home/ubuntu/apps/cloudcli-prod/releases/20261029T150109Z`.
+- Previous release retained for rollback: `/home/ubuntu/apps/cloudcli-prod/releases/20261029T141918Z`.
+- Only frontend assets changed. `cloudcli-prod-frontend.service` was restarted because the static server resolves `current` when it starts; the backend was not restarted.
+- To roll back on Code, point `current` at the previous release and restart `cloudcli-prod-frontend.service`. Existing browser tabs need a refresh to load either version.

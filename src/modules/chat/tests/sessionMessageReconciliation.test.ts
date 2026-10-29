@@ -70,6 +70,65 @@ test('keeps the existing optimistic text reconciliation behavior', () => {
   assert.deepEqual(removeOptimisticUserEchoes([persisted], [local]), []);
 });
 
+test('replaces a Codex Steer echo with its persisted input after a delayed history write', () => {
+  const steer = createUserMessage('steer_live', '2026-10-29T14:22:35.982Z', {
+    provider: 'codex', content: 'tigerVNC？',
+  });
+  const persisted = createUserMessage('codex_history', '2026-10-29T14:26:04.316Z', {
+    provider: 'codex', content: 'tigerVNC？',
+  });
+  const muchLater = { ...persisted, timestamp: '2026-10-29T14:30:36.000Z' };
+
+  assert.deepEqual(removeOptimisticUserEchoes([], [steer]), [steer]);
+  assert.deepEqual(removeOptimisticUserEchoes([persisted], [steer]), []);
+  assert.deepEqual(removeOptimisticUserEchoes([muchLater], [steer]), []);
+});
+
+test('matches repeated Codex Steer text one-to-one without dropping a separate input', () => {
+  const first = createUserMessage('steer_first', '2026-10-29T14:22:23.000Z', {
+    provider: 'codex', content: 'repeat',
+  });
+  const second = createUserMessage('steer_second', '2026-10-29T14:22:35.000Z', {
+    provider: 'codex', content: 'repeat',
+  });
+  const firstHistory = createUserMessage('codex_first', '2026-10-29T14:26:04.313Z', {
+    provider: 'codex', content: 'repeat',
+  });
+  const secondHistory = createUserMessage('codex_second', '2026-10-29T14:26:04.316Z', {
+    provider: 'codex', content: 'repeat',
+  });
+
+  assert.deepEqual(removeOptimisticUserEchoes([firstHistory], [first, second]), [second]);
+  assert.deepEqual(removeOptimisticUserEchoes([firstHistory, secondHistory], [first, second]), []);
+});
+
+test('Steer reconciliation ignores older, cross-session, and cross-provider lookalikes', () => {
+  const steer = createUserMessage('steer_live', '2026-10-29T14:22:35.000Z', {
+    provider: 'codex', content: 'repeat',
+  });
+  const old = createUserMessage('codex_old', '2026-10-29T14:20:00.000Z', {
+    provider: 'codex', content: 'repeat',
+  });
+  const otherSession = createUserMessage('codex_other', '2026-10-29T14:26:00.000Z', {
+    provider: 'codex', sessionId: 'session-2', content: 'repeat',
+  });
+  const otherProvider = createUserMessage('claude_other', '2026-10-29T14:26:00.000Z', {
+    content: 'repeat',
+  });
+
+  assert.deepEqual(removeOptimisticUserEchoes([old, otherSession, otherProvider], [steer]), [steer]);
+});
+
+test('only Codex user text with a Steer identity participates in Steer reconciliation', () => {
+  const history = createUserMessage('codex_history', '2026-10-29T14:26:00.000Z', {
+    provider: 'codex', content: 'repeat',
+  });
+  const assistant = { ...history, id: 'steer_assistant', role: 'assistant' as const };
+  const unrelated = { ...history, id: 'other_live', timestamp: '2026-10-29T14:22:00.000Z' };
+
+  assert.deepEqual(removeOptimisticUserEchoes([history], [assistant, unrelated]), [assistant, unrelated]);
+});
+
 test('a replacement echo survives a kept turn that repeats its text', () => {
   // The exact shape a rewind that branches produces: the turn that survived
   // the cut is re-stamped to the moment of the copy, one second before the
