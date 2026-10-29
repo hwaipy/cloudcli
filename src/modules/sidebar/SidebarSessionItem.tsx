@@ -18,7 +18,6 @@ type SidebarSessionItemProps = {
   isProcessing: boolean;
   /** The session's turn has ended but the agents, workflows or commands it launched still run. */
   hasBackgroundWork: boolean;
-  needsAttention: boolean;
   currentTime: Date;
   /** Resolved for this row, so a keystroke elsewhere does not invalidate it. */
   isEditing: boolean;
@@ -48,7 +47,6 @@ function SidebarSessionItem({
   selectedSession,
   isProcessing,
   hasBackgroundWork,
-  needsAttention,
   currentTime,
   isEditing,
   renameDraft,
@@ -70,16 +68,13 @@ function SidebarSessionItem({
   const isSelected = selectedSession?.id === session.id;
   const compactSessionAge = formatCompactAge(sessionView.sessionTime, currentTime);
   const [isMobileOptionsOpen, setIsMobileOptionsOpen] = useState(false);
-  const showAttentionIndicator = needsAttention && !isSelected;
   // Background work takes the recent-activity dot's place: the session is
   // still doing something, which says more than that it was touched lately.
-  const showBackgroundIndicator = !showAttentionIndicator && hasBackgroundWork;
-  const showRecentIndicator = !showAttentionIndicator && !showBackgroundIndicator && !isProcessing && sessionView.isActive;
-  const indicatorLabel = showAttentionIndicator
-    ? t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })
-    : showBackgroundIndicator
-      ? t('tooltips.backgroundWorkIndicator', { defaultValue: 'Background work running' })
-      : t('tooltips.activeSessionIndicator');
+  const showBackgroundIndicator = hasBackgroundWork;
+  const showRecentIndicator = !showBackgroundIndicator && !isProcessing && sessionView.isActive;
+  const indicatorLabel = showBackgroundIndicator
+    ? t('tooltips.backgroundWorkIndicator', { defaultValue: 'Background work running' })
+    : t('tooltips.activeSessionIndicator');
   const providerLabel = PROVIDER_LABELS[session.__provider];
 
   // The desktop controls live in SessionOptions, which owns the rename panel and
@@ -149,7 +144,7 @@ function SidebarSessionItem({
 
   return (
     <div className="group relative">
-      {(showAttentionIndicator || showBackgroundIndicator || showRecentIndicator) && (
+      {(showBackgroundIndicator || showRecentIndicator) && (
         <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
           <Tooltip content={indicatorLabel} position="right">
             <div
@@ -157,11 +152,9 @@ function SidebarSessionItem({
               aria-label={indicatorLabel}
               className={cn(
                 'h-2 w-2 animate-pulse rounded-full',
-                showAttentionIndicator
-                  ? 'bg-amber-500'
-                  : showBackgroundIndicator
-                    ? 'bg-purple-500 dark:bg-purple-400'
-                    : 'bg-green-500',
+                showBackgroundIndicator
+                  ? 'bg-purple-500 dark:bg-purple-400'
+                  : 'bg-green-500',
               )}
             />
           </Tooltip>

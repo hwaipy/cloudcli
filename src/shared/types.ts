@@ -1546,8 +1546,6 @@ export type SessionRowActions = {
   activeSessions: ReadonlySet<string>;
   /** The subset of `activeSessions` that only has background tasks running, which show the purple dot instead of the spinner. */
   backgroundSessionIds: ReadonlySet<string>;
-  /** Sessions waiting on the user, which show the amber dot. */
-  attentionSessionIds: ReadonlySet<string>;
   onRenameDraftChange: (draft: string) => void;
   onStartEditingSession: (projectId: string, sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;

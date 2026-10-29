@@ -111,8 +111,6 @@ export default function SidebarRecentConversations({
           const age = formatCompactAge(conversation.lastActivity, currentTime);
           const hasBackgroundWork = sessionActions.backgroundSessionIds.has(conversation.sessionId);
           const isProcessing = sessionActions.activeSessions.has(conversation.sessionId) && !hasBackgroundWork;
-          const showAttentionIndicator =
-            sessionActions.attentionSessionIds.has(conversation.sessionId) && !isSelected;
           // Resolved per row so a keystroke in one rename does not redraw the rest.
           const rename = sessionActions.activeRename;
           const sessionRename =
@@ -132,26 +130,6 @@ export default function SidebarRecentConversations({
 
           return (
             <div key={conversation.sessionId} className="group relative">
-              {/*
-                * Only the amber "needs attention" dot, and the spinner below. The
-                * Projects row also has a green dot for a session touched recently,
-                * which carries no information in a list ordered by recency.
-                */}
-              {showAttentionIndicator && (
-                <div className="absolute left-0 top-1/2 -translate-x-1 -translate-y-1/2 transform">
-                  <Tooltip
-                    content={t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })}
-                    position="right"
-                  >
-                    <div
-                      role="status"
-                      aria-label={t('tooltips.attentionRequiredIndicator', { defaultValue: 'Session needs attention' })}
-                      className="h-2 w-2 animate-pulse rounded-full bg-amber-500"
-                    />
-                  </Tooltip>
-                </div>
-              )}
-
               <a
                 href={`/session/${conversation.sessionId}`}
                 onClick={handleClick}

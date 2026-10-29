@@ -118,11 +118,49 @@ const getProjectLastActivity = (project: Project): Date => {
   }, new Date(0));
 };
 
+const PROJECT_REORDER_GAP_MS = 10 * 60 * 1000;
+
+/** Preserve the displayed order among projects whose send times are close. */
+function keepNearbyProjectsStable(
+  projects: Project[],
+  previousProjectIds: readonly string[],
+  activityById: ReadonlyMap<string, number>,
+): Project[] {
+  const previousIndex = new Map(previousProjectIds.map((id, index) => [id, index]));
+  const ordered: Project[] = [];
+
+  // Pinned projects always stay ahead of unpinned projects, regardless of the
+  // ten-minute tolerance. Within either group, a project more than ten
+  // minutes older than the newest remaining project cannot be chosen next.
+  for (const starred of [true, false]) {
+    const remaining = projects.filter((project) => Boolean(project.isStarred) === starred);
+    while (remaining.length > 0) {
+      // `projects` is already sorted by activity within each starred group.
+      const newestTime = activityById.get(remaining[0].projectId) ?? 0;
+      let nextIndex = 0;
+      for (let index = 1; index < remaining.length; index++) {
+        const candidate = remaining[index];
+        if (newestTime - (activityById.get(candidate.projectId) ?? 0) > PROJECT_REORDER_GAP_MS) continue;
+        if ((previousIndex.get(candidate.projectId) ?? Infinity) < (previousIndex.get(remaining[nextIndex].projectId) ?? Infinity)) {
+          nextIndex = index;
+        }
+      }
+      ordered.push(remaining.splice(nextIndex, 1)[0]);
+    }
+  }
+
+  return ordered;
+}
+
 export const sortProjects = (
   projects: Project[],
   projectSortOrder: ProjectSortOrder,
+  previousProjectIds?: readonly string[],
 ): Project[] => {
   const byName = [...projects];
+  const activityById = projectSortOrder === 'date'
+    ? new Map(projects.map((project) => [project.projectId, getProjectLastActivity(project).getTime()]))
+    : null;
 
   byName.sort((projectA, projectB) => {
     // Star order now comes from backend `projects.isStarred`.
@@ -138,13 +176,23 @@ export const sortProjects = (
     }
 
     if (projectSortOrder === 'date') {
-      return getProjectLastActivity(projectB).getTime() - getProjectLastActivity(projectA).getTime();
+      return (activityById?.get(projectB.projectId) ?? 0) - (activityById?.get(projectA.projectId) ?? 0);
     }
 
     return (projectA.displayName || projectA.projectId).localeCompare(projectB.displayName || projectB.projectId);
   });
 
-  return byName;
+  if (
+    projectSortOrder !== 'date'
+    || !activityById
+    || !previousProjectIds
+    || previousProjectIds.length !== byName.length
+    || byName.some((project) => !previousProjectIds.includes(project.projectId))
+  ) {
+    return byName;
+  }
+
+  return keepNearbyProjectsStable(byName, previousProjectIds, activityById);
 };
 
 export const filterProjects = (projects: Project[], searchFilter: string): Project[] => {

@@ -8,7 +8,7 @@ import type { Project, SessionWithProvider, SidebarProjectListProps } from '@/sh
 
 /**
  * The Projects list draws a session's state as a dot on the row's left edge:
- * amber when it needs the user, green when it was touched lately. A session
+ * green when it was touched lately. A session
  * whose turn has ended while the tasks it launched still run takes that slot
  * in the purple of the workflow and agent cards, saying what is still going
  * on — while the spinner and the destructive-action lockout stay reserved for
@@ -39,7 +39,6 @@ const renderRow = (state: { isProcessing: boolean; hasBackgroundWork: boolean })
     project: PROJECT,
     session: SESSION,
     selectedSession: null,
-    needsAttention: false,
     currentTime: NOW,
     isEditing: false,
     renameDraft: '',
@@ -84,4 +83,34 @@ test('a response in flight still spins and shows no dot', () => {
   assert.equal(container.querySelector('[role="status"]'), null);
   assert.equal(container.querySelectorAll('.animate-spin').length, 1);
   assert.equal(recordedOptionsProps[0].isProcessing, true);
+});
+
+test('the green dot appears after a recent session stops processing', () => {
+  const row = renderRow({ isProcessing: true, hasBackgroundWork: false });
+  assert.equal(row.container.querySelector('[role="status"]'), null);
+
+  row.rerender(React.createElement(SidebarSessionItem, {
+    project: PROJECT,
+    session: SESSION,
+    selectedSession: null,
+    isProcessing: false,
+    hasBackgroundWork: false,
+    currentTime: NOW,
+    isEditing: false,
+    renameDraft: '',
+    onRenameDraftChange: noop,
+    onStartEditingSession: noop,
+    onCancelEditingSession: noop,
+    onSaveEditingSession: noop,
+    onProjectSelect: noop,
+    onSessionSelect: noop,
+    onDeleteSession: noop,
+    isSelecting: false,
+    isChecked: false,
+    onToggleSessionSelected: noop,
+    t,
+  }));
+
+  assert.ok(row.container.querySelector('[role="status"].bg-green-500'));
+  assert.equal(row.container.querySelector('.bg-amber-500'), null);
 });

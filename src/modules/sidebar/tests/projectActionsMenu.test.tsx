@@ -65,7 +65,6 @@ function renderProject(compact: boolean, withOpenSession = false) {
       onLoadMoreSessions={noop}
       activeSessions={new Set()}
       backgroundSessionIds={new Set()}
-      attentionSessionIds={new Set()}
       onNewSession={onNewSession}
       onStartEditingSession={noop}
       onCancelEditingSession={noop}

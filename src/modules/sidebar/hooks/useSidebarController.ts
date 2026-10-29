@@ -777,10 +777,24 @@ export function useSidebarController({
     });
   }, [optimisticStarByProjectId, projects]);
 
+  // Date sorting remembers the last displayed order between live project
+  // updates; a fresh load clears it so the new list starts in exact time order.
+  const previousProjectOrderRef = useRef<{ sortOrder: ProjectSortOrder; ids: string[] } | null>(null);
   const sortedProjects = useMemo(
-    () => sortProjects(projectsWithResolvedStarState, projectSortOrder),
-    [projectSortOrder, projectsWithResolvedStarState],
+    () => sortProjects(
+      projectsWithResolvedStarState,
+      projectSortOrder,
+      !isLoading && previousProjectOrderRef.current?.sortOrder === projectSortOrder
+        ? previousProjectOrderRef.current.ids
+        : undefined,
+    ),
+    [isLoading, projectSortOrder, projectsWithResolvedStarState],
   );
+  useEffect(() => {
+    previousProjectOrderRef.current = isLoading
+      ? null
+      : { sortOrder: projectSortOrder, ids: sortedProjects.map((project) => project.projectId) };
+  }, [isLoading, projectSortOrder, sortedProjects]);
 
   const runningProjects = useMemo(() => {
     if (activeSessionIds.size === 0) {
@@ -1208,6 +1222,8 @@ export function useSidebarController({
   }, [fetchArchivedSessions, onRefresh, t]);
 
   const refreshProjects = useCallback(async () => {
+    // A user-requested reload starts from exact send-time order again.
+    previousProjectOrderRef.current = null;
     setIsRefreshing(true);
     try {
       await Promise.all([
