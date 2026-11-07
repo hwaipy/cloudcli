@@ -3,7 +3,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 
 import type { ServerEvent,MarkSessionIdle,MarkSessionProcessing,PendingPermissionRequest,ProjectSession,LLMProvider,NormalizedMessage,GetSessionActivity,MarkSessionBackground } from '@/shared/types';
 import { showCompletionTitleIndicator } from '@/modules/chat/utils/pageTitleNotification';
-import { isStorableChatMessage, playChatCompletionSound, playNotificationSound } from '@/shared/utils';
+import { isChatSendResultOwned, isStorableChatMessage, playChatCompletionSound, playNotificationSound } from '@/shared/utils';
 import type { SessionStore } from '@/modules/chat/hooks/useSessionStore';
 import { normalizedToChatMessages } from '@/modules/chat/hooks/useChatMessages';
 import { collectRunningBackgroundTasks, listRunningBackgroundLaunches, readBackgroundTaskId, readBackgroundTaskStatus } from '@/modules/chat/utils/backgroundTasks';
@@ -86,6 +86,8 @@ export function useChatRealtimeHandlers({
   // the previous render's closed-over selection.
   const activeViewSessionIdRef = useRef<string | null>(selectedSession?.id || currentSessionId || null);
   activeViewSessionIdRef.current = selectedSession?.id || currentSessionId || null;
+  // Current run ordering is separate from message text and protects queue handoffs.
+  const newestRunRef = useRef(new Map<string, { id: string; startedAt: number }>());
   const isActiveRef = useRef(isActive);
   isActiveRef.current = isActive;
 
@@ -114,6 +116,15 @@ export function useChatRealtimeHandlers({
 
       const activeViewSessionId = activeViewSessionIdRef.current;
       const sid = (typeof msg.sessionId === 'string' && msg.sessionId) || activeViewSessionId;
+
+      if (sid && typeof msg.runId === 'string' && typeof msg.runStartedAt === 'number') {
+        const newest = newestRunRef.current.get(sid);
+        if ((msg.kind === 'complete' || msg.kind === 'chat_subscribed') && newest && newest.id !== msg.runId && newest.startedAt >= msg.runStartedAt) {
+          void requestLatestMessages(sid, false);
+          return;
+        }
+        if (!newest || msg.runStartedAt > newest.startedAt || newest.id === msg.runId) newestRunRef.current.set(sid, { id: msg.runId, startedAt: msg.runStartedAt });
+      }
 
       // Record replay progress for every sequenced live event.
       if (sid && typeof msg.seq === 'number') {
@@ -175,6 +186,13 @@ export function useChatRealtimeHandlers({
         }
 
         case 'protocol_error': {
+          // A live send controller owns the final outcome, including durable
+          // queue fallback or an explicit editing failure. Unowned refusals
+          // still need visible feedback; never blanket-hide busy errors.
+          if (isChatSendResultOwned(msg.clientMessageId)) {
+            if (sid && (msg.code === 'RUN_IN_PROGRESS' || msg.code === 'QUEUED_MESSAGES_PENDING')) onSessionProcessing?.(sid);
+            return;
+          }
           console.error('[Chat] Protocol error:', msg.code, msg.error);
           // The ✕ on a task whose end never reached this client (its process
           // went away, say): settle its card and chip instead of reporting a
@@ -209,7 +227,7 @@ export function useChatRealtimeHandlers({
             }
           }
           if (sid) {
-            if (msg.code === 'RUN_IN_PROGRESS') {
+            if (msg.code === 'RUN_IN_PROGRESS' || msg.code === 'QUEUED_MESSAGES_PENDING') {
               // The rejected send raced the activity update. Restore the
               // server-confirmed busy state so the next submit queues.
               onSessionProcessing?.(sid);
@@ -226,6 +244,7 @@ export function useChatRealtimeHandlers({
               && msg.code !== 'TASK_ID_REQUIRED'
               && msg.code !== 'NO_ACTIVE_CODEX_TURN'
               && msg.code !== 'RUN_IN_PROGRESS'
+              && msg.code !== 'QUEUED_MESSAGES_PENDING'
               && !String(msg.code ?? '').startsWith('STEER_')) {
               onSessionIdle?.(sid);
             }
@@ -324,8 +343,10 @@ export function useChatRealtimeHandlers({
             onSessionIdle?.(sid);
           }
           if (sid === activeViewSessionId) {
-            pendingPermissionRequestsRef.current = [];
-            setPendingPermissionRequests([]);
+            const remaining = msg.aborted ? [] : pendingPermissionRequestsRef.current.filter((request) =>
+              request.toolName === 'AskUserQuestion' && (request.input as { isBlocking?: boolean } | undefined)?.isBlocking === false);
+            pendingPermissionRequestsRef.current = remaining;
+            setPendingPermissionRequests(remaining);
           }
 
           if (msg.aborted) {
@@ -376,7 +397,7 @@ export function useChatRealtimeHandlers({
               setPendingPermissionRequests(nextPendingPermissionRequests);
             }
           }
-          if (sid) {
+          if (sid && (msg.input as { isBlocking?: boolean } | undefined)?.isBlocking !== false) {
             onSessionProcessing?.(sid);
           }
           break;

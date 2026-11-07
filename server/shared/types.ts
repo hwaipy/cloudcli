@@ -332,16 +332,21 @@ export type NormalizedMessage = {
   provider: LLMProvider;
   kind: MessageKind;
   /**
-   * Monotonic per-run sequence number assigned by the chat run registry when a
+   * Monotonic per-session sequence number (within one backend lifetime) assigned by the chat run registry when a
    * live event is forwarded to the websocket. History messages loaded over
    * REST do not carry it. Clients use it with `chat.subscribe` to replay only
    * the live events they missed across websocket reconnects.
    */
   seq?: number;
+  /** Identity and start time of the gateway run; old completion events cannot end newer runs. */
+  runId?: string;
+  runStartedAt?: number;
   role?: 'user' | 'assistant';
   content?: string;
   /** Codex assistant prose phase from a rollout; live SDK prose is commentary until the persisted final answer is loaded. */
   codexPhase?: 'commentary' | 'final_answer';
+  /** Structured asynchronous question choices supplied on Codex agent messages. */
+  codexQuestions?: unknown;
   /**
    * The model that produced this assistant message, as the provider reported
    * it on the transcript row (today: Claude's `message.model`, e.g.
@@ -624,6 +629,7 @@ export type ProviderRuntimeWriter = {
   isWebSocketWriter?: boolean;
 };
 
+/** A user decision routed by the websocket gateway to a pending provider interaction; updatedInput holds validated question answers or approval input. */
 export type ProviderPermissionDecision = {
   allow: boolean;
   updatedInput?: unknown;
@@ -1010,6 +1016,8 @@ export type QueuedChatMessage = {
 export type ProjectRepositoryRow = {
   project_id: string;
   project_path: string;
+  /** Persisted OS-level container isolation; request parameters cannot disable it. */
+  strict_file_isolation?: number;
   owner_user_id?: number | null;
   custom_project_name: string | null;
   isStarred: number;
@@ -1403,6 +1411,8 @@ export type FileTreeFileSystem = {
  * never import the Database module or its repositories directly.
  */
 export type FileTreeProjectGateway = {
+  /** Enables strict symlink-aware boundaries for project filesystem endpoints. */
+  isStrictProject?: (projectId: string) => boolean | Promise<boolean>;
   getProjectPathById(projectId: string): string | null | Promise<string | null>;
 };
 
@@ -1662,4 +1672,27 @@ export type CliApplication = {
  */
 export type SandboxCommandService = {
   execute(argumentsList: string[]): Promise<number>;
+};
+
+//----------------- HUB IDENTITY ASSERTIONS ------------
+
+/** A Hub-authenticated account claim signed for one registered backend with that backend's private registration key. */
+export type HubIdentityClaim = {
+  hubUserId: string;
+  username: string;
+  isAdmin: boolean;
+  backendId: string;
+  expiresAt: number;
+};
+
+// ---------------------------
+
+//----------------- CODEX PROCESS LAUNCH ------------
+/** A providers-owned process launch, optionally prepared by the strict project container runtime; cleanup releases its execution lease. */
+export type CodexProcessLaunch = {
+  command: string;
+  args: string[];
+  cleanup?: () => void;
+  /** Exports validated transcript snapshots from a private container volume. */
+  syncState?: () => Promise<string[] | void>;
 };

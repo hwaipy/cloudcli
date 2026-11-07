@@ -35,17 +35,17 @@ const stubServer = () => {
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     requestedPaths.push(url);
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (url === '/api/auth/user' && nextRefreshedToken) {
+    if (url === '/hub/auth/user' && nextRefreshedToken) {
       headers['X-Refreshed-Token'] = nextRefreshedToken;
     }
     if (url === '/api/user/onboarding-status' && onboardingStatusDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, onboardingStatusDelayMs));
     }
-    const body = url === '/api/auth/status'
+    const body = url === '/hub/auth/status'
       ? { needsSetup: false }
-      : url === '/api/auth/user'
+      : url === '/hub/auth/user'
         ? { user: { id: 1, username: 'triage' } }
-        : url === '/api/auth/login'
+        : url === '/hub/auth/login'
           ? { token: makeToken(nowSeconds()), user: { id: 1, username: 'triage' } }
           : url === '/api/user/onboarding-status'
             ? { hasCompletedOnboarding }
@@ -95,6 +95,7 @@ const renderApp = () => render(
 );
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/cloudcli/');
   localStorage.clear();
   requestedPaths = [];
   nextRefreshedToken = null;
@@ -117,7 +118,7 @@ afterEach(async () => {
 test('a refreshed token on the initial auth check does not run a second loading pass', async () => {
   const agedToken = makeToken(nowSeconds() - 4 * 86400);
   const refreshedToken = makeToken(nowSeconds());
-  localStorage.setItem('auth-token', agedToken);
+  localStorage.setItem('auth-token:hub', agedToken);
   nextRefreshedToken = refreshedToken;
 
   renderApp();
@@ -127,16 +128,16 @@ test('a refreshed token on the initial auth check does not run a second loading 
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
 
-  assert.equal(localStorage.getItem('auth-token'), refreshedToken);
+  assert.equal(localStorage.getItem('auth-token:hub'), refreshedToken);
   assert.equal(seenToken, refreshedToken);
-  assert.equal(requestedPaths.filter((path) => path === '/api/auth/user').length, 1);
+  assert.equal(requestedPaths.filter((path) => path === '/hub/auth/user').length, 1);
   assert.equal(loadingPasses, 1);
   assert.equal(workspaceMounts, 1);
   assert.ok(screen.getByText('workspace'));
 });
 
 test('tokens refreshed while the workspace is open do not remount it', async () => {
-  localStorage.setItem('auth-token', makeToken(nowSeconds() - 4 * 86400));
+  localStorage.setItem('auth-token:hub', makeToken(nowSeconds() - 4 * 86400));
 
   renderApp();
   await screen.findByText('workspace');
@@ -157,13 +158,13 @@ test('tokens refreshed while the workspace is open do not remount it', async () 
   assert.equal(workspaceMounts, 1);
   assert.equal(loadingPasses, 1);
   assert.deepEqual(
-    requestedPaths.slice(bootstrapRequests).filter((path) => path.startsWith('/api/auth/')),
+    requestedPaths.slice(bootstrapRequests).filter((path) => path.startsWith('/hub/auth/')),
     [],
   );
 });
 
 test('signing out after a token rotation still shows the login screen without a loading pass', async () => {
-  localStorage.setItem('auth-token', makeToken(nowSeconds()));
+  localStorage.setItem('auth-token:hub', makeToken(nowSeconds()));
 
   let logout: (() => void) | null = null;
   function LogoutProbe() {
@@ -190,13 +191,13 @@ test('signing out after a token rotation still shows the login screen without a 
   });
 
   await screen.findByText('login');
-  assert.equal(localStorage.getItem('auth-token'), null);
+  assert.equal(localStorage.getItem('auth-token:hub'), null);
   assert.equal(seenToken, null);
   assert.equal(loadingPasses, 1);
 });
 
 test('a language change after sign-in does not re-run the auth bootstrap', async () => {
-  localStorage.setItem('auth-token', makeToken(nowSeconds()));
+  localStorage.setItem('auth-token:hub', makeToken(nowSeconds()));
 
   renderApp();
   await screen.findByText('workspace');
@@ -216,12 +217,13 @@ test('a language change after sign-in does not re-run the auth bootstrap', async
   assert.equal(workspaceMounts, 1);
   assert.equal(loadingPasses, 1);
   assert.deepEqual(
-    requestedPaths.slice(bootstrapRequests).filter((path) => path.startsWith('/api/auth/')),
+    requestedPaths.slice(bootstrapRequests).filter((path) => path.startsWith('/hub/auth/')),
     [],
   );
 });
 
-test('signing in before onboarding shows onboarding without mounting the workspace first', async () => {
+test('direct installs show onboarding without mounting the workspace first', async () => {
+  window.history.replaceState({}, '', '/');
   hasCompletedOnboarding = false;
   // Long enough for React to render whatever the context publishes before
   // the onboarding status arrives.
@@ -256,4 +258,14 @@ test('signing in before onboarding shows onboarding without mounting the workspa
   assert.ok(requestedPaths.includes('/api/user/onboarding-status'));
   assert.notEqual(localStorage.getItem('auth-token'), null);
   assert.equal(workspaceMounts, 0);
+});
+
+
+test('Hub onboarding on one backend cannot replace the unified workspace', async () => {
+  hasCompletedOnboarding = false;
+  localStorage.setItem('auth-token:hub', makeToken(nowSeconds()));
+  renderApp();
+  await screen.findByText('workspace');
+  assert.equal(screen.queryByText('onboarding'), null);
+  assert.equal(requestedPaths.includes('/api/user/onboarding-status'), false);
 });

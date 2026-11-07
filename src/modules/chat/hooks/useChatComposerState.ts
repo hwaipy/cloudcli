@@ -1,3 +1,4 @@
+import { claimChatSendResult, getHubResourceBackend } from '@/shared/utils';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ChangeEvent,
@@ -12,6 +13,7 @@ import type {
 import { useDropzone } from 'react-dropzone';
 import { useTranslation } from 'react-i18next';
 
+import { rememberMessageSendOrigin } from '@/modules/chat/context/MessageSendAnimationContext';
 import { api } from '@/shared/api';
 import { PROVIDER_PERMISSION_PREFERENCE_KEYS } from '@/shared/constants';
 import { readUserPreference } from '@/shared/userSettings';
@@ -92,6 +94,9 @@ type CommandExecutionResult = {
 
 
 type SubmitOptions = {
+  /** Card replies bypass the composer and must preserve its draft and attachments. */
+  questionAnswer?: string;
+  onQuestionFailure?: (error: Error) => void;
   /**
    * Send the text as a chat message even when it starts with "/" (or is
    * "help"). Set only for the re-submit of a custom command's expanded body:
@@ -114,7 +119,7 @@ const isImageAttachment = (attachment: ChatAttachment) => {
   return /\.(gif|jpe?g|png|svg|webp)$/i.test(attachment.path || attachment.name || '');
 };
 
-const uploadAttachmentFiles = async (files: File[]): Promise<unknown[]> => {
+const uploadAttachmentFiles = async (files: File[], backendId?: string): Promise<unknown[]> => {
   if (files.length === 0) {
     return [];
   }
@@ -124,7 +129,7 @@ const uploadAttachmentFiles = async (files: File[]): Promise<unknown[]> => {
     formData.append('files', file);
   });
 
-  const response = await api.assets.uploadFiles(formData);
+  const response = await api.assets.uploadFiles(formData, backendId);
 
   if (!response.ok) {
     const body = await response.json().catch(() => null);
@@ -208,6 +213,12 @@ export function useChatComposerState({
 }: UseChatComposerStateArgs) {
   const { t } = useTranslation('chat');
   const pendingSteerRef = useRef(false);
+  // A send may wait on uploads, session creation, or a server receipt; newer
+  // edits during that wait must remain in the composer when the send settles.
+  const inputRevisionRef = useRef(0);
+  // Reused when the same unacknowledged text is retried, so the server can
+  // replay its receipt instead of starting the turn a second time.
+  const pendingSendRef = useRef<{ sessionId: string; content: string; clientMessageId: string } | null>(null);
   // The composer text together with the chat scope it belongs to. They are one
   // state rather than a value plus a ref because they have to move in lockstep:
   // on a session switch there is one commit where the scope has already changed
@@ -296,6 +307,7 @@ export function useChatComposerState({
   }, []);
 
   const setInput = useCallback<Dispatch<SetStateAction<string>>>((next) => {
+    inputRevisionRef.current += 1;
     setInputState((previous) => ({
       scope: draftScopeRef.current,
       value: typeof next === 'function' ? next(previous.value) : next,
@@ -719,9 +731,12 @@ export function useChatComposerState({
   // anything typed since, and the composer says so, rather than showing a card
   // nothing will send.
   const queueMessage = useCallback(
-    async (durableDraft: QueuedDraft, queuedSessionKey: string | null) => {
+    async (durableDraft: QueuedDraft, queuedSessionKey: string | null, clearComposer = true) => {
       const queuedFromOpenComposer = !queuedSessionKey || sessionKeyRef.current === queuedSessionKey;
-      if (queuedFromOpenComposer) {
+      const cancelSendAnimation = clearComposer && queuedFromOpenComposer
+        ? rememberMessageSendOrigin(queuedSessionKey, durableDraft.content, textareaRef.current)
+        : () => {};
+      if (clearComposer && queuedFromOpenComposer) {
         setInput('');
         inputValueRef.current = '';
         setAttachedFiles([]);
@@ -734,7 +749,7 @@ export function useChatComposerState({
         if (draftScopeRef.current) {
           writeDraftText(draftScopeRef.current, '');
         }
-      } else if (queuedSessionKey && readDraftText(queuedSessionKey) === durableDraft.content) {
+      } else if (clearComposer && queuedSessionKey && readDraftText(queuedSessionKey) === durableDraft.content) {
         // The user changed sessions during the upload. The composer they left
         // still holds the text as its draft: clear it, or going back and
         // pressing Enter would queue the same message a second time.
@@ -746,6 +761,7 @@ export function useChatComposerState({
       if (queuedSessionKey) {
         try {
           const { queuedMessage, queuedMessages } = await appendQueuedMessage(queuedSessionKey, {
+            ...(durableDraft.id ? { id: durableDraft.id } : {}),
             content: durableDraft.content,
             options: durableDraft.options,
             attachments: durableDraft.uploadedAttachments,
@@ -763,6 +779,7 @@ export function useChatComposerState({
           };
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
+          cancelSendAnimation();
           console.error('Failed to queue message:', error);
           addMessage({
             type: 'error',
@@ -770,14 +787,15 @@ export function useChatComposerState({
             timestamp: new Date(),
           });
           const withTypedSince = (typedSince: string) => (
-            [durableDraft.content, typedSince].filter((part) => part.trim()).join('\n\n')
+            !clearComposer && typedSince === durableDraft.content ? typedSince
+              : [durableDraft.content, typedSince].filter((part) => part.trim()).join('\n\n')
           );
           if (sessionKeyRef.current === queuedSessionKey) {
             const restored = withTypedSince(inputValueRef.current);
             setInput(restored);
             inputValueRef.current = restored;
             if (queuedFromOpenComposer) {
-              setAttachedFiles((current) => [...durableDraft.attachments, ...current]);
+              setAttachedFiles((current) => [...new Set([...durableDraft.attachments, ...current])]);
             }
             if (draftScopeRef.current) {
               writeDraftText(draftScopeRef.current, restored);
@@ -786,7 +804,7 @@ export function useChatComposerState({
             // Browser files cannot follow it into a composer that is not open.
             writeDraftText(queuedSessionKey, withTypedSince(readDraftText(queuedSessionKey)));
           }
-          return;
+          return false;
         }
       }
 
@@ -799,7 +817,7 @@ export function useChatComposerState({
       // sessions meanwhile, the durable record is already enough; do not
       // attach its UI card to the newly opened composer.
       if (queuedSessionKey && sessionKeyRef.current !== queuedSessionKey) {
-        return;
+        return true;
       }
 
       queuedDraftSessionRef.current = queuedSessionKey;
@@ -808,6 +826,7 @@ export function useChatComposerState({
           ? queuedCard
           : { ...draft, attachments: previous.find((item) => item.id === draft.id)?.attachments ?? [] },
       ));
+      return true;
     },
     [addMessage, recordSentMessage, resetCommandMenuState, setInput, t],
   );
@@ -819,8 +838,10 @@ export function useChatComposerState({
       submitOptions?: SubmitOptions,
     ) => {
       event.preventDefault();
-      const currentInput = queuedSubmission?.content ?? inputValueRef.current;
-      const currentAttachments = queuedSubmission?.attachments ?? attachedFiles;
+      const activeEditAnchorId = submitOptions?.questionAnswer !== undefined ? null : editingAnchorId;
+      const currentInput = submitOptions?.questionAnswer ?? queuedSubmission?.content ?? inputValueRef.current;
+      const inputRevisionAtSubmit = inputRevisionRef.current;
+      const currentAttachments = submitOptions?.questionAnswer !== undefined ? [] : queuedSubmission?.attachments ?? attachedFiles;
       const previouslyUploadedAttachments = queuedSubmission?.uploadedAttachments ?? [];
       if (
         (
@@ -836,7 +857,7 @@ export function useChatComposerState({
       // A turn is already in flight: stash this message instead of sending it.
       // Upload attached files now so the queued record contains durable image
       // descriptors that can be sent even if another session is open later.
-      if (isLoading) {
+      if (isLoading && submitOptions?.questionAnswer === undefined) {
         // A run can restart in the tiny gap between scheduling and flushing a
         // queued submission. Put the same durable draft back without uploading
         // its files again.
@@ -850,7 +871,7 @@ export function useChatComposerState({
         const queuedSessionKey = sessionKey;
         let uploadedAttachments: unknown[] = [];
         try {
-          uploadedAttachments = await uploadAttachmentFiles(currentAttachments);
+          uploadedAttachments = await uploadAttachmentFiles(currentAttachments, selectedProject?.__hubBackendId ?? getHubResourceBackend('project', selectedProject?.projectId) ?? undefined);
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           console.error('Queued file upload failed:', error);
@@ -867,7 +888,7 @@ export function useChatComposerState({
           attachments: currentAttachments,
           uploadedAttachments,
           options: queuedOptions,
-        }, queuedSessionKey);
+        }, queuedSessionKey, submitOptions?.questionAnswer === undefined);
         return;
       }
 
@@ -913,7 +934,7 @@ export function useChatComposerState({
       let uploadedAttachments = previouslyUploadedAttachments;
       if (uploadedAttachments.length === 0 && currentAttachments.length > 0) {
         try {
-          uploadedAttachments = await uploadAttachmentFiles(currentAttachments);
+          uploadedAttachments = await uploadAttachmentFiles(currentAttachments, selectedProject?.__hubBackendId ?? getHubResourceBackend('project', selectedProject?.projectId) ?? undefined);
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Unknown error';
           console.error('File upload failed:', error);
@@ -942,7 +963,7 @@ export function useChatComposerState({
             projectPath: resolvedProjectPath,
             initialMessage: messageContent,
             permissionMode: resolvePermissionModeForProvider(provider, permissionMode),
-          });
+          }, selectedProject?.__hubBackendId ?? getHubResourceBackend('project', selectedProject?.projectId) ?? undefined);
           if (!response.ok) {
             throw new Error(`Failed to create session (${response.status})`);
           }
@@ -1008,7 +1029,7 @@ export function useChatComposerState({
             attachments: currentAttachments,
             uploadedAttachments,
             options: buildSendOptions(currentInput),
-          }, targetSessionId);
+          }, targetSessionId, submitOptions?.questionAnswer === undefined);
           return;
         }
       }
@@ -1023,19 +1044,58 @@ export function useChatComposerState({
         // Tags this echo as the replacement, so the truncation the server
         // broadcasts a moment later cuts the turns being replaced without
         // taking the message the user just sent with them.
-        ...(editingAnchorId ? { replacesAnchorId: editingAnchorId } : {}),
+        ...(activeEditAnchorId ? { replacesAnchorId: activeEditAnchorId } : {}),
       };
 
       // One message shape for every provider. The backend resolves the
       // provider, project path, and provider-native resume id from the
       // session row; `options` only carries composer-level preferences.
+      const priorPendingSend = pendingSendRef.current;
+      const clientMessageId = priorPendingSend?.sessionId === targetSessionId && priorPendingSend.content === messageContent
+        ? priorPendingSend.clientMessageId
+        : `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      pendingSendRef.current = { sessionId: targetSessionId, content: messageContent, clientMessageId };
+      const releaseSendResult = claimChatSendResult(clientMessageId);
+      let unsubscribe: () => void = () => undefined;
+      let timer: number | undefined;
+      const receipt = new Promise<{ accepted: boolean; userMessageId?: string; error?: string; retryable?: boolean; code?: string }>((resolve) => {
+        if (!subscribe) {
+          // Legacy non-application callers and test doubles may not expose the
+          // event stream. The app always supplies it and waits for server ACK.
+          resolve({ accepted: true });
+          return;
+        }
+        let settled = false;
+        const settle = (result: { accepted: boolean; userMessageId?: string; error?: string; retryable?: boolean; code?: string }) => {
+          if (settled) return;
+          settled = true;
+          if (timer !== undefined) window.clearTimeout(timer);
+          unsubscribe();
+          resolve(result);
+        };
+        unsubscribe = subscribe((event) => {
+          if (event.sessionId !== targetSessionId || event.clientMessageId !== clientMessageId) return;
+          if (event.kind === 'chat_send_accepted') settle({ accepted: true, userMessageId: typeof event.userMessageId === 'string' ? event.userMessageId : undefined });
+          if (event.kind === 'protocol_error') settle({
+            accepted: false,
+            error: String(event.error || 'The server refused this message.'),
+            retryable: event.code === 'RUN_IN_PROGRESS',
+            code: typeof event.code === 'string' ? event.code : undefined,
+          });
+        });
+        timer = window.setTimeout(() => settle({ accepted: false, error: 'The server did not confirm receipt. Your message remains in the input; retry the same text while this page stays open to reuse its request ID.' }), 20_000);
+      });
+      const cancelSendAnimation = !queuedSubmission && submitOptions?.questionAnswer === undefined
+        ? rememberMessageSendOrigin(targetSessionId, currentInput, textareaRef.current)
+        : () => {};
       const wasSent = sendMessage({
         // Replacing an already-sent message is its own frame: it changes the
         // shape of the conversation, so it gets validated separately and can
         // report why it was refused.
-        type: editingAnchorId ? 'chat.edit-send' : 'chat.send',
+        type: activeEditAnchorId ? 'chat.edit-send' : 'chat.send',
         sessionId: targetSessionId,
-        ...(editingAnchorId ? { anchorId: editingAnchorId } : {}),
+        clientMessageId,
+        ...(activeEditAnchorId ? { anchorId: activeEditAnchorId } : {}),
         content: messageContent,
         options: {
           ...(queuedSubmission?.options ?? buildSendOptions(messageContent)),
@@ -1043,6 +1103,11 @@ export function useChatComposerState({
         },
       });
       if (wasSent === false) {
+        releaseSendResult();
+        submitOptions?.onQuestionFailure?.(new Error('Connection unavailable.'));
+        cancelSendAnimation();
+        unsubscribe();
+        if (timer !== undefined) window.clearTimeout(timer);
         addMessage({
           type: 'error',
           content: 'Connection unavailable. Message was not sent; it remains in the input.',
@@ -1051,7 +1116,36 @@ export function useChatComposerState({
         return;
       }
 
-      addMessage(userMessage);
+      const sendReceipt = await receipt;
+      releaseSendResult();
+      if (!sendReceipt.accepted) {
+        cancelSendAnimation();
+        if (sendReceipt.retryable === false) pendingSendRef.current = null;
+        if (!queuedSubmission && !activeEditAnchorId
+          && (sendReceipt.code === 'RUN_IN_PROGRESS' || sendReceipt.code === 'QUEUED_MESSAGES_PENDING')) {
+          const preserveComposer = inputRevisionRef.current !== inputRevisionAtSubmit
+            || inputValueRef.current !== currentInput
+            || attachedFiles !== currentAttachments;
+          const queued = await queueMessage({
+            id: clientMessageId,
+            content: currentInput,
+            attachments: currentAttachments,
+            uploadedAttachments,
+            options: buildSendOptions(currentInput),
+          }, targetSessionId, submitOptions?.questionAnswer === undefined && !preserveComposer);
+          if (queued) pendingSendRef.current = null;
+          console.info('[ChatAdmission]', { timestamp: new Date().toISOString(), sessionId: targetSessionId, clientMessageId, queuedMessageId: queued ? clientMessageId : undefined, result: queued ? 'queued' : 'rejected', errorCode: sendReceipt.code });
+          return;
+        }
+        submitOptions?.onQuestionFailure?.(new Error(sendReceipt.error || 'Answer was not confirmed.'));
+        addMessage({ type: 'error', content: sendReceipt.error || 'The server did not confirm receipt. Your message remains in the input.', timestamp: new Date() });
+        return;
+      }
+      pendingSendRef.current = null;
+
+      // New gateways already broadcast/replay the authoritative row before ACK.
+      // Retain the local fallback only for older backends, scoped to its target.
+      if (!sendReceipt.userMessageId) addMessage({ ...userMessage, sessionId: targetSessionId });
       // Mark this request as processing only after the socket accepted the
       // frame. A failed local send must leave the composer ready to retry.
       onSessionProcessing?.(targetSessionId, {
@@ -1061,26 +1155,30 @@ export function useChatComposerState({
 
       setIsUserScrolledUp(false);
       setTimeout(() => scrollToBottom(), 100);
-      setEditingAnchorId(null);
+      if (submitOptions?.questionAnswer === undefined) setEditingAnchorId(null);
 
       // Recorded under the (possibly just-allocated) session id, so the first
       // message of a new chat lands in the history of the session the user is
       // navigated to. Queued drafts were recorded when they were queued; the
       // consecutive-duplicate check keeps this second call a no-op.
       recordSentMessage(currentInput, targetSessionId);
-      setInput('');
-      inputValueRef.current = '';
-      resetCommandMenuState();
-      setAttachedFiles([]);
-      setFileErrors(new Map());
-      setIsTextareaExpanded(false);
+      // The receipt can arrive after the user has started their next message.
+      // A queued row also is not the text currently being composed.
+      if (submitOptions?.questionAnswer === undefined && !queuedSubmission && inputRevisionRef.current === inputRevisionAtSubmit) {
+        setInput('');
+        inputValueRef.current = '';
+        resetCommandMenuState();
+        setAttachedFiles([]);
+        setFileErrors(new Map());
+        setIsTextareaExpanded(false);
 
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
-      }
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+        }
 
-      if (draftScopeRef.current) {
-        writeDraftText(draftScopeRef.current, '');
+        if (draftScopeRef.current) {
+          writeDraftText(draftScopeRef.current, '');
+        }
       }
     },
     [
@@ -1103,6 +1201,8 @@ export function useChatComposerState({
       scrollToBottom,
       selectedProject,
       sendMessage,
+      subscribe,
+      setInput,
       sessionKey,
       addMessage,
       setIsUserScrolledUp,
@@ -1147,12 +1247,14 @@ export function useChatComposerState({
     const targetSessionId = currentSessionId || selectedSession?.id;
     if (!canSteer || provider !== 'codex' || !isLoading || !targetSessionId || !content || attachedFiles.length || editingAnchorId || pendingSteerRef.current) return;
     if (!subscribe) return;
+    const inputRevisionAtSend = inputRevisionRef.current;
     pendingSteerRef.current = true;
+    const cancelSendAnimation = rememberMessageSendOrigin(targetSessionId, content, textareaRef.current);
     const clientMessageId = `steer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     // A turn can finish between the keypress and the App Server's steer check.
     // Persist the text as the next turn when Codex explicitly did not accept it.
     const queueUnacceptedSteer = () => {
-      if (inputValueRef.current !== inputAtSend) return;
+      if (inputRevisionRef.current !== inputRevisionAtSend || inputValueRef.current !== inputAtSend) return;
       void queueMessage({
         content,
         attachments: [],
@@ -1166,6 +1268,7 @@ export function useChatComposerState({
       settled = true;
       pendingSteerRef.current = false;
       unsubscribe();
+      cancelSendAnimation();
       addMessage({ type: 'error', content: 'Steer was not confirmed. Your message remains in the input.', timestamp: new Date() });
     }, 30_000);
     unsubscribe = subscribe((event) => {
@@ -1178,6 +1281,7 @@ export function useChatComposerState({
       window.clearTimeout(timer);
       unsubscribe();
       if (!accepted) {
+        cancelSendAnimation();
         if (event.kind === 'protocol_error'
           && (event.code === 'NO_ACTIVE_CODEX_TURN' || event.code === 'STEER_UNAVAILABLE')) queueUnacceptedSteer();
         return;
@@ -1190,6 +1294,7 @@ export function useChatComposerState({
       textareaRef.current?.focus();
     });
     if (sendMessage({ type: 'chat.steer', sessionId: targetSessionId, clientMessageId, content }) === false) {
+      cancelSendAnimation();
       settled = true;
       pendingSteerRef.current = false;
       window.clearTimeout(timer);
@@ -1197,6 +1302,33 @@ export function useChatComposerState({
       queueUnacceptedSteer();
     }
   }, [addMessage, attachedFiles.length, buildSendOptions, canSteer, currentSessionId, editingAnchorId, isLoading, provider, queueMessage, recordSentMessage, selectedSession?.id, sendMessage, setInput, subscribe]);
+
+  // Card replies preserve the main draft and wait for backend acknowledgement.
+  const answerQuestion = useCallback(async (text: string) => {
+    const sendIdleAnswer = () => new Promise<void>((resolve, reject) => {
+      void handleSubmit(createFakeSubmitEvent(), undefined, { questionAnswer: text, skipCommandInterception: true, onQuestionFailure: reject }).then(resolve, reject);
+    });
+    const sessionId = currentSessionId || selectedSession?.id;
+    if (!isLoading || !canSteer) { await sendIdleAnswer(); return; }
+    if (!sessionId || !subscribe) throw new Error('Question session is unavailable.');
+    await new Promise<void>((resolve, reject) => {
+      const clientMessageId = `question-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      let unsubscribe = () => {};
+      const finish = (error?: Error) => { window.clearTimeout(timer); unsubscribe(); if (error) reject(error); else resolve(); };
+      const timer = window.setTimeout(() => finish(new Error('Answer was not confirmed.')), 30000);
+      unsubscribe = subscribe((event) => {
+        if (event.sessionId !== sessionId || event.clientMessageId !== clientMessageId) return;
+        if (event.kind === 'chat_steer_accepted') { recordSentMessage(text, sessionId); finish(); }
+        else if (event.kind === 'protocol_error') {
+          if (event.code === 'NO_ACTIVE_CODEX_TURN' || event.code === 'STEER_UNAVAILABLE') {
+            window.clearTimeout(timer); unsubscribe();
+            void sendIdleAnswer().then(resolve, reject);
+          } else finish(new Error(String(event.error || 'Answer rejected.')));
+        }
+      });
+      if (sendMessage({ type: 'chat.steer', sessionId, clientMessageId, content: text }) === false) finish(new Error('Connection unavailable.'));
+    });
+  }, [isLoading, canSteer, currentSessionId, selectedSession?.id, subscribe, sendMessage, recordSentMessage, handleSubmit]);
 
   /** Moves one persisted queued turn into the active App Server turn after acknowledgement. */
   const steerQueuedDraft = useCallback((id: string) => {
@@ -1332,6 +1464,7 @@ export function useChatComposerState({
         if (previous.scope === draftScope && previous.value === savedInput) {
           return previous;
         }
+        inputRevisionRef.current += 1;
         inputValueRef.current = savedInput;
         return { scope: draftScope, value: savedInput };
       });
@@ -1538,6 +1671,7 @@ export function useChatComposerState({
       validIds.forEach((requestId) => {
         sendMessage({
           type: 'chat.permission-response',
+          sessionId: currentSessionId || selectedSession?.id,
           requestId,
           allow: Boolean(decision?.allow),
           updatedInput: decision?.updatedInput,
@@ -1550,7 +1684,7 @@ export function useChatComposerState({
         previous.filter((request) => !validIds.includes(request.requestId)),
       );
     },
-    [sendMessage, setPendingPermissionRequests],
+    [sendMessage, setPendingPermissionRequests, currentSessionId, selectedSession?.id],
   );
 
   /** Loads an already-sent message back into the composer to be replaced. */
@@ -1600,6 +1734,7 @@ export function useChatComposerState({
     openAttachmentPicker: open,
     handleSubmit,
     handleSteer,
+    answerQuestion,
     steerQueuedDraft,
     backgroundSendPrompt,
     resolveBackgroundSendPrompt,

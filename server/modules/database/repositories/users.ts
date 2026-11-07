@@ -5,6 +5,8 @@
  * User records back both sign-in and administrator-managed accounts.
  */
 
+import { randomBytes } from 'node:crypto';
+
 import { getConnection } from '@/modules/database/connection.js';
 
 type UserRow = {
@@ -129,6 +131,47 @@ export const userDb = {
         'SELECT id, username, avatar, created_at, last_login FROM users WHERE is_active = 1 ORDER BY id LIMIT 1'
       )
       .get() as UserPublicRow | undefined;
+  },
+
+  /** Maps a Hub account to a local row so existing per-user project and session ownership remains enforced on this backend. */
+  getOrCreateHubUser(hubUserId: string, username: string): UserPublicRow {
+    const db = getConnection();
+    db.exec(`CREATE TABLE IF NOT EXISTS hub_user_mappings (
+      hub_user_id TEXT PRIMARY KEY NOT NULL,
+      user_id INTEGER NOT NULL UNIQUE,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`);
+    const transaction = db.transaction(() => {
+      const mapped = db.prepare(`
+        SELECT users.id, users.username, users.avatar, users.created_at, users.last_login
+        FROM hub_user_mappings JOIN users ON users.id = hub_user_mappings.user_id
+        WHERE hub_user_mappings.hub_user_id = ? AND users.is_active = 1
+      `).get(hubUserId) as UserPublicRow | undefined;
+      if (mapped) return mapped;
+
+      const existingByName = db.prepare('SELECT id FROM users WHERE username = ? AND is_active = 1').get(username) as { id: number } | undefined;
+      const existingMapping = existingByName
+        ? db.prepare('SELECT hub_user_id FROM hub_user_mappings WHERE user_id = ?').get(existingByName.id) as { hub_user_id: string } | undefined
+        : undefined;
+      if (existingByName && !existingMapping) {
+        db.prepare('INSERT INTO hub_user_mappings (hub_user_id, user_id) VALUES (?, ?)').run(hubUserId, existingByName.id);
+        return userDb.getUserById(existingByName.id)!;
+      }
+
+      const internalUsername = `hub_${hubUserId.slice(0, 20)}`;
+      const created = db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)')
+        .run(internalUsername, `hub-internal:${randomBytes(48).toString('hex')}`);
+      const localUserId = Number(created.lastInsertRowid);
+      db.prepare('INSERT INTO hub_user_mappings (hub_user_id, user_id) VALUES (?, ?)').run(hubUserId, localUserId);
+      const userCount = (db.prepare('SELECT COUNT(*) AS count FROM users').get() as { count: number }).count;
+      if (userCount === 1) {
+        db.prepare('UPDATE projects SET owner_user_id = ? WHERE owner_user_id IS NULL').run(localUserId);
+        db.prepare('UPDATE sessions SET owner_user_id = ? WHERE owner_user_id IS NULL').run(localUserId);
+      }
+      return userDb.getUserById(localUserId)!;
+    });
+    return transaction.immediate() as UserPublicRow;
   },
 
   /** Stores the user's preferred git name and email. */

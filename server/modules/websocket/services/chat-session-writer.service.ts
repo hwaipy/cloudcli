@@ -39,7 +39,7 @@ type ChatSessionWriterOptions = {
  * - `session_created` events are swallowed and turned into a provider-id
  *   mapping; the frontend never learns provider-native ids.
  * - every other event gets `sessionId` remapped to the app session id and a
- *   per-run `seq` assigned before being forwarded.
+ *   per-session `seq` assigned before being forwarded.
  * - `setSessionId(...)` calls (used by runtimes to label captured ids) are
  *   intercepted and recorded as the provider-id mapping as well.
  */

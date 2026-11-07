@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { createRef } from 'react';
-import { fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 import { test, vi } from 'vitest';
 
 import ChatMessagesPane from '@/modules/chat/transcript/ChatMessagesPane';
@@ -78,6 +78,8 @@ function paneProps(chatMessages: ChatMessage[]) {
     onWheel: noop,
     onTouchMove: noop,
     isLoadingSessionMessages: false,
+    sessionHistoryStatus: 'idle',
+    onRetrySessionHistory: noop,
     chatMessages,
     currentSessionId: 'session-1',
     provider: 'claude',
@@ -151,6 +153,24 @@ test('a stream tick re-renders the growing row, not the collapsed tool groups ab
   );
 });
 
+test('a failed transcript load is visible and offers a retry action', () => {
+  const retry = vi.fn();
+  const view = render(
+    <UiPreferencesProvider>
+      <ChatMessagesPane
+        {...(paneProps([]) as any)}
+        sessionHistoryStatus="error"
+        sessionHistoryErrorCode="CODEX_HISTORY_SOURCE_UNAVAILABLE"
+        onRetrySessionHistory={retry}
+      />
+    </UiPreferencesProvider>,
+  );
+
+  assert.ok(view.getByRole('alert').textContent?.trim());
+  fireEvent.click(view.getByRole('alert').querySelector('button') as HTMLButtonElement);
+  assert.equal(retry.mock.calls.length, 1);
+});
+
 test('the active work indicator is the last item in the scrolling transcript', () => {
   const chatMessages = [assistantRow(0)];
   const view = render(
@@ -209,4 +229,100 @@ test('queued turns follow the active response inside the scrolling transcript an
   assert.deepEqual(onEditQueuedDraft.mock.calls[0], ['first']);
   assert.deepEqual(onDeleteQueuedDraft.mock.calls[0], ['first']);
   assert.deepEqual(onReorderQueuedDraft.mock.calls[0], ['first', 'second']);
+});
+
+test('queued turns stay below Codex updates and thinking throughout an asynchronous turn', async () => {
+  const userMessage: ChatMessage = {
+    type: 'user',
+    content: 'Review the deployment plan',
+    timestamp: '2026-01-01T00:10:00.000Z',
+  };
+  const update: ChatMessage = {
+    type: 'assistant',
+    content: 'I am checking the deployment steps.',
+    timestamp: '2026-01-01T00:10:01.000Z',
+    codexPhase: 'commentary',
+  };
+  const thinking: ChatMessage = {
+    type: 'assistant',
+    content: 'Comparing the service topology.',
+    timestamp: '2026-01-01T00:10:02.000Z',
+    codexPhase: 'commentary',
+    isThinking: true,
+  };
+  const queuedDrafts = [{ id: 'queued-1', content: 'Also verify the health check', attachments: [] }];
+  let transcript: ChatMessage[] = [userMessage];
+  let activity: { statusText: string; canInterrupt: boolean; startedAt: number } | null = null;
+  const view = render(
+    <UiPreferencesProvider>
+      <ChatMessagesPane
+        {...(paneProps(transcript) as any)}
+        provider="codex"
+        activity={activity}
+        queuedDrafts={queuedDrafts}
+      />
+    </UiPreferencesProvider>,
+  );
+
+  const assertQueueFollowsCodexTail = (stage: string) => {
+    const rows = Array.from(view.container.querySelectorAll('.chat-message'));
+    const queue = view.container.querySelector('[aria-label="Queued messages"]');
+    assert.ok(queue, `${stage}: queue must remain visible`);
+    const status = view.container.querySelector('[role="status"]');
+    if (status) {
+      assert.equal(status.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING, Node.DOCUMENT_POSITION_FOLLOWING,
+        `${stage}: activity status must precede the queue`);
+    }
+    for (const row of rows) {
+      assert.equal(row.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING, Node.DOCUMENT_POSITION_FOLLOWING,
+        `${stage}: every transcript update/thinking row must precede the queue`);
+    }
+  };
+
+  // Simulate the real event order: queue persistence can finish before the
+  // first status/update frame reaches the browser.
+  assertQueueFollowsCodexTail('queue persisted');
+  await act(async () => {
+    activity = { statusText: 'Thinking', canInterrupt: true, startedAt: Date.now() };
+    view.rerender(
+      <UiPreferencesProvider>
+        <ChatMessagesPane {...(paneProps(transcript) as any)} provider="codex" activity={activity} queuedDrafts={queuedDrafts} />
+      </UiPreferencesProvider>,
+    );
+  });
+  assertQueueFollowsCodexTail('thinking status arrived');
+
+  await act(async () => {
+    transcript = [userMessage, update];
+    activity = { ...activity!, statusText: 'Reading files' };
+    view.rerender(
+      <UiPreferencesProvider>
+        <ChatMessagesPane {...(paneProps(transcript) as any)} provider="codex" activity={activity} queuedDrafts={queuedDrafts} />
+      </UiPreferencesProvider>,
+    );
+  });
+  assertQueueFollowsCodexTail('commentary update arrived');
+
+  await act(async () => {
+    transcript = [userMessage, update, thinking];
+    view.rerender(
+      <UiPreferencesProvider>
+        <ChatMessagesPane {...(paneProps(transcript) as any)} provider="codex" activity={activity} queuedDrafts={queuedDrafts} />
+      </UiPreferencesProvider>,
+    );
+  });
+  assertQueueFollowsCodexTail('thinking message arrived');
+
+  await act(async () => {
+    transcript = [userMessage, update, thinking, {
+      type: 'assistant', content: 'The plan is ready.', timestamp: '2026-01-01T00:10:03.000Z', codexPhase: 'final_answer',
+    }];
+    activity = null;
+    view.rerender(
+      <UiPreferencesProvider>
+        <ChatMessagesPane {...(paneProps(transcript) as any)} provider="codex" activity={activity} queuedDrafts={queuedDrafts} />
+      </UiPreferencesProvider>,
+    );
+  });
+  assertQueueFollowsCodexTail('final answer arrived');
 });

@@ -120,6 +120,39 @@ test('another account cannot subscribe to or send into an owned session', async 
   });
 });
 
+test('a direct send cannot overtake an earlier queued turn', async () => {
+  await withIsolatedDatabase(async () => {
+    sessionDraftsDb.appendQueuedMessage(1, SESSION_ID, { content: 'queued first', attachments: [] });
+    const tab = createFakeSocket();
+    const runs: string[] = [];
+    const runtime = {
+      hasRuntime: () => true,
+      hasBackgroundWork: () => false,
+      getPendingApprovalsForSession: () => [],
+      run: async (_provider: string, content: string) => { runs.push(content); },
+    } as never;
+    handleChatConnection(tab as never, { user: { id: 1 } } as never, { runtime });
+
+    tab.emit('message', JSON.stringify({
+      type: 'chat.send',
+      sessionId: SESSION_ID,
+      clientMessageId: 'later-send',
+      content: 'later direct send',
+    }));
+    await settle();
+
+    assert.ok(tab.frames.some((frame) => frame.kind === 'protocol_error'
+      && frame.code === 'QUEUED_MESSAGES_PENDING'
+      && frame.clientMessageId === 'later-send'));
+    assert.deepEqual(runs, [], 'the later direct send is not dispatched');
+    assert.deepEqual(
+      (sessionDraftsDb.getDrafts(1)[0]?.queuedMessage as Array<{ content: string }>).map((item) => item.content),
+      ['queued first'],
+    );
+    assert.equal(chatRunRegistry.getRun(SESSION_ID), undefined);
+  });
+});
+
 test('a tab that subscribes to an idle session is not attached to its old run', async () => {
   await withIsolatedDatabase(async () => {
     const run = startAndCompleteRun(createFakeSocket());
@@ -262,5 +295,33 @@ test('steering a queued turn takes exactly that item and restores it when refuse
     assert.deepEqual(calls, ['second', 'first']);
     assert.ok(tab.frames.some((frame) => frame.kind === 'chat_steer_accepted' && frame.clientMessageId === 'accept'));
     assert.deepEqual((sessionDraftsDb.getDrafts(1)[0]?.queuedMessage as Array<{ content: string }>).map((item) => item.content), ['second']);
+  });
+});
+
+test('an idle session still replays a Codex question and accepts its answer with owner validation', async () => {
+  await withIsolatedDatabase(async () => {
+    const socket = createFakeSocket();
+    const decisions: unknown[] = [];
+    const pending = [{ requestId: 'codex-question-pending', sessionId: SESSION_ID, toolName: 'AskUserQuestion', input: { isBlocking: false, questions: [] } }];
+    const runtime = {
+      hasBackgroundWork: () => false,
+      getPendingApprovalsForSession: (sessionId: string) => sessionId === SESSION_ID ? pending : [],
+      resolveToolApproval: (id: string, decision: unknown) => { decisions.push({ id, decision }); },
+    } as never;
+    handleChatConnection(socket as never, { user: { id: 1 } } as never, { runtime });
+    socket.emit('message', JSON.stringify({ type: 'chat.subscribe', sessions: [{ sessionId: SESSION_ID }] }));
+    await settle();
+    const ack = socket.frames.find((frame) => frame.kind === 'chat_subscribed');
+    assert.equal(ack?.isProcessing, false);
+    assert.equal((ack?.pendingPermissions as unknown[]).length, 1);
+    socket.emit('message', JSON.stringify({ type: 'chat.permission-response', sessionId: 'not-owned', requestId: 'codex-question-pending', allow: true }));
+    await settle();
+    assert.equal(decisions.length, 0);
+    socket.emit('message', JSON.stringify({ type: 'chat.permission-response', sessionId: SESSION_ID, requestId: 'unknown-question', allow: true }));
+    await settle();
+    assert.equal(decisions.length, 0);
+    socket.emit('message', JSON.stringify({ type: 'chat.permission-response', sessionId: SESSION_ID, requestId: 'codex-question-pending', allow: true, updatedInput: { answers: { choice: 'Blue' } } }));
+    await settle();
+    assert.equal(decisions.length, 1);
   });
 });

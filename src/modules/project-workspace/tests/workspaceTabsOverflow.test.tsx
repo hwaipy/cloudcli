@@ -39,10 +39,19 @@ test('tab strip becomes a dropdown only when its content exceeds the available w
   Object.defineProperty(container, 'clientWidth', { configurable: true, value: 180 });
   act(() => resize?.());
   fireEvent.click(screen.getByRole('button', { name: 'Workspace views' }));
-  fireEvent.click(screen.getByRole('menuitemradio', { name: /Shell/i }));
-  assert.equal(screen.getByRole('button', { name: 'Workspace views' }).textContent?.includes('Shell'), true);
+  assert.equal(screen.queryByRole('menuitemradio', { name: /Shell|Terminal/i }), null);
+  fireEvent.click(screen.getByRole('menuitemradio', { name: /Files/i }));
+  assert.equal(screen.getByRole('button', { name: 'Workspace views' }).textContent?.includes('Files'), true);
 
   Object.defineProperty(container, 'clientWidth', { configurable: true, value: 500 });
   act(() => resize?.());
   assert.equal(screen.queryByRole('button', { name: 'Workspace views' }), null);
+});
+
+test('strict workspace offers only chat and files even when host workflow flags are enabled', () => {
+  render(<WorkspaceTabs activeTab="chat" setActiveTab={() => {}} containerOnly shouldShowTasksTab shouldShowBrowserTab />);
+  const buttons = screen.getAllByRole('tab');
+  assert.equal(buttons.length, 2);
+  assert.ok(buttons.every((button) => !/Shell|Terminal/i.test(button.textContent ?? '')));
+  assert.ok(buttons.every((button) => !/Git|Tasks|Browser/i.test(button.textContent ?? '')));
 });

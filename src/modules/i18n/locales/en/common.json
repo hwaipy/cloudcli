@@ -143,8 +143,17 @@
     "title": "Create New Project",
     "steps": {
       "type": "Type",
+      "backend": "Backend",
+      "path": "Path",
       "configure": "Configure",
       "confirm": "Confirm"
+    },
+    "backend": {
+      "title": "Choose a backend",
+      "description": "The new project and its sessions will be created on this backend.",
+      "loading": "Loading backends…",
+      "online": "Online",
+      "offline": "Offline"
     },
     "step1": {
       "question": "Do you already have a workspace, or would you like to create a new one?",
@@ -207,10 +216,19 @@
       "cloning": "Cloning..."
     },
     "errors": {
+      "selectBackend": "Choose an online backend.",
+      "loadBackendsFailed": "Could not load the backend list. Please try again.",
+      "noOnlineBackends": "There are no online backends right now.",
       "selectType": "Please select whether you have an existing workspace or want to create a new one",
       "providePath": "Please provide a workspace path",
       "failedToCreate": "Failed to create workspace",
       "failedToCreateFolder": "Failed to create folder"
+    },
+    "isolation": {
+      "label": "Strict file isolation",
+      "description": "Run Codex and terminals in a dedicated Docker container exposing only this project and private authentication/session state.",
+      "unavailable": "This backend does not support isolation, or Docker is still being checked.",
+      "preparing": "First creation may download a runtime image. Failure stops creation instead of running on the host."
     }
   },
   "notifications": {

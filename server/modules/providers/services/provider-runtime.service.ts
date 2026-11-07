@@ -1,3 +1,5 @@
+import { resolveIsolatedProject } from '@/modules/project-isolation/index.js';
+import { AppError } from '@/shared/utils.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
@@ -12,6 +14,7 @@ import type {
 } from '@/shared/types.js';
 
 type ProviderRuntimeServiceDependencies = {
+  resolveProjectIsolation: typeof resolveIsolatedProject;
   listProviders(): IProvider[];
   resolveProvider(provider: string): IProvider;
   resolveProviderSessionId(sessionId: string | null | undefined): string | null;
@@ -24,6 +27,7 @@ type ProviderRuntimeServiceDependencies = {
 };
 
 const defaultDependencies: ProviderRuntimeServiceDependencies = {
+  resolveProjectIsolation: resolveIsolatedProject,
   listProviders: () => providerRegistry.listProviders(),
   resolveProvider: (provider) => providerRegistry.resolveProvider(provider),
   resolveProviderSessionId: (sessionId) => sessionsService.resolveProviderSessionId(sessionId),
@@ -68,6 +72,9 @@ export function createProviderRuntimeService(
     options: AnyRecord,
     writer: ProviderRuntimeWriter,
   ): Promise<unknown> => {
+    if (dependencies.resolveProjectIsolation(options) && providerName !== 'codex') {
+      return Promise.reject(new AppError('Strict projects currently support only Codex.', { code: 'ISOLATED_PROVIDER_UNSUPPORTED', statusCode: 409 }));
+    }
     const provider = dependencies.resolveProvider(providerName);
     return provider.runtime.run(command, options, writer, createRuntimeContext(provider));
   };

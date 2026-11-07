@@ -40,10 +40,26 @@ test('bundles a Codex CLI new enough to know the GPT-6 Sol and Luna models', () 
 });
 
 test('Codex fallback catalog excludes models the installed CLI no longer lists', () => {
+  assert.equal(CODEX_PREDEFINED_MODELS.DEFAULT, 'gpt-6-luna');
   assert.deepEqual(CODEX_PREDEFINED_MODELS.OPTIONS.map((option) => option.value), [
     'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna',
     'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
   ]);
+});
+
+test('uses Luna as the default when the CLI cache lists it', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cloudcli-codex-luna-'));
+  const cachePath = path.join(dir, 'models_cache.json');
+  try {
+    await writeFile(cachePath, JSON.stringify({ models: [
+      { slug: 'gpt-6-sol', display_name: 'GPT-6 Sol', visibility: 'list' },
+      { slug: 'gpt-6-luna', display_name: 'GPT-6 Luna', visibility: 'list' },
+    ] }));
+    const catalog = await new CodexProviderModels(cachePath).getSupportedModels();
+    assert.equal(catalog.DEFAULT, 'gpt-6-luna');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('uses visible models and effort metadata from the Codex CLI cache', async () => {

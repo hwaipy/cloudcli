@@ -1,7 +1,9 @@
+import { writeDraftText } from '@/shared/chatDrafts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 
 import { api } from '@/shared/api';
+import { isHubRuntime, getHubResourceBackend, registerHubResourceBackend } from '@/shared/utils';
 import type { ServerEvent,
   AppTab,
   LLMProvider,
@@ -111,6 +113,8 @@ const projectsHaveChanges = (
     return (
       nextProject.projectId !== prevProject.projectId ||
       nextProject.displayName !== prevProject.displayName ||
+      nextProject.__hubBackendName !== prevProject.__hubBackendName ||
+      nextProject.__hubBackendColor !== prevProject.__hubBackendColor ||
       nextProject.fullPath !== prevProject.fullPath ||
       Boolean(nextProject.isStarred) !== Boolean(prevProject.isStarred) ||
       serialize(nextProject.sessionMeta) !== serialize(prevProject.sessionMeta) ||
@@ -151,6 +155,51 @@ const getProjectSessions = (project: Project): ProjectSession[] => {
 };
 
 const countLoadedProjectSessions = (project: Project): number => getProjectSessions(project).length;
+
+/** Load every authenticated Hub server's projects and stamp each row with its owner. */
+async function fetchProjectsFromEveryHubBackend(previous: Project[] = []): Promise<Project[]> {
+  if (!isHubRuntime()) {
+    const response = await api.projects();
+    return await response.json() as Project[];
+  }
+
+  const backendsResponse = await api.hub.backends();
+  if (!backendsResponse.ok) throw new Error(`Hub backend list failed (${backendsResponse.status})`);
+  const payload = await backendsResponse.json() as { backends?: Array<{ id?: unknown; name?: unknown; color?: unknown }> };
+  const backends = (payload.backends ?? []).filter((backend): backend is { id: string; name: string; color?: unknown } =>
+    typeof backend.id === 'string' && typeof backend.name === 'string',
+  );
+  const projectPages = await Promise.all(backends.map(async (backend) => {
+    const color = typeof backend.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(backend.color) ? backend.color : undefined;
+    try {
+      const response = await api.projects(backend.id);
+      if (!response.ok) throw new Error(`Project backend unavailable (${response.status})`);
+      const projectsFromBackend = await response.json() as Project[];
+      return projectsFromBackend.map((project) => ({
+        ...project,
+        __hubBackendId: backend.id,
+        __hubBackendName: backend.name,
+        __hubBackendColor: color,
+        sessions: project.sessions?.map((session) => ({
+          ...session,
+          __hubBackendId: backend.id,
+        })),
+      }));
+    } catch (error) {
+      console.warn(`Could not load projects from Hub server ${backend.id}:`, error);
+      return previous.filter((project) => project.__hubBackendId === backend.id).map((project) => ({ ...project, __hubBackendName: backend.name + ' · 离线', __hubBackendColor: color }));
+    }
+  }));
+  const projects = projectPages.flat();
+  for (const project of projects) {
+    if (!project.__hubBackendId) continue;
+    registerHubResourceBackend('project', project.projectId, project.__hubBackendId);
+    for (const session of project.sessions ?? []) {
+      registerHubResourceBackend('session', session.id, project.__hubBackendId);
+    }
+  }
+  return projects;
+}
 
 const mergeSessionProviderLists = (baseSessions: ProjectSession[], additionalSessions: ProjectSession[]): ProjectSession[] => {
   const merged = [...baseSessions];
@@ -361,7 +410,7 @@ const renameSessionInProject = (project: Project, sessionIdToRename: string, sum
   return { ...project, sessions: nextSessions };
 };
 
-const VALID_TABS: Set<string> = new Set(['chat', 'files', 'shell', 'git', 'tasks', 'browser']);
+const VALID_TABS: Set<string> = new Set(['chat', 'files', 'git', 'tasks', 'browser']);
 
 const isValidTab = (tab: string): tab is AppTab => {
   return VALID_TABS.has(tab) || tab.startsWith('plugin:');
@@ -480,8 +529,7 @@ export function useProjectsState({
       if (showLoadingState) {
         setIsLoadingProjects(true);
       }
-      const response = await api.projects();
-      const projectData = (await response.json()) as Project[];
+      const projectData = await fetchProjectsFromEveryHubBackend(projectsRef.current);
 
       if (projectsRequestIdRef.current !== requestId) {
         return;
@@ -720,6 +768,13 @@ export function useProjectsState({
       if (!upsert.sessionId || !upsert.session) {
         return;
       }
+      const eventBackendId = (event as { __hubBackendId?: string }).__hubBackendId;
+      if (eventBackendId) {
+        registerHubResourceBackend('session', upsert.sessionId, eventBackendId);
+        if (upsert.project?.projectId) {
+          registerHubResourceBackend('project', upsert.project.projectId, eventBackendId);
+        }
+      }
 
       // The transcript of the currently viewed session changed on disk while
       // no run is active here (e.g. edited from another client or the CLI):
@@ -756,10 +811,17 @@ export function useProjectsState({
             sessionMeta: { hasMore: false, total: 0 },
           } as Project;
 
-          return [...previousProjects, upsertSessionIntoProject(newProject, upsert)];
+          const projectWithBackend = { ...newProject, __hubBackendId: eventBackendId };
+          return [...previousProjects, upsertSessionIntoProject(projectWithBackend, {
+            ...upsert,
+            session: { ...upsert.session, __hubBackendId: eventBackendId },
+          })];
         }
 
-        const updatedProject = upsertSessionIntoProject(existingProject, upsert);
+        const updatedProject = upsertSessionIntoProject(existingProject, {
+          ...upsert,
+          session: { ...upsert.session, __hubBackendId: existingProject.__hubBackendId },
+        });
         if (updatedProject === existingProject) {
           return previousProjects;
         }
@@ -882,26 +944,12 @@ export function useProjectsState({
       }
 
       if (!details) {
-        // Unknown session id (or lookup failed). Fall back to the legacy
-        // behavior: host a placeholder under the currently selected project so
-        // chat state stays alive (without a `selectedSession`, chat clears
-        // `currentSessionId` and stops reading the session store).
-        const fallbackProject = selectedProjectRef.current;
-        if (!fallbackProject || selectedSessionRef.current?.id === sessionId) {
-          return;
-        }
-
-        setSelectedSession({
-          id: sessionId,
-          __provider: readSelectedProvider(),
-          __projectId: fallbackProject.projectId,
-          summary: '',
-        });
+        setSelectedSession(null);
+        setSelectedProject(null);
+        navigate('/', { replace: true });
         return;
       }
 
-      // The URL carried a provider-native alias id: swap it for the canonical
-      // app-facing id and let this effect re-run against the new URL.
       if (typeof details.sessionId === 'string' && details.sessionId && details.sessionId !== sessionId) {
         navigate(`/session/${details.sessionId}`, { replace: true });
         return;
@@ -925,6 +973,7 @@ export function useProjectsState({
           // synthesize a minimal entry so the chat view still gets its paths.
           return {
             projectId: resolvedProjectId,
+            __hubBackendId: getHubResourceBackend('project', resolvedProjectId) ?? undefined,
             path: details.project?.path ?? details.project?.fullPath ?? '',
             fullPath: details.project?.fullPath ?? details.project?.path ?? '',
             displayName: details.project?.displayName ?? '',
@@ -970,6 +1019,13 @@ export function useProjectsState({
 
   const handleSessionSelect = useCallback(
     (session: ProjectSession) => {
+      const sessionProject = projects.find((project) =>
+        project.projectId === session.__projectId
+        || project.sessions?.some((candidate) => candidate.id === session.id),
+      );
+      const backendId = session.__hubBackendId ?? sessionProject?.__hubBackendId;
+      if (backendId) registerHubResourceBackend('session', session.id, backendId);
+      if (sessionProject) setSelectedProject(sessionProject);
       setSelectedSession(session);
 
       if (activeTab === 'tasks' || activeTab === 'browser') {
@@ -991,11 +1047,13 @@ export function useProjectsState({
 
       navigate(`/session/${session.id}`);
     },
-    [activeTab, isMobile, navigate, selectedProject?.projectId],
+    [activeTab, isMobile, navigate, projects, selectedProject?.projectId],
   );
 
   const handleNewSession = useCallback(
     (project: Project) => {
+      // An explicit new conversation must not restore an earlier unsent project draft.
+      writeDraftText(`project:${project.projectId}`, '');
       setSelectedProject(project);
       setSelectedSession(null);
       setActiveTab('chat');
@@ -1025,8 +1083,7 @@ export function useProjectsState({
 
   const handleSidebarRefresh = useCallback(async () => {
     try {
-      const response = await api.projects();
-      const freshProjects = (await response.json()) as Project[];
+      const freshProjects = await fetchProjectsFromEveryHubBackend(projectsRef.current);
       const projectsWithTaskMaster = mergeTaskMasterCache(freshProjects, projects);
       const mergedProjects = mergeExpandedSessionPages(projects, projectsWithTaskMaster);
 
@@ -1154,6 +1211,15 @@ export function useProjectsState({
     }
 
     const sessionsPage = (await response.json()) as ProjectSessionPage;
+    if (project.__hubBackendId) {
+      sessionsPage.sessions = sessionsPage.sessions?.map((session) => ({
+        ...session,
+        __hubBackendId: project.__hubBackendId,
+      }));
+      for (const session of sessionsPage.sessions ?? []) {
+        registerHubResourceBackend('session', session.id, project.__hubBackendId);
+      }
+    }
 
     setProjects((previousProjects) =>
       previousProjects.map((candidate) => {

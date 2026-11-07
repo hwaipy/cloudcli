@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
+import { useAppContextMenu } from '@/shared/ui';
+import { getHubResourceBackend } from '@/shared/utils';
 import { api } from '@/shared/api';
 import type { ChatImage } from '@/shared/types';
 
@@ -41,7 +43,7 @@ function useChatImageSrc(image: ChatImage, projectId?: string | null): { src: st
     const controller = new AbortController();
 
     const candidateRequests: Array<() => Promise<Response>> = [
-      () => api.assets.image(filename, { signal: controller.signal }),
+      () => api.assets.image(filename, { signal: controller.signal, hubBackendId: getHubResourceBackend('project', projectId) ?? undefined }),
       ...(projectId
         ? [() => api.readFileBlob(projectId, imagePath, { signal: controller.signal })]
         : []),
@@ -130,6 +132,7 @@ export function ImageLightbox({ src, alt, onClose }: { src: string; alt: string;
 }
 
 function ChatMessageImage({ image, projectId }: { image: ChatImage; projectId?: string | null }) {
+  const openContextMenu = useAppContextMenu();
   const { t } = useTranslation();
   const { src, failed } = useChatImageSrc(image, projectId);
   const [expanded, setExpanded] = useState(false);
@@ -151,6 +154,10 @@ function ChatMessageImage({ image, projectId }: { image: ChatImage; projectId?: 
     <>
       <button
         type="button"
+        onContextMenu={(event) => openContextMenu(event, [
+          { key: 'preview', label: '查看大图', onSelect: () => setExpanded(true) },
+          { key: 'download-image', label: '保存图片', disabled: !/^(blob:|data:image\/)/i.test(src), onSelect: () => { const anchor = document.createElement('a'); anchor.href = src; anchor.download = image.name || 'image.png'; anchor.click(); } },
+        ])}
         onClick={() => setExpanded(true)}
         aria-label={t('chat:misc.expandImage', { name: alt })}
         className="block overflow-hidden rounded-xl border border-border/50 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/60"

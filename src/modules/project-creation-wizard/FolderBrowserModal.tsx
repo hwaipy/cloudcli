@@ -10,6 +10,7 @@ import type { FolderSuggestion } from '@/shared/types';
 type FolderBrowserModalProps = {
   isOpen: boolean;
   autoAdvanceOnSelect: boolean;
+  backendId?: string;
   onClose: () => void;
   onFolderSelected: (folderPath: string, advanceToConfirm: boolean) => void;
 };
@@ -18,6 +19,7 @@ type FolderBrowserModalProps = {
 export default function FolderBrowserModal({
   isOpen,
   autoAdvanceOnSelect,
+  backendId,
   onClose,
   onFolderSelected,
 }: FolderBrowserModalProps) {
@@ -41,7 +43,7 @@ export default function FolderBrowserModal({
     setError(null);
 
     try {
-      const result = await browseFilesystemFolders(pathToLoad);
+      const result = await browseFilesystemFolders(pathToLoad, backendId);
       setCurrentPath(result.path);
       setFolders(result.suggestions);
     } catch (loadError) {
@@ -49,7 +51,7 @@ export default function FolderBrowserModal({
     } finally {
       setLoadingFolders(false);
     }
-  }, [t]);
+  }, [backendId, t]);
 
   useEffect(() => {
     loadFoldersRef.current = loadFolders;
@@ -93,7 +95,7 @@ export default function FolderBrowserModal({
 
     try {
       const folderPath = joinFolderPath(currentPath, newFolderName);
-      const createdPath = await createFolderInFilesystem(folderPath);
+      const createdPath = await createFolderInFilesystem(folderPath, backendId);
       resetNewFolderState();
       await loadFolders(createdPath);
     } catch (createError) {
@@ -101,7 +103,7 @@ export default function FolderBrowserModal({
     } finally {
       setCreatingFolder(false);
     }
-  }, [currentPath, loadFolders, newFolderName, t]);
+  }, [backendId, currentPath, loadFolders, newFolderName, t]);
 
   const parentPath = getParentPath(currentPath);
 

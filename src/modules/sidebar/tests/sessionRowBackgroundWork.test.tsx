@@ -132,3 +132,17 @@ test('opening a completed session clears its green dot until newer activity arri
   })));
   assert.ok(reopened.container.querySelector('[role="status"].bg-green-500'));
 });
+
+test('waiting for a question answer replaces the right-hand spinner with Need input', async () => {
+  const { act } = await import('@testing-library/react');
+  const { scopeSessionInputStatus, receiveSessionInputEvent } = await import('@/shared/context/SessionInputStatus');
+  scopeSessionInputStatus('sidebar-question-test');
+  const view = renderRow({ isProcessing: true, hasBackgroundWork: false });
+  act(() => receiveSessionInputEvent({ sessionId: SESSION.id, codexQuestions: [{ title: 'Pick?' }] }));
+  assert.ok(view.getByText('Need input'));
+  assert.equal(view.container.querySelector('.animate-spin'), null);
+  act(() => receiveSessionInputEvent({ sessionId: SESSION.id, role: 'user', content: '回答「Pick?」：Yes' }));
+  assert.equal(view.queryByText('Need input'), null);
+  assert.ok(view.container.querySelector('.animate-spin'));
+  view.unmount();
+});

@@ -18,6 +18,16 @@ The former `/cloudcli_debug/` deployment, local Vite service, and its SSH tunnel
 
 The preexisting database and deployment backups under `.debug-local/` have been preserved.
 
+## User-requested deployment policy
+
+When the user requests a deployment, deploy the changed frontend, Hub, and backend automatically. The frontend and Hub may be restarted directly. Backend artifacts should be built and deployed, but the backend process must not be restarted automatically; report that a manual backend restart is needed. This policy persists until the user changes it. The interactive launcher's `B` action still restarts the backend, so do not invoke it during an assistant-managed deployment; build with the production Node toolchain and leave the running process untouched.
+
+## Interactive restart command
+
+On OfficeMac, `reloadCloudCLI` opens a terminal menu. `B` fingerprints backend source/configuration and build outputs, runs `npm run build:server` only when needed using the LaunchAgent's Node, then restarts and health-checks the backend. A failed build does not restart it. `F` similarly builds the frontend with `--base=/cloudcli/` into `.debug-local/frontend-build`, verifies its assets, uploads a new release to Code, atomically switches `current`, and restarts the static server. The remote index and all boot assets are checked against local SHA-256 values; failed activation rolls back to the previous release and verifies it. Identical healthy releases skip upload and restart. Previous releases remain available for rollback.
+
+`H` only restarts the Hub. `L` opens live logs (press `F`/`B` inside the viewer to choose the component). `Q` exits after workers finish. Build receipts and logs are under `.debug-local/`; missing receipts force a first build. Local locks prevent duplicate same-component operations and a remote lock serializes frontend activation. Frontend publishing also requires `scripts/reload-frontend-release.py` beside the launcher. The `~/.local/bin/reloadCloudCLI` symlink works from any working directory. Session-index backfill is a separate maintenance operation, not part of restart or frontend publishing.
+
 ## Production frontend build path
 
 Build with `vite build --base=/cloudcli/`. The default Vite base `/` cannot be served at this public subpath. Before release, verify `index.html` points to `/cloudcli/assets/`, and test the actual entry script as well as boot-assets.json.

@@ -114,7 +114,7 @@ export const CODEX_PREDEFINED_MODELS: ProviderModelsDefinition = {
       },
     },
   ],
-  DEFAULT: 'gpt-5.6-sol',
+  DEFAULT: 'gpt-6-luna',
 };
 
 const CODEX_HOME_PATH = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');

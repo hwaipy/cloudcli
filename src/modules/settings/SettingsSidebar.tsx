@@ -1,4 +1,4 @@
-import { Bell, Bot, GitBranch, Info, Key, ListChecks, Mic, MonitorPlay, Palette, Puzzle, Shield, UserRound } from 'lucide-react';
+import { Bell, Bot, GitBranch, Info, Key, ListChecks, Mic, MonitorPlay, Palette, Puzzle, Server, Shield, UserRound } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn, IS_PLATFORM } from '@/shared/utils';
@@ -29,6 +29,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'notifications', labelKey: 'mainTabs.notifications', icon: Bell },
   { id: 'account', labelKey: 'mainTabs.account', icon: UserRound },
   { id: 'admin', labelKey: 'mainTabs.admin', icon: Shield },
+  { id: 'backends', labelKey: 'mainTabs.backends', icon: Server },
   { id: 'about', labelKey: 'mainTabs.about', icon: Info },
 ];
 
@@ -37,7 +38,7 @@ export default function SettingsSidebar({ activeTab, onChange, isAdmin }: Settin
   const { t } = useTranslation('settings');
   const visibleItems = NAV_ITEMS.filter((item) => {
     if (IS_PLATFORM && item.id === 'account') return false;
-    return isAdmin || (item.id !== 'admin' && item.id !== 'browser');
+    return isAdmin || (item.id !== 'admin' && item.id !== 'backends' && item.id !== 'browser');
   });
 
   return (

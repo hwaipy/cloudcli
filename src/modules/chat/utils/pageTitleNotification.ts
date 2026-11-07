@@ -90,6 +90,13 @@ export const showCompletionTitleIndicator = (): void => {
     return;
   }
 
+  // Desktop windows keep a stable application title, including on completion.
+  if (('cloudcliDesktopUpdates' in window && window.cloudcliDesktopUpdates)) {
+    clearTitleIndicator();
+    document.title = 'CloudCLI';
+    return;
+  }
+
   const baseTitle = stripIndicator(document.title || 'CloudCLI UI');
   document.title = `${getIndicatorPrefix()}${baseTitle}`;
 

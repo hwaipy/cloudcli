@@ -1,6 +1,6 @@
 import { api, ApiRequestError, readApiErrorMessage } from '@/shared/api';
 import type { QueuedSendOptions } from '@/shared/types';
-import { getHubStorageKey } from '@/shared/utils';
+import { getHubStorageKey, isHubRuntime } from '@/shared/utils';
 
 /**
  * Unsent composer text and queued messages, stored in `auth.db` rather than in
@@ -44,7 +44,7 @@ type DraftRecord = {
 /** Fired after any draft changes, from a local write or from a hydrate. */
 export const CHAT_DRAFTS_CHANGED_EVENT = 'chat-drafts:changed';
 
-const MIRROR_STORAGE_KEY = getHubStorageKey('chat-drafts');
+const mirrorStorageKey = () => getHubStorageKey('chat-drafts');
 
 /**
  * Longer than the preference debounce: this fires on every keystroke, and a
@@ -60,6 +60,10 @@ const listeners = new Set<() => void>();
 let drafts = new Map<string, DraftRecord>();
 const pendingScopes = new Set<string>();
 let serverWriteTimer: ReturnType<typeof setTimeout> | null = null;
+// A text scope stays dirty until the latest serialized server write succeeds.
+const textWriteRequests = new Map<string, Promise<void>>();
+const lastScheduledTextRevisions = new Map<string, number>();
+const textRevisions = new Map<string, number>();
 // Counts this page's changes to each scope's queued message, so a hydrate that
 // was already in flight when one happened does not put back the older copy.
 const queueRevisions = new Map<string, number>();
@@ -78,9 +82,9 @@ const isEmptyDraft = (draft: DraftRecord): boolean => (
   draft.text === '' && draft.queuedMessages.length === 0
 );
 
-function readMirror(): Map<string, DraftRecord> {
+function readMirror(storageKey = mirrorStorageKey()): Map<string, DraftRecord> {
   try {
-    const raw = localStorage.getItem(MIRROR_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) {
       return new Map();
     }
@@ -108,7 +112,7 @@ function readMirror(): Map<string, DraftRecord> {
 
 function writeMirror(): void {
   try {
-    localStorage.setItem(MIRROR_STORAGE_KEY, JSON.stringify(Object.fromEntries(drafts)));
+    localStorage.setItem(mirrorStorageKey(), JSON.stringify(Object.fromEntries(drafts)));
   } catch {
     // A full localStorage costs the first-paint restore, not the draft: the
     // server copy is authoritative and arrives on hydrate.
@@ -127,7 +131,6 @@ function notifyListeners(): void {
 function flushServerWrites(): void {
   serverWriteTimer = null;
   const scopes = [...pendingScopes];
-  pendingScopes.clear();
 
   for (const scope of scopes) {
     // Text only: the server keeps the scope's queued message as it is, and
@@ -135,17 +138,35 @@ function flushServerWrites(): void {
     // Deleting the row from here would also delete a message queued from
     // another tab that this page has not heard about yet.
     const text = drafts.get(scope)?.text ?? '';
-
-    // A save that fails must never surface as an unhandled rejection out of a
-    // timer callback: the mirror already holds the draft, and the next
-    // keystroke re-sends it.
-    try {
-      void api.user.saveDraft(scope, { text }).catch((error: unknown) => {
-        console.error('Failed to save chat draft:', error);
-      });
-    } catch (error) {
-      console.error('Failed to save chat draft:', error);
+    const revision = textRevisions.get(scope) ?? 0;
+    if (lastScheduledTextRevisions.get(scope) === revision && textWriteRequests.has(scope)) {
+      continue;
     }
+
+    // Serialize writes per scope. If a slow older save finishes after a newer
+    // one, it must not become the server's last copy of the draft.
+    const previous = textWriteRequests.get(scope) ?? Promise.resolve();
+    const request = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const response = await api.user.saveDraft(scope, { text });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      });
+    textWriteRequests.set(scope, request);
+    lastScheduledTextRevisions.set(scope, revision);
+    void request.then(() => {
+      if (textWriteRequests.get(scope) !== request) return;
+      textWriteRequests.delete(scope);
+      lastScheduledTextRevisions.delete(scope);
+      if ((textRevisions.get(scope) ?? 0) === revision) pendingScopes.delete(scope);
+    }, (error: unknown) => {
+      if (textWriteRequests.get(scope) === request) {
+        textWriteRequests.delete(scope);
+        lastScheduledTextRevisions.delete(scope);
+      }
+      // Keep failed text dirty so an overlapping hydrate cannot replace it.
+      console.error('Failed to save chat draft:', error);
+    });
   }
 }
 
@@ -235,6 +256,7 @@ export function readDraftText(scope: string): string {
 
 export function writeDraftText(scope: string, text: string): void {
   if (setLocalDraft(scope, { text })) {
+    textRevisions.set(scope, (textRevisions.get(scope) ?? 0) + 1);
     queueServerWrite(scope);
   }
 }
@@ -358,8 +380,11 @@ export function subscribeToChatDrafts(listener: () => void): () => void {
  * staler server copy would delete what they are in the middle of writing.
  */
 export async function hydrateChatDrafts(): Promise<void> {
+  const accountCacheKey = mirrorStorageKey();
   let serverDrafts: Array<{ scope?: unknown; text?: unknown; queuedMessage?: unknown }> = [];
   const queueRevisionsAtRequest = new Map(queueRevisions);
+  const textRevisionsAtRequest = new Map(textRevisions);
+  const dirtyTextScopesAtRequest = new Set(pendingScopes);
 
   try {
     const response = await api.user.drafts();
@@ -378,6 +403,37 @@ export async function hydrateChatDrafts(): Promise<void> {
     return;
   }
 
+  if (accountCacheKey !== mirrorStorageKey()) return;
+  if (isHubRuntime()) {
+    // Only the explicitly migrated original account may adopt old browser data.
+    try {
+      const response = await api.user.preferences();
+      const payload = response.ok ? await response.json() : {};
+      const receipt = getHubStorageKey('legacy-drafts-migrated');
+      if (payload.legacyBrowserCacheOwner && !localStorage.getItem(receipt)) {
+        const existing = new Set(serverDrafts.map((draft) => draft.scope));
+        const conflicts: Record<string, unknown> = {};
+        let migratedCount = 0;
+        for (const key of ['chat-drafts', 'chat-drafts:office', 'chat-drafts:ubuntu-vm']) {
+          for (const [scope, draft] of readMirror(key)) {
+            if (existing.has(scope)) {
+              conflicts[key + ':' + scope] = draft; // Keep both versions; never overwrite server text.
+            } else {
+              serverDrafts.push({ scope, text: draft.text, queuedMessage: draft.queuedMessages });
+              drafts.set(scope, draft);
+              pendingScopes.add(scope);
+              migratedCount++;
+              existing.add(scope);
+            }
+          }
+        }
+        localStorage.setItem(getHubStorageKey('draft-migration-conflicts'), JSON.stringify(conflicts));
+        if (migratedCount === 0) localStorage.setItem(receipt, '1');
+      }
+    } catch (error) { console.warn('Legacy drafts retained for a later migration attempt:', error); }
+  }
+
+  if (accountCacheKey !== mirrorStorageKey()) return;
   const merged = new Map<string, DraftRecord>();
   for (const draft of serverDrafts) {
     const scope = typeof draft.scope === 'string' ? draft.scope : '';
@@ -400,15 +456,22 @@ export async function hydrateChatDrafts(): Promise<void> {
   const queueChangedDuringRequest = (scope: string) => (
     (queueRevisions.get(scope) ?? 0) !== (queueRevisionsAtRequest.get(scope) ?? 0)
   );
+  const textChangedDuringRequest = (scope: string) => (
+    (textRevisions.get(scope) ?? 0) !== (textRevisionsAtRequest.get(scope) ?? 0)
+  );
   const locallyChangedScopes = new Set([
     ...pendingScopes,
+    ...dirtyTextScopesAtRequest,
+    ...[...textRevisions.keys()].filter(textChangedDuringRequest),
     ...[...queueRevisions.keys()].filter(queueChangedDuringRequest),
   ]);
   for (const scope of locallyChangedScopes) {
     const local = drafts.get(scope) ?? EMPTY_DRAFT;
     const server = merged.get(scope) ?? EMPTY_DRAFT;
     const next: DraftRecord = {
-      text: pendingScopes.has(scope) ? local.text : server.text,
+      text: pendingScopes.has(scope) || dirtyTextScopesAtRequest.has(scope) || textChangedDuringRequest(scope)
+        ? local.text
+        : server.text,
       queuedMessages: queueChangedDuringRequest(scope) ? local.queuedMessages : server.queuedMessages,
     };
     if (isEmptyDraft(next)) {
@@ -429,12 +492,15 @@ export function resetChatDrafts(): void {
   pendingScopes.clear();
   queueRevisions.clear();
   queueRequests.clear();
+  textWriteRequests.clear();
+  lastScheduledTextRevisions.clear();
+  textRevisions.clear();
   if (serverWriteTimer !== null) {
     clearTimeout(serverWriteTimer);
     serverWriteTimer = null;
   }
   try {
-    localStorage.removeItem(MIRROR_STORAGE_KEY);
+    localStorage.removeItem(mirrorStorageKey());
   } catch {
     // The in-memory copy is already cleared, which is what readers use.
   }

@@ -745,14 +745,14 @@ export const sessionsDb = {
    * Used by the session synchronizer to find rows whose transcript has been
    * deleted underneath the index.
    */
-  getSessionsWithTranscriptPath(): Array<{ session_id: string; jsonl_path: string }> {
+  getSessionsWithTranscriptPath(): Array<{ session_id: string; provider: string; jsonl_path: string }> {
     const db = getConnection();
     return db
       .prepare(
-        `SELECT session_id, jsonl_path
+        `SELECT session_id, provider, jsonl_path
          FROM sessions
          WHERE jsonl_path IS NOT NULL AND jsonl_path <> ''`
       )
-      .all() as Array<{ session_id: string; jsonl_path: string }>;
+      .all() as Array<{ session_id: string; provider: string; jsonl_path: string }>;
   },
 };

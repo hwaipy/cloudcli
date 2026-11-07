@@ -1,6 +1,6 @@
 import { api } from '@/shared/api';
 import { CODE_EDITOR_STORAGE_KEYS } from '@/shared/constants';
-import { getHubBackendId, getHubStorageKey } from '@/shared/utils';
+import { isHubRuntime, getHubStorageKey } from '@/shared/utils';
 
 /**
  * The one reader and writer for the settings that used to live in browser
@@ -29,6 +29,7 @@ export type UserPreferences = {
   codeEditorSettings: unknown;
   uiPreferences: unknown;
   selectedProvider: string;
+  sidebarExpandedProjects: string[];
 };
 
 export type UserPreferenceKey = keyof UserPreferences;
@@ -37,7 +38,7 @@ export type UserPreferenceKey = keyof UserPreferences;
 export const USER_PREFERENCES_CHANGED_EVENT = 'user-preferences:changed';
 
 /** The single localStorage blob mirroring the server's copy. */
-const MIRROR_STORAGE_KEY = getHubStorageKey('user-preferences');
+const mirrorStorageKey = () => getHubStorageKey('user-preferences');
 
 /**
  * Long enough to collapse a burst of edits (dragging the font-size select,
@@ -68,6 +69,7 @@ const LEGACY_STORAGE_KEYS: Record<UserPreferenceKey, string> = {
   codeEditorSettings: '',
   uiPreferences: 'uiPreferences',
   selectedProvider: 'selected-provider',
+  sidebarExpandedProjects: 'cloudcli-expanded-projects',
 };
 
 const PREFERENCE_KEYS = Object.keys(LEGACY_STORAGE_KEYS) as UserPreferenceKey[];
@@ -87,7 +89,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => (
 
 function readMirror(): PreferenceRecord {
   try {
-    const raw = localStorage.getItem(MIRROR_STORAGE_KEY);
+    const raw = localStorage.getItem(mirrorStorageKey());
     if (!raw) {
       return {};
     }
@@ -101,7 +103,7 @@ function readMirror(): PreferenceRecord {
 
 function writeMirror(): void {
   try {
-    localStorage.setItem(MIRROR_STORAGE_KEY, JSON.stringify(preferences));
+    localStorage.setItem(mirrorStorageKey(), JSON.stringify(preferences));
   } catch {
     // A full or unavailable localStorage costs the first-paint optimization,
     // not the setting itself — the server copy is authoritative.
@@ -279,12 +281,15 @@ function readLegacyCodeEditorSettings(): unknown {
  * settings an existing install already had survive the move.
  */
 export async function hydrateUserPreferences(): Promise<void> {
+  const accountCacheKey = mirrorStorageKey();
   let serverPreferences: PreferenceRecord = {};
+  let legacyBrowserCacheOwner = false;
 
   try {
     const response = await api.user.preferences();
     if (response.ok) {
-      const payload = (await response.json()) as { preferences?: unknown };
+      const payload = (await response.json()) as { preferences?: unknown; legacyBrowserCacheOwner?: boolean };
+      legacyBrowserCacheOwner = payload.legacyBrowserCacheOwner === true;
       if (isRecord(payload.preferences)) {
         serverPreferences = payload.preferences as PreferenceRecord;
       }
@@ -296,11 +301,12 @@ export async function hydrateUserPreferences(): Promise<void> {
     return;
   }
 
+  if (accountCacheKey !== mirrorStorageKey()) return;
   const migrated: PreferenceRecord = {};
   for (const key of PREFERENCE_KEYS) {
     // Legacy browser keys belong to the old single-backend install. Copying
     // them to every Hub backend would leak permission and account preferences.
-    if (getHubBackendId()) continue;
+    if (isHubRuntime() && !(legacyBrowserCacheOwner && key === 'sidebarExpandedProjects')) continue;
     if (serverPreferences[key] !== undefined) {
       continue;
     }
@@ -351,7 +357,7 @@ export function resetUserPreferences(): void {
     serverWriteTimer = null;
   }
   try {
-    localStorage.removeItem(MIRROR_STORAGE_KEY);
+    localStorage.removeItem(mirrorStorageKey());
   } catch {
     // Nothing to do: the in-memory copy is already cleared.
   }

@@ -1762,12 +1762,8 @@ test('user turns carry the transcript uuid so they can be edited', { concurrency
         userRows.map((message) => message.transcriptAnchorId),
         ['u1', 'u2b'],
       );
-      // Assistant rows are never an anchor: the UI only offers editing on a
-      // turn the user typed.
-      assert.equal(
-        history.messages.some((message) => message.role !== 'user' && message.transcriptAnchorId),
-        false,
-      );
+      // Answer UUIDs address inclusive round-end forks; editing stays user-only.
+      assert.ok(history.messages.some(message => message.role === 'assistant' && message.transcriptAnchorId));
     });
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
@@ -2285,4 +2281,13 @@ test('extractFirstValidJsonlData closes the file stream on the no-match path', {
     (nodeFs as { createReadStream: typeof nodeFs.createReadStream }).createReadStream = originalCreateReadStream;
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+test('assistant text exposes its native UUID for an inclusive answer-end fork', () => {
+  const provider = new ClaudeSessionsProvider();
+  const messages = provider.normalizeMessage({
+    type: 'assistant', uuid: 'assistant-fork-boundary', timestamp: '2026-11-06T00:00:00Z',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'Completed answer' }] },
+  }, 'session');
+  assert.equal(messages.find(message => message.kind === 'text')?.transcriptAnchorId, 'assistant-fork-boundary');
 });

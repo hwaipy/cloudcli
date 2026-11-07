@@ -140,8 +140,17 @@
     "title": "创建新项目",
     "steps": {
       "type": "类型",
+      "backend": "后端",
+      "path": "路径",
       "configure": "配置",
       "confirm": "确认"
+    },
+    "backend": {
+      "title": "选择后端",
+      "description": "新项目及其会话将创建在所选后端上。",
+      "loading": "正在加载后端…",
+      "online": "在线",
+      "offline": "离线"
     },
     "step1": {
       "question": "您已经有工作区，还是想创建一个新的工作区？",
@@ -204,10 +213,19 @@
       "cloning": "正在克隆..."
     },
     "errors": {
+      "selectBackend": "请选择一个在线后端。",
+      "loadBackendsFailed": "无法加载后端列表，请稍后重试。",
+      "noOnlineBackends": "当前没有在线后端。",
       "selectType": "请选择您已有现有工作区还是想创建新工作区",
       "providePath": "请提供工作区路径",
       "failedToCreate": "创建工作区失败",
       "failedToCreateFolder": "创建文件夹失败"
+    },
+    "isolation": {
+      "label": "严格文件权限",
+      "description": "在项目专属 Docker 容器中运行 Codex 和终端。仅挂载项目目录与独立的认证、会话数据，阻止访问宿主机其他文件。",
+      "unavailable": "所选后端尚不支持严格隔离，或正在检查 Docker。",
+      "preparing": "首次创建可能需要下载运行镜像；准备失败将停止创建，不会改为宿主机运行。"
     }
   },
   "notifications": {

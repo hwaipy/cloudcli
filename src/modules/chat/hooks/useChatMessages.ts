@@ -387,6 +387,7 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
       // which model produced it, so every other row simply carries undefined.
       model: msg.model,
       codexPhase: msg.codexPhase,
+      codexQuestions: msg.codexQuestions,
     };
 
     if (appendCompactionRow(msg, converted, sharedMetadata, {
@@ -601,5 +602,37 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     });
   }
 
-  return converted;
+  // Async answers are ordinary user messages. Derive completion from the transcript
+  // so refreshes and other browsers see the same state, without disabling on a mere click.
+  const projected = converted.map((message) => Array.isArray(message.codexQuestions) ? { ...message } : message);
+  const foldedAnswers = new Map<ChatMessage, string[]>();
+  const pendingQuestions = new Map<string, Array<Record<string, unknown>>>();
+  for (const message of projected) {
+    if (Array.isArray(message.codexQuestions)) {
+      message.codexQuestions = message.codexQuestions.map((raw: unknown) => {
+        if (!raw || typeof raw !== 'object' || !('title' in raw) || typeof raw.title !== 'string') return raw;
+        const question = { ...raw } as Record<string, unknown>;
+        const pending = pendingQuestions.get(raw.title) ?? [];
+        pending.push(question);
+        pendingQuestions.set(raw.title, pending);
+        return question;
+      });
+    }
+    if (message.type !== 'user') continue;
+    for (const match of String(message.content || '').matchAll(/(?:^|\n)回答「([^」]+)」：[ \t]*([^\n]+)/g)) {
+      const answer = match[2].trim();
+      if (!answer) continue;
+      const question = pendingQuestions.get(match[1])?.pop();
+      if (question) { question.answered = true; question.answer = answer; foldedAnswers.set(message, [...(foldedAnswers.get(message) ?? []), match[0]]); }
+    }
+  }
+  return projected.flatMap((message) => {
+    const answers = foldedAnswers.get(message);
+    if (!answers) return [message];
+    let content = String(message.content || '');
+    for (const answer of answers) content = content.replace(answer, '');
+    content = content.trim();
+    // Older composer replies may also contain unrelated prose or attachments.
+    return content || message.images?.length || message.files?.length ? [{ ...message, content }] : [];
+  });
 }

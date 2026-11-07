@@ -1,3 +1,4 @@
+import { formatDateTime24 } from '@/shared/utils';
 import type { ChatMessage, DiffLine, LLMProvider } from '@/shared/types';
 import { getToolConfig } from '@/modules/chat/tools';
 import { parseToolPayload, summarizeDiff } from '@/modules/chat/utils/messageTransforms';
@@ -95,7 +96,7 @@ export function buildTranscriptMarkdown(input: BuildTranscriptMarkdownInput): st
   const sections: string[] = [
     `# ${input.sessionTitle}`,
     '',
-    `_${input.messages.length} messages · exported ${input.exportedAt.toLocaleString()}_`,
+    `_${input.messages.length} messages · exported ${formatDateTime24(input.exportedAt)}_`,
     '',
     '---',
   ];

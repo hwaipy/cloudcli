@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { removeProjectIsolation } from '@/modules/project-isolation/index.js';
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { AppError } from '@/shared/utils.js';
 
@@ -81,6 +82,7 @@ export async function deleteOrArchiveProject(projectId: string, force: boolean):
     return;
   }
 
+  await removeProjectIsolation(row);
   await deleteSessionJsonlFilesForProjectPath(row.project_path);
   sessionsDb.deleteSessionsByProjectPath(row.project_path);
   projectsDb.deleteProjectById(projectId);

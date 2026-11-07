@@ -42,11 +42,11 @@ type ShellIncomingMessage =
   | { type: 'claude_theme'; colorScheme?: string }
   | { type: string; [key: string]: unknown };
 
-export function getShellWebSocketUrl(): string | null {
+export function getShellWebSocketUrl(backendId?: string): string | null {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
   if (IS_PLATFORM) {
-    return withHubBackendUrl(`${protocol}//${window.location.host}/shell`);
+    return withHubBackendUrl(`${protocol}//${window.location.host}/shell`, backendId);
   }
 
   const token = getStoredAuthToken();
@@ -55,7 +55,7 @@ export function getShellWebSocketUrl(): string | null {
     return null;
   }
 
-  return withHubBackendUrl(`${protocol}//${window.location.host}/shell?token=${encodeURIComponent(token)}`);
+  return withHubBackendUrl(`${protocol}//${window.location.host}/shell?token=${encodeURIComponent(token)}`, backendId);
 }
 
 export function parseShellMessage(payload: string): ShellIncomingMessage | null {

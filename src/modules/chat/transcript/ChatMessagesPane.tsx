@@ -2,6 +2,8 @@ import { useTranslation } from 'react-i18next';
 import { memo, useCallback, useMemo } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 
+import { MessageSendAnimationProvider } from '@/modules/chat/context/MessageSendAnimationContext';
+
 import type { BackgroundTaskSummary,
   ChatMessage,
   Project,
@@ -13,6 +15,7 @@ import type { BackgroundTaskSummary,
   SessionActivity } from '@/shared/types';
 import { getIntrinsicMessageKey } from '@/modules/chat/utils/messageKeys';
 import { groupConsecutiveTools, isToolGroupItem } from '@/modules/chat/utils/toolGrouping';
+import { withRoundForkAnchors } from '@/modules/chat/utils/roundForkAnchors';
 import { foldCodexUpdates } from '@/modules/chat/utils/codexUpdates';
 import { useLazyRowObserver } from '@/modules/chat/hooks/useLazyRowObserver';
 import LazyMessageRow from '@/modules/chat/transcript/LazyMessageRow';
@@ -37,6 +40,9 @@ type ChatMessagesPaneProps = {
   onWheel: () => void;
   onTouchMove: () => void;
   isLoadingSessionMessages: boolean;
+  sessionHistoryStatus: 'idle' | 'loading' | 'streaming' | 'error';
+  sessionHistoryErrorCode?: string;
+  onRetrySessionHistory: () => void;
   /** The viewed session's current work, shown after its newest message. */
   activity?: SessionActivity | null;
   chatMessages: ChatMessage[];
@@ -112,6 +118,9 @@ function ChatMessagesPane({
   onWheel,
   onTouchMove,
   isLoadingSessionMessages,
+  sessionHistoryStatus,
+  sessionHistoryErrorCode,
+  onRetrySessionHistory,
   activity = null,
   chatMessages,
   selectedSession,
@@ -163,8 +172,8 @@ function ChatMessagesPane({
   const { t } = useTranslation('chat');
   const lazyRows = useLazyRowObserver(scrollContainerRef);
   const displayMessages = useMemo(
-    () => foldCodexUpdates(visibleMessages, provider),
-    [visibleMessages, provider],
+    () => foldCodexUpdates(withRoundForkAnchors(visibleMessages, provider, Boolean(activity && !activity.background)), provider),
+    [visibleMessages, provider, activity],
   );
   const groupedVisibleMessages = useMemo(
     () => groupConsecutiveTools(displayMessages, Boolean(showThinking)),
@@ -204,6 +213,7 @@ function ChatMessagesPane({
   );
 
   return (
+    <MessageSendAnimationProvider scope={selectedSession?.id || currentSessionId || null}>
     <div
       ref={scrollContainerRef}
       onWheel={onWheel}
@@ -236,14 +246,30 @@ function ChatMessagesPane({
         </div>
       )}
       <div className="mx-auto w-full max-w-[54.25rem] space-y-3 px-4 sm:space-y-4">
-      {isLoadingSessionMessages && chatMessages.length === 0 ? (
+      {sessionHistoryStatus === 'error' && selectedSession && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
+          <span>
+            {sessionHistoryErrorCode === 'CODEX_HISTORY_SOURCE_UNAVAILABLE'
+              ? t('session.history.sourceUnavailable')
+              : t('session.history.loadFailed')}
+          </span>
+          <button
+            type="button"
+            onClick={onRetrySessionHistory}
+            className="rounded-md px-2 py-1 font-medium underline underline-offset-2 disabled:opacity-50"
+          >
+            {t('session.history.retry')}
+          </button>
+        </div>
+      )}
+      {(isLoadingSessionMessages || sessionHistoryStatus === 'loading') && chatMessages.length === 0 ? (
         <div className="mt-8 text-center text-gray-500 dark:text-gray-400">
           <div className="flex items-center justify-center space-x-2">
             <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-gray-400" />
             <p>{t('session.loading.sessionMessages')}</p>
           </div>
         </div>
-      ) : chatMessages.length === 0 ? (activity || queuedDrafts.length > 0 ? null : (
+      ) : sessionHistoryStatus === 'error' ? null : chatMessages.length === 0 ? (activity || queuedDrafts.length > 0 ? null : (
         <ProviderSelectionEmptyState
           selectedSession={selectedSession}
           currentSessionId={currentSessionId}
@@ -391,6 +417,7 @@ function ChatMessagesPane({
       />
       </div>
     </div>
+    </MessageSendAnimationProvider>
   );
 }
 

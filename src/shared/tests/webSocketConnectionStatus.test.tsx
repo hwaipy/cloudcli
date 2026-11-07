@@ -44,7 +44,7 @@ class FakeWebSocket {
     FakeWebSocket.instances.push(this);
   }
 
-  send() {}
+  send = vi.fn((_payload: string) => undefined);
 
   // A real socket closed by the page still fires `close`; firing it here means
   // a swap that forgot to detach its handler would be caught.
@@ -220,4 +220,37 @@ test('signing out while connected stops reporting a live connection', () => {
   assert.equal(socket(0).readyState, FakeWebSocket.CLOSED, 'the socket was closed on sign-out');
   assert.equal(lastStatus(), 'connecting');
   assert.equal(isConnected, false, 'isConnected no longer reports the closed socket as live');
+});
+
+
+test('Hub sends project and session frames on independent backend connections', async () => {
+  const { registerHubResourceBackend } = await import('@/shared/utils');
+  (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__ = 'office';
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    ok: true, json: async () => ({ selectedBackendId: 'office', backends: [{ id: 'office' }, { id: 'lab' }] }),
+  }));
+  try {
+    const view = renderProvider();
+    await act(async () => { await Promise.resolve(); });
+    assert.equal(FakeWebSocket.instances.length, 2);
+    const office = socket(0), lab = socket(1);
+    assert.ok(lab.url.includes('hub_backend=lab'));
+    act(() => { office.serverOpens(); lab.serverOpens(); });
+    registerHubResourceBackend('session', 'hub-lab-session', 'lab');
+    registerHubResourceBackend('session', 'hub-office-session', 'office');
+    assert.equal(sendMessage!({ type: 'chat.send', sessionId: 'hub-lab-session' }), true);
+    assert.equal(lab.send.mock.calls.length, 1);
+    assert.equal(office.send.mock.calls.length, 0);
+    assert.equal(sendMessage!({ type: 'chat.send', sessionId: 'hub-office-session' }), true);
+    assert.equal(office.send.mock.calls.length, 1);
+    assert.equal(sendMessage!({ type: 'chat.subscribe', sessions: [{ sessionId: 'hub-lab-session' }, { sessionId: 'hub-office-session' }] }), true);
+    assert.deepEqual(JSON.parse(lab.send.mock.calls.at(-1)![0]).sessions, [{ sessionId: 'hub-lab-session' }]);
+    assert.deepEqual(JSON.parse(office.send.mock.calls.at(-1)![0]).sessions, [{ sessionId: 'hub-office-session' }]);
+    act(() => lab.serverDrops());
+    assert.equal(sendMessage!({ type: 'chat.send', sessionId: 'hub-lab-session' }), false);
+    assert.equal(office.send.mock.calls.length, 2); // Never fall back to the wrong backend.
+    view.unmount();
+  } finally {
+    delete (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__;
+  }
 });

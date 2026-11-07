@@ -20,6 +20,7 @@ type CreateFolderResponse = {
 };
 
 type CreateProjectPayload = {
+  strictFileIsolation?: boolean;
   path: string;
   customName?: string;
 };
@@ -97,8 +98,8 @@ const resolveCreateProjectErrorMessage = (responseData: CreateProjectResponse): 
   return null;
 };
 
-export const fetchGithubTokenCredentials = async () => {
-  const response = await api.settings.credentials('github_token');
+export const fetchGithubTokenCredentials = async (backendId?: string) => {
+  const response = await api.settings.credentials('github_token', backendId ? { hubBackendId: backendId } : {});
   const data = await parseJson<CredentialsResponse>(response);
 
   if (!response.ok) {
@@ -108,8 +109,8 @@ export const fetchGithubTokenCredentials = async () => {
   return (data.credentials || []).filter((credential) => credential.is_active);
 };
 
-export const browseFilesystemFolders = async (pathToBrowse: string) => {
-  const response = await api.browseFilesystem(pathToBrowse);
+export const browseFilesystemFolders = async (pathToBrowse: string, backendId?: string) => {
+  const response = await api.browseFilesystem(pathToBrowse, backendId);
   const data = await parseJson<BrowseFilesystemResponse>(response);
 
   if (!response.ok) {
@@ -122,8 +123,8 @@ export const browseFilesystemFolders = async (pathToBrowse: string) => {
   };
 };
 
-export const createFolderInFilesystem = async (folderPath: string) => {
-  const response = await api.createFolder(folderPath);
+export const createFolderInFilesystem = async (folderPath: string, backendId?: string) => {
+  const response = await api.createFolder(folderPath, backendId);
   const data = await parseJson<CreateFolderResponse>(response);
 
   if (!response.ok) {
@@ -133,8 +134,8 @@ export const createFolderInFilesystem = async (folderPath: string) => {
   return data.path || folderPath;
 };
 
-export const createProjectRequest = async (payload: CreateProjectPayload) => {
-  const response = await api.createProject(payload);
+export const createProjectRequest = async (payload: CreateProjectPayload, backendId?: string) => {
+  const response = await api.createProject(payload, backendId);
   const data = await parseJson<CreateProjectResponse>(response);
 
   if (!response.ok) {
@@ -157,13 +158,13 @@ const startClone = async ({
   tokenMode,
   selectedGithubToken,
   newGithubToken,
-}: CloneWorkspaceParams) => {
+}: CloneWorkspaceParams, backendId?: string) => {
   const response = await api.startProjectClone({
     path: workspacePath.trim(),
     githubUrl: githubUrl.trim(),
     githubTokenId: tokenMode === 'stored' && selectedGithubToken ? Number(selectedGithubToken) : null,
     newGithubToken: tokenMode === 'new' ? newGithubToken.trim() : null,
-  });
+  }, backendId);
   const data = await parseJson<StartCloneResponse>(response);
 
   if (!response.ok || !data.cloneId) {
@@ -177,9 +178,10 @@ const startClone = async ({
 const streamCloneProgress = (
   cloneId: string,
   handlers: CloneProgressHandlers,
+  backendId?: string,
 ) =>
   new Promise<Record<string, unknown> | undefined>((resolve, reject) => {
-    const eventSource = new EventSource(api.cloneProjectProgressUrl({ cloneId }));
+    const eventSource = new EventSource(api.cloneProjectProgressUrl({ cloneId, backendId }));
     let settled = false;
 
     const settle = (callback: () => void) => {
@@ -221,4 +223,5 @@ const streamCloneProgress = (
 export const cloneWorkspaceWithProgress = async (
   params: CloneWorkspaceParams,
   handlers: CloneProgressHandlers,
-) => streamCloneProgress(await startClone(params), handlers);
+  backendId?: string,
+) => streamCloneProgress(await startClone(params, backendId), handlers, backendId);

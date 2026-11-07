@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS user_credentials (
 );
 `;
 
+export const HUB_USER_MAPPINGS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS hub_user_mappings (
+    hub_user_id TEXT PRIMARY KEY NOT NULL,
+    user_id INTEGER NOT NULL UNIQUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+`;
+
 export const USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS user_notification_preferences (
     user_id INTEGER PRIMARY KEY,
@@ -91,6 +100,7 @@ export const PROJECTS_TABLE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
     project_id TEXT PRIMARY KEY NOT NULL,
     project_path TEXT NOT NULL UNIQUE,
+    strict_file_isolation INTEGER NOT NULL DEFAULT 0,
     owner_user_id INTEGER REFERENCES users(id),
     custom_project_name TEXT DEFAULT NULL,
     isStarred BOOLEAN DEFAULT 0,
@@ -241,6 +251,18 @@ CREATE TABLE IF NOT EXISTS session_drafts (
 );
 `;
 
+/** Stable receipts that let a client safely retry a message after losing its WebSocket ACK. */
+export const CHAT_SEND_RECEIPTS_TABLE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS chat_send_receipts (
+    user_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    client_message_id TEXT NOT NULL,
+    accepted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, session_id, client_message_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+`;
+
 /**
  * Provider sessions an app session has moved off, and must never move back to.
  *
@@ -316,6 +338,8 @@ ON provider_models(provider, sort_order, id);
 ${USER_PREFERENCES_TABLE_SCHEMA_SQL}
 
 ${SESSION_DRAFTS_TABLE_SCHEMA_SQL}
+
+${CHAT_SEND_RECEIPTS_TABLE_SCHEMA_SQL}
 
 ${SUPERSEDED_PROVIDER_SESSIONS_TABLE_SCHEMA_SQL}
 `;

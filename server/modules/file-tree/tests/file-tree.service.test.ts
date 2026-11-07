@@ -158,6 +158,38 @@ test('listProjectFiles applies gitignore alongside hard directory exclusions', a
   assert.equal(readDirectories.includes(nodeModulesDirectory), false);
 });
 
+test('workspace browser can traverse a system ancestor while workspace writes stay validated', async () => {
+  const rootPath = '/';
+  const sharedDirectory = '/Users/Shared';
+  let workspaceValidationCalls = 0;
+  const fileSystem = createFakeFileSystem({
+    access: async () => undefined,
+    stat: async () => createStats(true, 0o755),
+    realpath: async (candidatePath) => candidatePath,
+    openDirectory: createDirectoryReader((directoryPath) => (
+      directoryPath === rootPath ? [createDirectoryEntry('Users', true)] : []
+    )),
+    lstat: async () => createStats(true, 0o755),
+  });
+  const dependencies = createDependencies(fileSystem, '/Users/example');
+  dependencies.workspace.validatePath = async () => {
+    workspaceValidationCalls += 1;
+    return { valid: false, error: 'Cannot create workspace in system directory: /' };
+  };
+  const service = createFileTreeService(dependencies);
+
+  const browsed = await service.browseWorkspace(rootPath);
+
+  assert.equal(browsed.path, rootPath);
+  assert.deepEqual(browsed.suggestions.map((entry) => entry.path), ['/Users']);
+  assert.equal(workspaceValidationCalls, 0, 'browsing does not run workspace creation policy');
+  await assert.rejects(
+    service.createWorkspaceFolder(sharedDirectory),
+    (error: unknown) => (error as AppError).code === 'INVALID_WORKSPACE_PATH',
+  );
+  assert.equal(workspaceValidationCalls, 1, 'folder creation still enforces workspace policy');
+});
+
 test('listProjectFiles excludes gitignored entries only when requested', async () => {
   const projectRoot = path.resolve('file-tree-test-project');
   const cacheDirectory = path.join(projectRoot, 'cache');
@@ -574,4 +606,19 @@ test('a file in another folder of the workspace can be read, but never written t
     await fsPromises.rm(workspaceRoot, { recursive: true, force: true });
     await fsPromises.rm(outsideDirectory, { recursive: true, force: true });
   }
+});
+
+test('strict project endpoints deny symlink escapes even when other workspace paths are ordinarily readable', async () => {
+  const project = '/workspace/strict';
+  const fs = createFakeFileSystem({
+    realpath: async (candidate) => candidate.includes('/link') ? '/outside/secret' : candidate,
+    readTextFile: async () => { throw new Error('must not read outside strict project'); },
+    writeTextFile: async () => { throw new Error('must not write outside strict project'); },
+  });
+  const dependencies = createDependencies(fs, project);
+  dependencies.projects.isStrictProject = () => true;
+  dependencies.workspace.resolveReadOnlyRootPath = async () => '/outside/secret';
+  const service = createFileTreeService(dependencies);
+  await assert.rejects(service.readTextFile('strict', '/outside/secret'), (error: unknown) => error instanceof AppError && error.statusCode === 403);
+  await assert.rejects(service.readTextFile('strict', 'link/file'), (error: unknown) => error instanceof AppError && error.statusCode === 403);
 });

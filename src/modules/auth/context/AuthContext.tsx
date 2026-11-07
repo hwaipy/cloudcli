@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useTranslation } from 'react-i18next';
 import type { ReactNode } from 'react';
 
-import { IS_PLATFORM } from '@/shared/utils';
+import { IS_PLATFORM, isHubRuntime } from '@/shared/utils';
 import { api, readApiErrorMessage } from '@/shared/api';
 import { AUTH_SESSION_EXPIRED_EVENT, AUTH_TOKEN_REFRESHED_EVENT, getAuthTokenRefreshDelay, getAuthTokenStorageKey, isValidRefreshedToken, storeAuthToken } from '@/shared/authToken';
 import { hydrateChatDrafts, resetChatDrafts } from '@/shared/chatDrafts';
@@ -127,6 +127,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [userKey]);
 
   const checkOnboardingStatus = useCallback(async () => {
+    // Hub identity is global; a backend's Git setup must not replace the workspace.
+    if (isHubRuntime()) { setHasCompletedOnboarding(true); return; }
     try {
       const response = await api.user.onboardingStatus();
       if (!response.ok) {

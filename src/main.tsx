@@ -17,7 +17,7 @@ import '@/modules/i18n'
 scan({ enabled: import.meta.env.DEV && localStorage.getItem('react-scan') === 'on' })
 
 // Register service worker for PWA + Web Push support
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && !(window as Window & { cloudcliDesktopUpdates?: unknown }).cloudcliDesktopUpdates) {
   const basePath = (window as Window & { __ROUTER_BASENAME__?: string }).__ROUTER_BASENAME__ ?? ''
   navigator.serviceWorker.register(`${basePath}/sw.js`).catch(err => {
     console.warn('Service worker registration failed:', err);

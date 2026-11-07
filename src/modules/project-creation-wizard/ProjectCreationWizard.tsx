@@ -1,135 +1,133 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { FolderPlus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import ErrorBanner from '@/modules/project-creation-wizard/ErrorBanner';
+import StepBackendSelection from '@/modules/project-creation-wizard/StepBackendSelection';
 import StepConfiguration from '@/modules/project-creation-wizard/StepConfiguration';
 import StepReview from '@/modules/project-creation-wizard/StepReview';
 import WizardFooter from '@/modules/project-creation-wizard/WizardFooter';
 import WizardProgress from '@/modules/project-creation-wizard/WizardProgress';
-import { useGithubTokens } from '@/modules/project-creation-wizard/hooks/useGithubTokens';
-import { cloneWorkspaceWithProgress, createProjectRequest } from '@/modules/project-creation-wizard/utils/workspaceApi';
-import { isCloneWorkflow, shouldShowGithubAuthentication } from '@/modules/project-creation-wizard/utils/pathUtils';
-import type { TokenMode, WizardFormState, WizardStep } from '@/shared/types';
+import { createProjectRequest } from '@/modules/project-creation-wizard/utils/workspaceApi';
+import type { WizardStep } from '@/shared/types';
+import { api } from '@/shared/api';
+import { getHubBackendId } from '@/shared/utils';
 
 type ProjectCreationWizardProps = {
   onClose: () => void;
   onProjectCreated?: (project?: Record<string, unknown>) => void;
 };
 
-const initialFormState: WizardFormState = {
-  workspacePath: '',
-  githubUrl: '',
-  tokenMode: 'stored',
-  selectedGithubToken: '',
-  newGithubToken: '',
-};
+type ProjectBackend = { id: string; name: string; online: boolean };
 
-/** Rendered by the sidebar module's modal layer to create a new project or clone one from GitHub. */
-export default function ProjectCreationWizard({
-  onClose,
-  onProjectCreated,
-}: ProjectCreationWizardProps) {
+/** Rendered by the sidebar module's modal layer to create a project on a selected backend. */
+export default function ProjectCreationWizard({ onClose, onProjectCreated }: ProjectCreationWizardProps) {
   const { t } = useTranslation();
+  const injectedBackendId = getHubBackendId();
+  const firstStep: WizardStep = 1;
+  // The wizard retains only the selected workspace path between its path and review steps.
+  const [workspacePath, setWorkspacePath] = useState('');
+  // The project is always created on an explicitly selected registered Hub backend.
+  const [backends, setBackends] = useState<ProjectBackend[]>([]);
+  // Keep the current Hub backend selected by default, then fall back to the first online backend.
+  const [backendId, setBackendId] = useState<string | undefined>(injectedBackendId ?? undefined);
+  // These states drive loading and validation feedback for the initial backend-selection step.
+  const [loadingBackends, setLoadingBackends] = useState(true);
+  const [backendLoadError, setBackendLoadError] = useState<string | null>(null);
+  // The wizard always starts by selecting the Hub backend before browsing its filesystem.
   const [step, setStep] = useState<WizardStep>(1);
-  const [formState, setFormState] = useState<WizardFormState>(initialFormState);
+  // Creation state prevents duplicate requests and disables controls while the project is saved.
   const [isCreating, setIsCreating] = useState(false);
+  // Error text is shown in the current wizard step without discarding entered values.
   const [error, setError] = useState<string | null>(null);
-  const [cloneProgress, setCloneProgress] = useState('');
 
-  const shouldLoadTokens =
-    step === 1 && shouldShowGithubAuthentication(formState.githubUrl);
+  // This choice is persisted on the project; changing servers resets it until capabilities are known.
+  const [strictFileIsolation, setStrictFileIsolation] = useState(false);
+  // Capability results prevent offering strict mode on unsupported or unreachable backends.
+  const [isolationCapability, setIsolationCapability] = useState<{ available: boolean; reason?: string } | null>(null);
 
-  const autoSelectToken = useCallback((tokenId: string) => {
-    setFormState((previous) => ({ ...previous, selectedGithubToken: tokenId }));
-  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    setStrictFileIsolation(false);
+    setIsolationCapability(null);
+    if (backendId) void api.projectIsolationCapabilities(backendId).then(async (response) => {
+      if (!response.ok) throw new Error('Backend isolation capability check failed');
+      const capability = await response.json();
+      if (!cancelled) setIsolationCapability(capability);
+    }).catch(() => {
+      if (!cancelled) setIsolationCapability({ available: false });
+    });
+    return () => { cancelled = true; };
+  }, [backendId]);
 
-  const {
-    tokens: availableTokens,
-    loading: loadingTokens,
-    loadError: tokenLoadError,
-    selectedTokenName,
-  } = useGithubTokens({
-    shouldLoad: shouldLoadTokens,
-    selectedTokenId: formState.selectedGithubToken,
-    onAutoSelectToken: autoSelectToken,
-  });
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingBackends(true);
+    void api.hub.backends().then(async (response) => {
+      if (!response.ok) throw new Error(`Backend list request failed (${response.status})`);
+      const payload = await response.json() as { backends?: Array<{ id?: unknown; name?: unknown; online?: unknown }> };
+      const discovered = (payload.backends ?? []).filter((backend): backend is { id: string; name: string; online: boolean } =>
+        typeof backend.id === 'string' && typeof backend.name === 'string' && typeof backend.online === 'boolean',
+      );
+      if (cancelled) return;
+      setBackends(discovered);
+      setBackendId((current) =>
+        discovered.some((backend) => backend.id === current && backend.online)
+          ? current
+          : discovered.find((backend) => backend.online)?.id,
+      );
+      if (!discovered.some((backend) => backend.online)) {
+        setBackendLoadError(t('projectWizard.errors.noOnlineBackends'));
+      }
+    }).catch((loadError: unknown) => {
+      if (cancelled) return;
+      console.error('Could not load Hub servers for project creation:', loadError);
+      setBackendLoadError(t('projectWizard.errors.loadBackendsFailed'));
+    }).finally(() => {
+      if (!cancelled) setLoadingBackends(false);
+    });
+    return () => { cancelled = true; };
+  }, [injectedBackendId, t]);
 
-  // Keep cross-step values in this component; local UI state lives in child components.
-  const updateField = useCallback(<K extends keyof WizardFormState>(key: K, value: WizardFormState[K]) => {
-    setFormState((previous) => ({ ...previous, [key]: value }));
-  }, []);
-
-  const updateTokenMode = useCallback(
-    (tokenMode: TokenMode) => updateField('tokenMode', tokenMode),
-    [updateField],
-  );
+  const selectedBackendName = backends.find((backend) => backend.id === backendId)?.name;
 
   const handleNext = useCallback(() => {
     setError(null);
-
     if (step === 1) {
-      if (!formState.workspacePath.trim()) {
-        setError(t('projectWizard.errors.providePath'));
+      if (!backendId || !backends.some((backend) => backend.id === backendId && backend.online)) {
+        setError(t('projectWizard.errors.selectBackend'));
         return;
       }
       setStep(2);
+      return;
     }
-  }, [formState.workspacePath, step, t]);
+    if (step === 2) {
+      if (!workspacePath.trim()) {
+        setError(t('projectWizard.errors.providePath'));
+        return;
+      }
+      setStep(3);
+    }
+  }, [backendId, backends, step, t, workspacePath]);
 
   const handleBack = useCallback(() => {
     setError(null);
-    setStep((previousStep) => (previousStep > 1 ? ((previousStep - 1) as WizardStep) : previousStep));
-  }, []);
+    setStep((currentStep) => (currentStep > firstStep ? ((currentStep - 1) as WizardStep) : currentStep));
+  }, [firstStep]);
 
   const handleCreate = useCallback(async () => {
     setIsCreating(true);
     setError(null);
-    setCloneProgress('');
-
     try {
-      const shouldCloneRepository = isCloneWorkflow(formState.githubUrl);
-
-      if (shouldCloneRepository) {
-        const project = await cloneWorkspaceWithProgress(
-          {
-            workspacePath: formState.workspacePath,
-            githubUrl: formState.githubUrl,
-            tokenMode: formState.tokenMode,
-            selectedGithubToken: formState.selectedGithubToken,
-            newGithubToken: formState.newGithubToken,
-          },
-          {
-            onProgress: setCloneProgress,
-          },
-        );
-
-        onProjectCreated?.(project);
-        onClose();
-        return;
-      }
-
-      const project = await createProjectRequest({
-        path: formState.workspacePath.trim(),
-      });
-
+      const project = await createProjectRequest({ path: workspacePath.trim(), strictFileIsolation }, backendId);
       onProjectCreated?.(project);
       onClose();
     } catch (createError) {
-      const errorMessage =
-        createError instanceof Error
-          ? createError.message
-          : t('projectWizard.errors.failedToCreate');
-      setError(errorMessage);
+      setError(createError instanceof Error ? createError.message : t('projectWizard.errors.failedToCreate'));
     } finally {
       setIsCreating(false);
     }
-  }, [formState, onClose, onProjectCreated, t]);
-
-  const shouldCloneRepository = useMemo(
-    () => isCloneWorkflow(formState.githubUrl),
-    [formState.githubUrl],
-  );
+  }, [backendId, onClose, onProjectCreated, strictFileIsolation, t, workspacePath]);
 
   return (
     <div className="fixed bottom-0 left-0 right-0 top-0 z-[60] flex items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-4">
@@ -139,62 +137,54 @@ export default function ProjectCreationWizard({
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/50">
               <FolderPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-              {t('projectWizard.title')}
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{t('projectWizard.title')}</h3>
           </div>
           <button
             onClick={onClose}
             className="rounded-md p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
             disabled={isCreating}
+            aria-label={t('projectWizard.buttons.cancel')}
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <WizardProgress step={step} />
+        <WizardProgress step={step} isHubMode />
 
         <div className="min-h-[300px] space-y-6 p-6">
           {error && <ErrorBanner message={error} />}
-
           {step === 1 && (
-            <StepConfiguration
-              workspacePath={formState.workspacePath}
-              githubUrl={formState.githubUrl}
-              tokenMode={formState.tokenMode}
-              selectedGithubToken={formState.selectedGithubToken}
-              newGithubToken={formState.newGithubToken}
-              availableTokens={availableTokens}
-              loadingTokens={loadingTokens}
-              tokenLoadError={tokenLoadError}
-              isCreating={isCreating}
-              onWorkspacePathChange={(workspacePath) => updateField('workspacePath', workspacePath)}
-              onGithubUrlChange={(githubUrl) => updateField('githubUrl', githubUrl)}
-              onTokenModeChange={updateTokenMode}
-              onSelectedGithubTokenChange={(selectedGithubToken) =>
-                updateField('selectedGithubToken', selectedGithubToken)
-              }
-              onNewGithubTokenChange={(newGithubToken) =>
-                updateField('newGithubToken', newGithubToken)
-              }
-              onAdvanceToConfirm={() => setStep(2)}
+            <StepBackendSelection
+              backends={backends}
+              selectedBackendId={backendId}
+              loading={loadingBackends}
+              loadError={backendLoadError}
+              onSelect={setBackendId}
             />
           )}
-
           {step === 2 && (
-            <StepReview
-              formState={formState}
-              selectedTokenName={selectedTokenName}
+            <StepConfiguration
+              workspacePath={workspacePath}
+              backendId={backendId}
+              strictFileIsolation={strictFileIsolation}
+              onStrictFileIsolationChange={setStrictFileIsolation}
+              isolationAvailable={isolationCapability?.available === true}
+              isolationReason={isolationCapability?.reason}
               isCreating={isCreating}
-              cloneProgress={cloneProgress}
+              onWorkspacePathChange={setWorkspacePath}
+              onAdvanceToConfirm={() => setStep(3)}
             />
+          )}
+          {step === 3 && (
+            <StepReview workspacePath={workspacePath} backendName={selectedBackendName} strictFileIsolation={strictFileIsolation} />
           )}
         </div>
 
         <WizardFooter
           step={step}
+          firstStep={firstStep}
           isCreating={isCreating}
-          isCloneWorkflow={shouldCloneRepository}
+          nextDisabled={step === 1 && (loadingBackends || !backendId || Boolean(backendLoadError))}
           onClose={onClose}
           onBack={handleBack}
           onNext={handleNext}

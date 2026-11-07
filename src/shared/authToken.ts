@@ -7,13 +7,14 @@
  * AuthContext, the shell socket and the file-tree uploader actually import.
  */
 
-import { getHubStorageKey } from '@/shared/utils';
+import { getHubBackendId, getHubStorageKey, isHubRuntime } from '@/shared/utils';
 
 export const AUTH_TOKEN_REFRESHED_EVENT = 'auth-token-refreshed';
 export const AUTH_SESSION_EXPIRED_EVENT = 'auth-session-expired';
 
-/** The Hub gives every backend its own browser credential slot; direct installs keep the legacy key. */
-export const getAuthTokenStorageKey = (): string => getHubStorageKey('auth-token');
+/** Hub login is global to the Hub account; direct installs retain the legacy backend-scoped credential behavior. */
+export const getAuthTokenStorageKey = (backendId?: string | null): string =>
+  isHubRuntime() ? 'auth-token:hub' : getHubStorageKey('auth-token', backendId ?? undefined);
 
 // Only accept a refreshed token that has this app's issued JWT shape
 // (three base64url segments). An attacker-injected/malformed header value
@@ -83,16 +84,20 @@ export const expireAuthSession = (): void => {
   }
 };
 
-export const getStoredAuthToken = (): string | null => {
-  const token = localStorage.getItem(getAuthTokenStorageKey());
+export const getStoredAuthToken = (backendId?: string | null): string | null => {
+  const token = localStorage.getItem(getAuthTokenStorageKey(backendId));
   if (token && isAuthTokenExpired(token)) {
-    expireAuthSession();
+    if (isHubRuntime() || backendId === undefined || backendId === getHubBackendId()) {
+      expireAuthSession();
+    } else {
+      localStorage.removeItem(getAuthTokenStorageKey(backendId));
+    }
     return null;
   }
   return token;
 };
 
-export const storeAuthToken = (token: unknown): boolean => {
+export const storeAuthToken = (token: unknown, backendId?: string | null): boolean => {
   if (!isValidRefreshedToken(token)) {
     return false;
   }
@@ -105,8 +110,8 @@ export const storeAuthToken = (token: unknown): boolean => {
     return false;
   }
 
-  localStorage.setItem(getAuthTokenStorageKey(), token);
-  if (typeof window !== 'undefined') {
+  localStorage.setItem(getAuthTokenStorageKey(backendId), token);
+  if (typeof window !== 'undefined' && (isHubRuntime() || backendId === undefined || backendId === getHubBackendId())) {
     window.dispatchEvent(new CustomEvent(AUTH_TOKEN_REFRESHED_EVENT, { detail: token }));
   }
   return true;

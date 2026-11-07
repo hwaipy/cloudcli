@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Clock, X } from 'lucide-react';
 
 import type { ScheduledMessage } from '@/shared/types';
+import { formatDateTime24 } from '@/shared/utils';
 
 type ScheduledMessageListProps = {
   scheduledMessages: ScheduledMessage[];
@@ -49,7 +50,7 @@ export function ScheduledMessageList({ scheduledMessages, onCancel }: ScheduledM
               <p className="text-[11px] text-muted-foreground">
                 {isFailed
                   ? t('schedule.failed', { reason: message.failureReason ?? '' })
-                  : t('schedule.pending', { when: new Date(message.scheduledFor).toLocaleString() })}
+                  : t('schedule.pending', { when: formatDateTime24(message.scheduledFor) })}
               </p>
               <p className="mt-0.5 truncate text-foreground">{message.content}</p>
             </div>

@@ -4,6 +4,8 @@ import type { Extension } from '@codemirror/state';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useAppContextMenu } from '@/shared/ui';
+import { copyTextToClipboard } from '@/shared/utils';
 import { usePaletteOps } from '@/modules/command-palette';
 import { useTheme } from '@/shared/context/ThemeContext';
 import { useCodeEditorDocument } from '@/modules/code-editor/hooks/useCodeEditorDocument';
@@ -44,6 +46,7 @@ export default function CodeEditor({
   onToggleExpand = null,
   onPopOut = null,
 }: CodeEditorProps) {
+  const openContextMenu = useAppContextMenu();
   const { t } = useTranslation('codeEditor');
   const paletteOps = usePaletteOps();
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -289,7 +292,13 @@ export default function CodeEditor({
   return (
     <>
       <style>{getEditorStyles(isDarkMode)}</style>
-      <div className={outerContainerClassName}>
+      <div className={outerContainerClassName} onContextMenu={(event) => openContextMenu(event, [
+        { key: 'save', label: '保存文件', disabled: saving || !hasUnsavedChanges, onSelect: handleSave },
+        { key: 'download', label: '下载文件', onSelect: handleDownload },
+        { key: 'copy-path', label: '复制文件路径', onSelect: async () => { if (!await copyTextToClipboard(file.path)) throw new Error('复制失败'); } },
+        ...(isMarkdownFile ? [{ key: 'preview', label: markdownPreview ? '编辑 Markdown' : '预览 Markdown', onSelect: () => setMarkdownPreview((previous) => !previous) }] : []),
+        { key: 'close', label: '关闭文件', showDividerBefore: true, onSelect: requestClose },
+      ])}>
         <div className={innerContainerClassName}>
           <CodeEditorHeader
             file={file}

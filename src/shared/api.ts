@@ -1,15 +1,18 @@
 import {
   expireAuthSession,
+  getAuthTokenStorageKey,
   getStoredAuthToken,
   storeAuthToken,
 } from '@/shared/authToken';
-import { IS_PLATFORM, getHubBackendId, withHubBackendUrl } from '@/shared/utils';
+import { IS_PLATFORM, getHubBackendId, isHubRuntime, getHubRequestBackend, getHubResourceBackend, registerHubResourceBackend, withHubBackendUrl } from '@/shared/utils';
 import { readVoiceConfig, voiceConfigHeaders } from '@/shared/voiceConfig';
 
 // Headers are a plain record rather than the full `HeadersInit` union so the
 // defaults below can be merged with a caller's headers by spreading.
 export type ApiRequestOptions = Omit<RequestInit, 'headers'> & {
   headers?: Record<string, string>;
+  /** Route this request to a specific Hub backend (used by cross-server aggregation). */
+  hubBackendId?: string;
 };
 
 // Utility function for authenticated API calls
@@ -17,23 +20,24 @@ export const authenticatedFetch = (
   url: string,
   options: ApiRequestOptions = {},
 ): Promise<Response> => {
-  const token = getStoredAuthToken();
+  const { hubBackendId: requestedBackendId, ...requestOptions } = options;
+  const hubBackendId = requestedBackendId ?? getHubRequestBackend(url, requestOptions.body) ?? getHubBackendId();
+  const token = getStoredAuthToken(hubBackendId);
 
   const defaultHeaders: Record<string, string> = {};
 
   // Only set Content-Type for non-FormData requests
-  if (!(options.body instanceof FormData)) {
+  if (!(requestOptions.body instanceof FormData)) {
     defaultHeaders['Content-Type'] = 'application/json';
   }
 
   if (!IS_PLATFORM && token) {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
-  const hubBackendId = getHubBackendId();
   if (hubBackendId) defaultHeaders['X-CloudCLI-Backend'] = hubBackendId;
 
-  return fetch(withHubBackendUrl(url), {
-    ...options,
+  return fetch(withHubBackendUrl(url, hubBackendId), {
+    ...requestOptions,
     // Every response here can carry X-Refreshed-Token or X-Auth-Error, and a
     // served-from-cache response replays the headers it was stored with. Those
     // headers describe one moment in one session, so they must never be reused:
@@ -42,20 +46,21 @@ export const authenticatedFetch = (
     cache: 'no-store',
     headers: {
       ...defaultHeaders,
-      ...options.headers,
+      ...requestOptions.headers,
       ...(hubBackendId ? { 'X-CloudCLI-Backend': hubBackendId } : {}),
     },
   }).then((response) => {
     const refreshedToken = response.headers.get('X-Refreshed-Token');
-    if (refreshedToken) {
-      storeAuthToken(refreshedToken);
+    if (refreshedToken && (!isHubRuntime() || (url.startsWith('/hub/auth/') && token === localStorage.getItem(getAuthTokenStorageKey())))) {
+      storeAuthToken(refreshedToken, hubBackendId);
     }
     // Belt and braces for any path that still reaches a cached response: only a
     // real rejection ends the session. Note that a revalidated response surfaces
     // its stored status (typically 200), not the 304 from the wire, so the
     // header alone says nothing about the current request.
-    if (response.status === 401 && response.headers.get('X-Auth-Error')) {
-      expireAuthSession();
+    if (response.status === 401 && (!isHubRuntime() || (url.startsWith('/hub/auth/') && token === localStorage.getItem(getAuthTokenStorageKey()))) && response.headers.get('X-Auth-Error')) {
+      if (hubBackendId === getHubBackendId()) expireAuthSession();
+      else localStorage.removeItem(getAuthTokenStorageKey(hubBackendId));
     }
     return response;
   });
@@ -196,47 +201,140 @@ const fileContentPath = (projectId: string, filePath: string) =>
 const pluginAssetPath = (pluginName: string, assetFile: string) =>
   withHubBackendUrl(`/api/plugins/${encodeURIComponent(pluginName)}/assets/${encodeURIComponent(assetFile)}`);
 
-const hubFetch = (url: string, options: RequestInit = {}) => {
-  const backendId = getHubBackendId();
-  return fetch(withHubBackendUrl(url), {
-    ...options,
-    headers: { ...options.headers, ...(backendId ? { 'X-CloudCLI-Backend': backendId } : {}) },
-  });
-};
-
 // ─── API endpoints ──────────────────────────────────────────────────────────
 // Every `/api/...` path the frontend talks to is declared here; components
 // import a named method instead of assembling URLs of their own.
 
+async function aggregateHubRows(url: string, key: 'projects' | 'sessions' | 'conversations'): Promise<Response> {
+  if (!isHubRuntime()) return get(url);
+  try {
+    const listing = await fetch('/hub/backends', { cache: 'no-store' });
+    if (!listing.ok) return listing;
+    const { backends } = await listing.json() as { backends: Array<{ id: string; name: string; online?: boolean }> };
+    const parsed = new URL(url, window.location.origin);
+    const offset = Number(parsed.searchParams.get('offset')) || 0;
+    const limit = Number(parsed.searchParams.get('limit')) || 40;
+    const pages = await Promise.all(backends.map(async (backend) => {
+      if (backend.online === false) throw new Error('Backend offline');
+      const rows: Array<Record<string, unknown>> = [];
+      let total = 0;
+      do {
+        const pageUrl = new URL(parsed);
+        if (key === 'conversations') {
+          pageUrl.searchParams.set('limit', String(Math.min(100, offset + limit - rows.length)));
+          pageUrl.searchParams.set('offset', String(rows.length));
+        }
+        const response = await get(pageUrl.pathname + pageUrl.search, { hubBackendId: backend.id });
+        if (!response.ok) throw new Error('Backend list unavailable');
+        const body = await response.json();
+        const entries = body.data?.[key] ?? [];
+        total = Number(body.data?.total ?? entries.length);
+        for (const row of entries) {
+          const id = key === 'projects' ? row.projectId : row.sessionId ?? row.id;
+          if (typeof id === 'string') registerHubResourceBackend(key === 'projects' ? 'project' : 'session', id, backend.id);
+          rows.push({ ...row, __hubBackendId: backend.id, __hubBackendName: backend.name });
+        }
+        if (key !== 'conversations' || !entries.length || !body.data?.hasMore) break;
+      } while (rows.length < offset + limit);
+      return { rows, total };
+    }));
+    let rows = pages.flatMap((page) => page.rows);
+    const total = pages.reduce((sum, page) => sum + page.total, 0);
+    if (key === 'conversations') rows = rows.sort((a, b) => String(b.lastActivity ?? '').localeCompare(String(a.lastActivity ?? ''))).slice(offset, offset + limit);
+    return new Response(JSON.stringify({ success: true, data: { [key]: rows, total, hasMore: offset + rows.length < total } }), { status: 200 });
+  } catch {
+    return new Response(JSON.stringify({ error: 'Some backends are unavailable' }), { status: 503 });
+  }
+}
+
+async function resolveHubSession(sessionId: string): Promise<Response> {
+  const url = `/api/providers/sessions/${encodeURIComponent(sessionId)}`;
+  if (!isHubRuntime() || getHubResourceBackend('session', sessionId)) return get(url);
+  const listing = await fetch('/hub/backends', { cache: 'no-store' });
+  if (!listing.ok) return listing;
+  const { backends } = await listing.json() as { backends: Array<{ id: string; online?: boolean }> };
+  const matches = (await Promise.all(backends.filter((b) => b.online !== false).map(async (backend) => {
+    try {
+      const response = await get(url, { hubBackendId: backend.id });
+      if (!response.ok) return null;
+      const payload = await response.clone().json();
+      const details = payload.data ?? payload;
+      if (!details.sessionId) return null;
+      return { response, backendId: backend.id, details };
+    } catch { return null; }
+  }))).filter((entry) => entry !== null);
+  if (matches.length !== 1) return new Response(JSON.stringify({ error: matches.length ? 'Ambiguous session ownership' : 'Session not found' }), { status: matches.length ? 409 : 404 });
+  const match = matches[0]!;
+  registerHubResourceBackend('session', sessionId, match.backendId);
+  registerHubResourceBackend('session', match.details.sessionId, match.backendId);
+  if (match.details.project?.projectId) registerHubResourceBackend('project', match.details.project.projectId, match.backendId);
+  return match.response;
+}
+
+async function mutateOwnedDraft(method: string, url: string, scope: string, values: Record<string, unknown> = {}): Promise<Response> {
+  let backendId = getHubRequestBackend(url, JSON.stringify({ scope }));
+  if (isHubRuntime() && !backendId) {
+    if (!scope.startsWith('project:')) {
+      const resolved = await resolveHubSession(scope);
+      if (!resolved.ok) return resolved;
+      backendId = getHubResourceBackend('session', scope);
+    } else {
+      const listing = await fetch('/hub/backends', { cache: 'no-store' });
+      if (!listing.ok) return listing;
+      const { backends } = await listing.json() as { backends: Array<{ id: string; online?: boolean }> };
+      if (backends.some((b) => b.online === false)) return new Response('Draft ownership unavailable', { status: 503 });
+      const projectId = scope.slice(8);
+      const owners = (await Promise.all(backends.map(async (b) => {
+        try {
+          const response = await get(`/api/projects/${encodeURIComponent(projectId)}/sessions?limit=1`, { hubBackendId: b.id });
+          return response.ok ? b.id : null;
+        } catch { return null; }
+      }))).filter((id) => id !== null);
+      if (owners.length !== 1) return new Response('Draft ownership is missing or ambiguous', { status: 409 });
+      backendId = owners[0]!;
+      registerHubResourceBackend('project', projectId, backendId);
+    }
+  }
+  return authenticatedFetch(url, { method, body: JSON.stringify({ scope, ...values }), ...(backendId ? { hubBackendId: backendId } : {}) });
+}
+
 export const api = {
+  hub: {
+    backends: (): Promise<Response> => fetch('/hub/backends', { cache: 'no-store' }),
+    managedBackends: () => get('/hub/admin/backends'),
+    updateBackend: (id: string, name: string, color: string) => patch(`/hub/admin/backends/${encodeURIComponent(id)}`, { name, color }),
+    createBackend: (name: string) => post('/hub/admin/backends', { name }),
+    createBackendKey: (id: string) => post(`/hub/admin/backends/${encodeURIComponent(id)}/key`),
+  },
   // Auth endpoints (no token required)
   auth: {
-    status: () => hubFetch('/api/auth/status'),
-    login: (username: string, password: string) => hubFetch('/api/auth/login', {
+    status: () => fetch('/hub/auth/status', { cache: 'no-store' }),
+    login: (username: string, password: string) => fetch('/hub/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     }),
-    register: (username: string, password: string) => hubFetch('/api/auth/register', {
+    register: (username: string, password: string) => fetch('/hub/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     }),
-    refresh: () => post('/api/auth/refresh'),
-    user: () => get('/api/auth/user'),
-    updateOwnAccount: (username: string, currentPassword: string, newPassword?: string) => patch('/api/auth/user', { username, currentPassword, newPassword }),
-    updateOwnAvatar: (avatar: string | null) => patch('/api/auth/user/avatar', { avatar }),
-    users: () => get('/api/auth/users'),
-    createUser: (username: string, password: string) => post('/api/auth/users', { username, password }),
-    updateUser: (id: number, username: string, newPassword?: string) => patch(`/api/auth/users/${encodeURIComponent(id)}`, { username, newPassword }),
+    refresh: () => post('/hub/auth/refresh'),
+    user: () => get('/hub/auth/user'),
+    updateOwnAccount: (username: string, currentPassword: string, newPassword?: string) => patch('/hub/auth/user', { username, currentPassword, newPassword }),
+    updateOwnAvatar: (avatar: string | null) => patch('/hub/auth/user/avatar', { avatar }),
+    users: () => get('/hub/auth/users'),
+    createUser: (username: string, password: string) => post('/hub/auth/users', { username, password }),
+    updateUser: (id: number | string, username: string, newPassword?: string) => patch(`/hub/auth/users/${encodeURIComponent(id)}`, { username, newPassword }),
   },
 
   // Protected endpoints
   // config endpoint removed - no longer needed (frontend uses window.location)
   // After the projectName → projectId migration the path/query identifier is
   // the DB-assigned `projectId`; parameter names reflect that for clarity.
-  projects: () => get('/api/projects'),
-  archivedProjects: () => get('/api/projects/archived'),
+  projectIsolationCapabilities: (backendId?: string) => get('/api/projects/isolation-capabilities', backendId ? { hubBackendId: backendId } : {}),
+  projects: (backendId?: string) => get('/api/projects', backendId ? { hubBackendId: backendId } : {}),
+  archivedProjects: () => aggregateHubRows('/api/projects/archived', 'projects'),
   projectSessions: (
     projectId: string,
     { limit = 20, offset = 0 }: { limit?: number; offset?: number } = {},
@@ -255,7 +353,8 @@ export const api = {
   // `hardDelete` => server `?force=true` (remove DB row + Claude *.jsonl + sessions rows for path).
   deleteProject: (projectId: string, hardDelete = false) =>
     del(`/api/projects/${projectId}${query({ force: hardDelete })}`),
-  createProject: (projectData: unknown) => post('/api/projects/create-project', projectData),
+  createProject: (projectData: unknown, backendId?: string) =>
+    post('/api/projects/create-project', projectData, backendId ? { hubBackendId: backendId } : {}),
   migrateLegacyProjectStars: (projectIds: string[]) =>
     post('/api/projects/migrate-legacy-stars', { projectIds }),
   toggleProjectStar: (projectId: string) =>
@@ -268,17 +367,18 @@ export const api = {
     githubUrl: string;
     githubTokenId: number | null;
     newGithubToken: string | null;
-  }) => post('/api/projects/clone', cloneRequest),
+  }, backendId?: string) =>
+    post('/api/projects/clone', cloneRequest, backendId ? { hubBackendId: backendId } : {}),
   // EventSource cannot send an Authorization header, so the token rides along as
   // a query parameter on the streaming endpoints below.
-  cloneProjectProgressUrl: ({ cloneId }: { cloneId: string }) =>
-    withHubBackendUrl(`/api/projects/clone-progress${query({ cloneId, token: getStoredAuthToken() })}`),
-  searchConversationsUrl: (searchQuery: string, limit = 50) =>
+  cloneProjectProgressUrl: ({ cloneId, backendId }: { cloneId: string; backendId?: string }) =>
+    withHubBackendUrl(`/api/projects/clone-progress${query({ cloneId, token: getStoredAuthToken(backendId) })}`, backendId),
+  searchConversationsUrl: (searchQuery: string, limit = 50, backendId?: string) =>
     withHubBackendUrl(`/api/providers/search/sessions${query({
       q: searchQuery,
       limit,
       token: getStoredAuthToken(),
-    })}`),
+    })}`, backendId),
 
   // Session endpoints. Provider/project metadata are resolved by the backend
   // from the session id.
@@ -287,14 +387,13 @@ export const api = {
   // - hardDelete: remove the row and, by default, its persisted transcript file
   deleteSession: (sessionId: string, hardDelete = false) =>
     del(`/api/providers/sessions/${sessionId}${query({ force: hardDelete })}`),
-  getArchivedSessions: () => get('/api/providers/sessions/archived'),
+  getArchivedSessions: () => aggregateHubRows('/api/providers/sessions/archived', 'sessions'),
   // Resolves one session (by app id or provider-native id) to its metadata and
   // owning project — used when a /session/<id> URL isn't in loaded payloads.
-  sessionDetails: (sessionId: string) =>
-    get(`/api/providers/sessions/${encodeURIComponent(sessionId)}`),
-  runningSessions: () => get('/api/providers/sessions/running'),
+  sessionDetails: (sessionId: string) => resolveHubSession(sessionId),
+  runningSessions: () => aggregateHubRows('/api/providers/sessions/running', 'sessions'),
   recentConversations: ({ limit = 40, offset = 0 }: { limit?: number; offset?: number } = {}) =>
-    get(`/api/providers/sessions/recent${query({ limit, offset })}`),
+    aggregateHubRows(`/api/providers/sessions/recent${query({ limit, offset })}`, 'conversations'),
   providerSessionId: (sessionId: string) =>
     get(`/api/providers/sessions/${encodeURIComponent(sessionId)}/provider-id`),
   restoreSession: (sessionId: string) => post(`/api/providers/sessions/${sessionId}/restore`),
@@ -344,13 +443,14 @@ export const api = {
 
   // Uploads with a progress bar go through XMLHttpRequest, which needs the URL.
   uploadFilesUrl: (projectId: string) =>
-    withHubBackendUrl(`/api/file-tree/projects/${encodeURIComponent(projectId)}/files/upload`),
+    withHubBackendUrl(`/api/file-tree/projects/${encodeURIComponent(projectId)}/files/upload`, getHubRequestBackend(`/api/file-tree/projects/${encodeURIComponent(projectId)}/files/upload`)),
 
   // Browse filesystem for project suggestions
-  browseFilesystem: (dirPath: string | null = null) =>
-    get(`/api/file-tree/browse-filesystem${query({ path: dirPath })}`),
+  browseFilesystem: (dirPath: string | null = null, backendId?: string) =>
+    get(`/api/file-tree/browse-filesystem${query({ path: dirPath })}`, backendId ? { hubBackendId: backendId } : {}),
 
-  createFolder: (folderPath: string) => post('/api/file-tree/create-folder', { path: folderPath }),
+  createFolder: (folderPath: string, backendId?: string) =>
+    post('/api/file-tree/create-folder', { path: folderPath }, backendId ? { hubBackendId: backendId } : {}),
 
   // Git endpoints. The `project` param carries the DB projectId post-migration.
   git: {
@@ -432,7 +532,7 @@ export const api = {
 
   // Provider (coding agent) endpoints — models, capabilities, sessions, MCP, skills.
   providers: {
-    capabilities: () => get('/api/providers/capabilities'),
+    capabilities: (backendId?: string) => get('/api/providers/capabilities', backendId ? { hubBackendId: backendId } : {}),
     authStatus: (provider: string) =>
       get(`/api/providers/${encodeURIComponent(provider)}/auth/status`),
     codexPlanUsage: () => get('/api/providers/codex/plan-usage'),
@@ -443,22 +543,32 @@ export const api = {
       post(`/api/providers/${encodeURIComponent(provider)}/cli/update`),
     claudeSettingsPermissions: () => get('/api/providers/claude/settings-permissions'),
 
-    models: (provider: string) => get(`/api/providers/${provider}/models`),
-    createModel: (provider: string, input: unknown) =>
-      post(`/api/providers/${provider}/models`, input),
-    updateModel: (provider: string, recordId: string | number, input: unknown) =>
-      patch(`/api/providers/${provider}/models/${recordId}`, input),
-    deleteModel: (provider: string, recordId: string | number) =>
-      del(`/api/providers/${provider}/models/${recordId}`),
-    setCustomModelsOnly: (provider: string, enabled: boolean) =>
-      put(`/api/providers/${provider}/models/custom-only`, { enabled }),
+    models: (provider: string, backendId?: string) => get(`/api/providers/${provider}/models`, backendId ? { hubBackendId: backendId } : {}),
+    createModel: (provider: string, input: unknown, backendId?: string) =>
+      post(`/api/providers/${provider}/models`, input, backendId ? { hubBackendId: backendId } : {}),
+    updateModel: (provider: string, recordId: string | number, input: unknown, backendId?: string) =>
+      patch(`/api/providers/${provider}/models/${recordId}`, input, backendId ? { hubBackendId: backendId } : {}),
+    deleteModel: (provider: string, recordId: string | number, backendId?: string) =>
+      del(`/api/providers/${provider}/models/${recordId}`, undefined, backendId ? { hubBackendId: backendId } : {}),
+    setCustomModelsOnly: (provider: string, enabled: boolean, backendId?: string) =>
+      put(`/api/providers/${provider}/models/custom-only`, { enabled }, backendId ? { hubBackendId: backendId } : {}),
 
     createSession: (payload: {
       provider: string;
       projectPath: string;
       initialMessage?: unknown;
       permissionMode?: string;
-    }) => post('/api/providers/sessions', payload),
+    }, backendId?: string) => {
+      const owner = backendId ?? getHubRequestBackend('/api/providers/sessions', JSON.stringify(payload));
+      return post('/api/providers/sessions', payload, owner ? { hubBackendId: owner } : {}).then(async (response) => {
+        if (response.ok && owner) {
+          const result = await response.clone().json();
+          const sessionId = result.data?.sessionId ?? result.sessionId;
+          if (typeof sessionId === 'string') registerHubResourceBackend('session', sessionId, owner);
+        }
+        return response;
+      });
+    },
     sessionMessages: (
       sessionId: string,
       pagination: { limit?: number | null; offset?: number } = {},
@@ -515,13 +625,14 @@ export const api = {
 
   // Chat attachments, stored globally under ~/.cloudcli/assets
   assets: {
-    uploadFiles: (formData: FormData) =>
+    uploadFiles: (formData: FormData, backendId?: string) =>
       authenticatedFetch('/api/assets/files', {
+        ...(backendId ? { hubBackendId: backendId } : {}),
         method: 'POST',
         headers: {}, // Let browser set Content-Type for FormData
         body: formData,
       }),
-    file: (storedName: string) => get(`/api/assets/files/${encodeURIComponent(storedName)}`),
+    file: (storedName: string, backendId?: string) => get(`/api/assets/files/${encodeURIComponent(storedName)}`, backendId ? { hubBackendId: backendId } : {}),
     image: (filename: string, options: ApiRequestOptions = {}) =>
       get(`/api/assets/images/${encodeURIComponent(filename)}`, options),
   },
@@ -554,21 +665,40 @@ export const api = {
     // Preferences and chat drafts live server-side so they follow the user
     // from one device to another. `savePreferences` is a merge-patch: only the
     // keys it is given are written.
-    preferences: () => get('/api/user/preferences'),
+    preferences: () => get(isHubRuntime() ? '/hub/auth/preferences' : '/api/user/preferences'),
     savePreferences: (updates: Record<string, unknown>) =>
-      patch('/api/user/preferences', updates),
-    drafts: () => get('/api/user/drafts'),
+      patch(isHubRuntime() ? '/hub/auth/preferences' : '/api/user/preferences', updates),
+    drafts: async () => {
+      if (!isHubRuntime()) return get('/api/user/drafts');
+      const response = await api.hub.backends();
+      if (!response.ok) return response;
+      const { backends } = await response.json() as { backends: Array<{ id: string; online?: boolean }> };
+      const pages = await Promise.all(backends.map(async (backend) => {
+        if (backend.online === false) throw new Error('Draft backend offline');
+        const page = await get('/api/user/drafts', { hubBackendId: backend.id });
+        if (!page.ok) throw new Error('Draft backend unavailable');
+        const payload = await page.json();
+        return (payload.drafts ?? []).map((draft: { scope: string }) => {
+          const project = draft.scope.startsWith('project:');
+          registerHubResourceBackend(project ? 'project' : 'session', project ? draft.scope.slice(8) : draft.scope, backend.id);
+          return draft;
+        });
+      })).catch(() => null);
+      // An offline backend must not make hydration delete its cached drafts.
+      return pages ? new Response(JSON.stringify({ drafts: pages.flat() }), { status: 200 })
+        : new Response(JSON.stringify({ error: 'Some draft backends are unavailable' }), { status: 503 });
+    },
     // Without `queuedMessage` only the text is written; the stored queued
     // message is left as it is.
     saveDraft: (scope: string, draft: { text: string; queuedMessage?: unknown }) =>
-      put('/api/user/drafts', { scope, ...draft }),
+      mutateOwnedDraft('PUT', '/api/user/drafts', scope, draft),
     // Appends to the scope's queued message on the server and returns the
     // message that is now queued.
     appendQueuedMessage: (scope: string, queuedMessage: unknown) =>
-      post('/api/user/drafts/queued-message', { scope, queuedMessage }),
+      mutateOwnedDraft('POST', '/api/user/drafts/queued-message', scope, { queuedMessage }),
     reorderQueuedMessages: (scope: string, expectedIds: string[], orderedIds: string[]) =>
-      patch('/api/user/drafts/queued-message/order', { scope, expectedIds, orderedIds }),
-    clearQueuedMessage: (scope: string, messageId?: string) => del('/api/user/drafts/queued-message', { scope, messageId }),
+      mutateOwnedDraft('PATCH', '/api/user/drafts/queued-message/order', scope, { expectedIds, orderedIds }),
+    clearQueuedMessage: (scope: string, messageId?: string) => mutateOwnedDraft('DELETE', '/api/user/drafts/queued-message', scope, { messageId }),
   },
 
   // Server-side settings: API keys, stored credentials, notifications, web push
@@ -579,7 +709,8 @@ export const api = {
     toggleApiKey: (keyId: string, isActive: boolean) =>
       patch(`/api/settings/api-keys/${keyId}/toggle`, { isActive }),
 
-    credentials: (type: string) => get(`/api/settings/credentials${query({ type })}`),
+    credentials: (type: string, options: ApiRequestOptions = {}) =>
+      get(`/api/settings/credentials${query({ type })}`, options),
     createCredential: (payload: {
       credentialName: string;
       credentialType: string;

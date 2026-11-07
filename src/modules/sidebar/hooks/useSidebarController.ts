@@ -1,8 +1,11 @@
+import { getHubStorageKey, isHubRuntime } from '@/shared/utils';
+import { openConversationSearch } from '@/shared/hubSearch';
+import type { ConversationSearchStream } from '@/shared/hubSearch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 
 import { api } from '@/shared/api';
-import { subscribeToUserPreferences } from '@/shared/userSettings';
+import { readUserPreference, writeUserPreference, hasHydratedUserPreferences, subscribeToUserPreferences } from '@/shared/userSettings';
 import { usePaletteOps } from '@/modules/command-palette';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, ConversationProjectResult, ConversationSearchResults, LLMProvider, Project, ProjectSession, ProjectSortOrder, RecentConversationListItem, SearchProgress, ActiveSidebarRename, PendingSidebarDeletion, SessionTitleSearchResult, SessionWithProvider, SidebarSearchMode, SidebarSessionSelection } from '@/shared/types';
 import {
@@ -23,7 +26,7 @@ const NO_RECENTLY_CREATED_PROJECTS: readonly string[] = [];
 /** Read browser-local project expansion, tolerating missing or invalid storage. */
 function readExpandedProjects(): Set<string> | null {
   try {
-    const saved: unknown = JSON.parse(localStorage.getItem(EXPANDED_PROJECTS_STORAGE_KEY) ?? 'null');
+    const saved: unknown = readUserPreference('sidebarExpandedProjects', null) ?? JSON.parse(localStorage.getItem(getHubStorageKey(EXPANDED_PROJECTS_STORAGE_KEY)) ?? 'null');
     return Array.isArray(saved)
       ? new Set(saved.filter((id): id is string => typeof id === 'string'))
       : null;
@@ -134,9 +137,18 @@ export function useSidebarController({
       }
     }
     try {
-      localStorage.setItem(EXPANDED_PROJECTS_STORAGE_KEY, JSON.stringify([...expandedProjects]));
+      localStorage.setItem(getHubStorageKey(EXPANDED_PROJECTS_STORAGE_KEY), JSON.stringify([...expandedProjects]));
+      if (isHubRuntime() && hasHydratedUserPreferences()) writeUserPreference('sidebarExpandedProjects', [...expandedProjects]);
     } catch { /* Keep navigation working when browser storage is unavailable. */ }
   }, [expandedProjects, keepProjectsExpanded, selectedProject?.projectId]);
+  useEffect(() => subscribeToUserPreferences(() => {
+    if (!keepProjectsExpanded) return;
+    const stored = readUserPreference<unknown>('sidebarExpandedProjects', null);
+    if (!Array.isArray(stored)) return;
+    const ids = stored.filter((id): id is string => typeof id === 'string');
+    setExpandedProjects((previous) => JSON.stringify([...previous]) === JSON.stringify(ids) ? previous : new Set(ids));
+  }), [keepProjectsExpanded]);
+
   // Running groups start expanded and remember manual collapses independently of Projects.
   const [collapsedRunningProjects, setCollapsedRunningProjects] = useState<Set<string>>(new Set());
   // The one rename the sidebar has open, as a single value so a project and a
@@ -186,7 +198,7 @@ export function useSidebarController({
   const projectIdsLoadingMoreSessionsRef = useRef<Set<string>>(new Set());
   const searchSeqRef = useRef(0);
   const recentConversationsSeqRef = useRef(0);
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const eventSourceRef = useRef<ConversationSearchStream | null>(null);
   const starToggleSequenceByProjectRef = useRef<Map<string, number>>(new Map());
   const migrationStartedRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
@@ -506,8 +518,7 @@ export function useSidebarController({
       return;
     }
 
-    const url = api.searchConversationsUrl(query);
-    const es = new EventSource(url);
+    const es = openConversationSearch(query);
     eventSourceRef.current = es;
 
     const accumulated: ConversationProjectResult[] = [];

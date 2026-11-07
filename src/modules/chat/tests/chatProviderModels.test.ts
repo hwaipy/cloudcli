@@ -29,7 +29,7 @@ vi.mock('@/shared/api', () => ({
     },
     providers: {
       models: () => okJson({ success: true, data: null }),
-      capabilities: () => okJson({ success: true, data: null }),
+      capabilities: vi.fn(() => okJson({ success: true, data: null })),
       sessionActiveModel: vi.fn(() => okJson({ success: true, data: null })),
       setSessionActiveModel: () => okJson({ success: true, data: null }),
       setSessionActiveEffort: () => okJson({ success: true, data: null }),
@@ -127,8 +127,20 @@ test('each provider gets its own model from its own storage key', async () => {
     assert.equal(result.current.providerModels.claude, 'claude-stored');
   });
   assert.equal(result.current.providerModels.cursor, 'cursor-stored');
-  assert.equal(result.current.providerModels.codex, 'codex-stored');
+  assert.equal(result.current.providerModels.codex, 'gpt-6-luna');
   assert.equal(result.current.providerModels.opencode, 'opencode-stored');
+});
+
+test('the Luna default migration runs once and keeps later Codex choices', async () => {
+  localStorage.setItem('codex-model', 'gpt-6-sol');
+  const first = await renderProviderState();
+  assert.equal(first.result.current.providerModels.codex, 'gpt-6-luna');
+  first.unmount();
+
+  localStorage.setItem('codex-model', 'gpt-6-astra');
+  const second = await renderProviderState();
+  assert.equal(second.result.current.providerModels.codex, 'gpt-6-astra');
+  second.unmount();
 });
 
 test('a provider with no stored model falls back to its own default, not another provider’s', async () => {
@@ -201,4 +213,37 @@ test('the active provider’s model is what currentProviderModel reports', async
     assert.equal(result.current.provider, 'cursor');
   });
   assert.equal(result.current.currentProviderModel, 'cursor-active');
+});
+
+
+test('late capability discovery and a failed permission refresh cannot reset a loaded session', async () => {
+  let finishCapabilities!: (response: Awaited<ReturnType<typeof okJson>>) => void;
+  vi.mocked(api.providers.capabilities).mockReturnValueOnce(new Promise((resolve) => { finishCapabilities = resolve; }) as never);
+  vi.mocked(api.providers.sessionPermissionMode)
+    .mockImplementationOnce(() => okJson({ success: true, data: { permissionMode: 'bypassPermissions' } }) as never)
+    .mockRejectedValueOnce(new Error('temporary network failure'));
+  writeUserPreference('selectedProvider', 'codex');
+  const { useChatProviderState } = await import('@/modules/chat/hooks/useChatProviderState');
+  const session = { id: 'late-capabilities-session', __provider: 'codex' as const };
+  const view = renderHook(() => useChatProviderState({ selectedSession: session, selectedProject: null }));
+  await waitFor(() => assert.equal(view.result.current.permissionMode, 'bypassPermissions'));
+  await act(async () => { finishCapabilities(await okJson({ success: true, data: { providers: [{ provider: 'codex', permissionModes: ['default', 'acceptEdits', 'bypassPermissions', 'plan'], defaultPermissionMode: 'default' }] } })); });
+  assert.equal(view.result.current.permissionMode, 'bypassPermissions');
+  view.unmount();
+});
+
+test('returning to a known session keeps its permission when the reload fails', async () => {
+  writeUserPreference('selectedProvider', 'codex');
+  vi.mocked(api.providers.sessionPermissionMode)
+    .mockImplementationOnce(() => okJson({ success: true, data: { permissionMode: 'bypassPermissions' } }) as never)
+    .mockImplementationOnce(() => okJson({ success: true, data: { permissionMode: 'acceptEdits' } }) as never)
+    .mockRejectedValueOnce(new Error('temporary read failure'));
+  const { useChatProviderState } = await import('@/modules/chat/hooks/useChatProviderState');
+  const view = renderHook(({ id }) => useChatProviderState({ selectedSession: { id, __provider: 'codex' }, selectedProject: null }), { initialProps: { id: 'one' } });
+  await waitFor(() => assert.equal(view.result.current.permissionMode, 'bypassPermissions'));
+  view.rerender({ id: 'two' });
+  await waitFor(() => assert.equal(view.result.current.permissionMode, 'acceptEdits'));
+  view.rerender({ id: 'one' });
+  await waitFor(() => assert.equal(view.result.current.permissionMode, 'bypassPermissions'));
+  view.unmount();
 });

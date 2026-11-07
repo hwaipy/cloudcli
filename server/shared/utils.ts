@@ -11,6 +11,8 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import { createZstdDecompress } from 'node:zlib';
+import type { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 import spawn from 'cross-spawn';
@@ -223,6 +225,25 @@ export class AppError extends Error {
 export function getGitErrorDetails(error: unknown): string {
   const details = error as { message?: string; stderr?: string; stdout?: string } | null;
   return `${details?.message ?? ''} ${details?.stderr ?? ''} ${details?.stdout ?? ''}`.trim();
+}
+
+/**
+ * Opens a Codex rollout transcript as decompressed JSONL when needed.
+ * The Codex synchronizer and history reader share this so `.jsonl.zst` files
+ * are treated as the same logical byte stream as `.jsonl`; callers must still
+ * consume the stream to EOF when they need decompression integrity validation.
+ */
+export function createCodexRolloutReadStream(filePath: string): Readable {
+  const input = fs.createReadStream(filePath);
+  if (!filePath.endsWith('.jsonl.zst')) {
+    return input;
+  }
+
+  const decompressor = createZstdDecompress();
+  input.on('error', (error) => decompressor.destroy(error));
+  decompressor.once('close', () => input.destroy());
+  input.pipe(decompressor);
+  return decompressor;
 }
 
 // ---------------------------

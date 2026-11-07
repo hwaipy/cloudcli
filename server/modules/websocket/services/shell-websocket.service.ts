@@ -5,6 +5,7 @@ import path from 'node:path';
 import pty, { type IPty } from 'node-pty';
 import { WebSocket, type RawData } from 'ws';
 
+import { resolveIsolatedProject, isolatedShellLaunch } from '@/modules/project-isolation/index.js';
 import { parseIncomingJsonObject, stripAnsiSequences } from '@/shared/utils.js';
 
 type ShellIncomingMessage = {
@@ -120,6 +121,8 @@ type ShellWebSocketDependencies = {
     provider: string,
   ) => string | null | undefined;
   spawnPty?: typeof pty.spawn;
+  resolveIsolation?: typeof resolveIsolatedProject;
+  launchIsolatedShell?: typeof isolatedShellLaunch;
 };
 
 /**
@@ -647,7 +650,9 @@ export function handleShellConnection(
         const termRows = readNumber(data.rows, 24);
         const prioritizedPath = prioritizeUserNpmGlobalBin(process.env);
 
-        shellProcess = (dependencies.spawnPty ?? pty.spawn)(shell, shellArgs, {
+        const strictProject = (dependencies.resolveIsolation ?? resolveIsolatedProject)({ projectPath: resolvedProjectPath, sessionId });
+        const strictShell = strictProject ? await (dependencies.launchIsolatedShell ?? isolatedShellLaunch)(strictProject, shellCommand) : null;
+        shellProcess = (dependencies.spawnPty ?? pty.spawn)(strictShell?.command ?? shell, strictShell?.args ?? shellArgs, {
           name: 'xterm-256color',
           cols: termCols,
           rows: termRows,
@@ -752,6 +757,7 @@ export function handleShellConnection(
         });
 
         shellProcess.onExit((exitCode) => {
+          strictShell?.cleanup();
           if (!ptySessionKey) {
             return;
           }

@@ -10,6 +10,7 @@ import FolderBrowserModal from '@/modules/project-creation-wizard/FolderBrowserM
 
 type WorkspacePathFieldProps = {
   value: string;
+  backendId?: string;
   disabled?: boolean;
   onChange: (path: string) => void;
   onAdvanceToConfirm: () => void;
@@ -18,6 +19,7 @@ type WorkspacePathFieldProps = {
 /** Rendered by StepConfiguration to enter the workspace path with folder autocompletion and a browse button. */
 export default function WorkspacePathField({
   value,
+  backendId,
   disabled = false,
   onChange,
   onAdvanceToConfirm,
@@ -38,7 +40,7 @@ export default function WorkspacePathField({
     const timerId = window.setTimeout(async () => {
       try {
         const directoryPath = getSuggestionRootPath(value);
-        const result = await browseFilesystemFolders(directoryPath);
+        const result = await browseFilesystemFolders(directoryPath, backendId);
         const normalizedInput = value.toLowerCase();
 
         const matchingSuggestions = result.suggestions
@@ -61,7 +63,7 @@ export default function WorkspacePathField({
     return () => {
       window.clearTimeout(timerId);
     };
-  }, [value]);
+  }, [backendId, value]);
 
   const handleSuggestionSelect = useCallback(
     (suggestion: FolderSuggestion) => {
@@ -128,6 +130,7 @@ export default function WorkspacePathField({
         autoAdvanceOnSelect={false}
         onClose={() => setShowFolderBrowser(false)}
         onFolderSelected={handleFolderSelected}
+        backendId={backendId}
       />
     </>
   );

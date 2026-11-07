@@ -1,3 +1,4 @@
+import { formatDateTime24 } from '@/shared/utils';
 export function normalizeInlineCodeFences(text: string) {
   if (!text || typeof text !== 'string') return text;
   try {
@@ -35,11 +36,7 @@ export function formatUsageLimitText(text: string) {
       if (timestampMs < 1e12) timestampMs *= 1000;
       const reset = new Date(timestampMs);
 
-      const timeStr = new Intl.DateTimeFormat(undefined, {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      }).format(reset);
+      const timeStr = formatDateTime24(reset, { hour: '2-digit', minute: '2-digit' });
 
       const offsetMinutesLocal = -reset.getTimezoneOffset();
       const sign = offsetMinutesLocal >= 0 ? '+' : '-';

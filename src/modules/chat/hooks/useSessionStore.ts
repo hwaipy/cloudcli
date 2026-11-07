@@ -9,6 +9,8 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 
+import { reconcileSessionInputStatus } from '@/shared/context/SessionInputStatus';
+import { normalizedToChatMessages } from '@/modules/chat/hooks/useChatMessages';
 import { api } from '@/shared/api';
 import type { LLMProvider, NormalizedMessage } from '@/shared/types';
 import { removeOptimisticUserEchoes } from '@/modules/chat/utils/sessionMessageReconciliation';
@@ -48,6 +50,8 @@ export type SessionSlot = {
   hasMore: boolean;
   offset: number;
   tokenUsage: unknown;
+  /** Last history API error code; does not replace or clear cached messages. */
+  historyErrorCode?: string;
 };
 
 const EMPTY: NormalizedMessage[] = [];
@@ -107,7 +111,17 @@ async function requestSessionHistoryPage(
   } catch (error) {
     throw new SessionHistoryError('request', error);
   }
-  if (!response.ok) throw new SessionHistoryError('request', `HTTP ${response.status}`);
+  if (!response.ok) {
+    let code: string | undefined;
+    try {
+      const body = await response.json() as { error?: { code?: unknown }; code?: unknown };
+      const candidate = body?.error && typeof body.error === 'object' ? body.error.code : body?.code;
+      if (typeof candidate === 'string') code = candidate;
+    } catch {
+      // Preserve the HTTP status as the failure signal if a proxy returns non-JSON.
+    }
+    throw new SessionHistoryError('request', `HTTP ${response.status}`, code);
+  }
 
   let body: unknown;
   try {
@@ -137,7 +151,7 @@ async function requestSessionHistoryPage(
 
 class SessionHistoryError extends Error {
   readonly detail: unknown;
-  constructor(readonly stage: 'request' | 'response', cause: unknown) {
+  constructor(readonly stage: 'request' | 'response', cause: unknown, readonly code?: string) {
     super(`Session history ${stage} failed`);
     this.detail = cause;
   }
@@ -610,12 +624,25 @@ const MAX_REALTIME_MESSAGES = 500;
 export function useSessionStore() {
   const storeRef = useRef(new Map<string, SessionSlot>());
   const activeSessionIdRef = useRef<string | null>(null);
+  // A stable reader lets the workspace invalidate its memoized chat child
+  // when the shared cache changes, without replacing the store API object.
+  const revisionRef = useRef(0);
+  const getRevision = useCallback(() => revisionRef.current, []);
   // Bump to force re-render — only when the active session's data changes.
   // Session ids are stable for the whole conversation lifetime (the backend
   // allocates them before the first send), so slots are keyed directly with
   // no alias/redirect indirection.
   const [, setTick] = useState(0);
   const notify = useCallback((sessionId: string) => {
+    revisionRef.current += 1;
+    const slot = storeRef.current.get(sessionId);
+    if (slot && slot.merged.length) {
+      const questions = normalizedToChatMessages(slot.merged).flatMap(message => Array.isArray(message.codexQuestions)
+        ? message.codexQuestions.map(question => ({ ...question, askedAt: new Date(message.timestamp).getTime() })) : []);
+      const anchoredInputs = slot.merged.filter(message => message.role === 'user' && message.transcriptAnchorId);
+      const latestRound = anchoredInputs.reduce((latest, message) => Math.max(latest, Date.parse(message.timestamp) || 0), 0);
+      reconcileSessionInputStatus(sessionId, questions, latestRound || undefined);
+    }
     if (sessionId === activeSessionIdRef.current) {
       setTick(n => n + 1);
     }
@@ -667,6 +694,7 @@ export function useSessionStore() {
         slot.offset = (requestOptions.offset ?? 0) + data.messages.length;
         slot.fetchedAt = Date.now();
         slot.status = 'idle';
+        slot.historyErrorCode = undefined;
         slot.realtimeMessages = pruneRealtimeSupersededByServer(
           slot.serverMessages,
           slot.realtimeMessages,
@@ -681,6 +709,7 @@ export function useSessionStore() {
       } catch (error) {
         logHistoryFailure(sessionId, 'fetch', error);
         slot.status = 'error';
+        slot.historyErrorCode = error instanceof SessionHistoryError ? error.code : undefined;
         notify(sessionId);
         return slot;
       }
@@ -837,7 +866,9 @@ export function useSessionStore() {
       updated.push(normalizedMessage);
     }
     if (updated.length > MAX_REALTIME_MESSAGES) {
-      updated = updated.slice(-MAX_REALTIME_MESSAGES);
+      // Keep accepted input visible while a long turn outpaces its REST snapshot.
+      const progressIndex = updated.findIndex(message => !(message.kind === 'text' && message.role === 'user'));
+      updated.splice(progressIndex >= 0 ? progressIndex : 0, 1);
     }
     // Compute before committing either array: one malformed row cannot leave
     // a partially updated cache that makes every later refresh fail.
@@ -872,10 +903,16 @@ export function useSessionStore() {
           opts.limit ?? SESSION_MESSAGES_PAGE_SIZE,
           opts.canRequest,
         );
-        if (result.changed) notify(sessionId);
+        const clearedError = slot.status === 'error' || slot.historyErrorCode !== undefined;
+        slot.historyErrorCode = undefined;
+        if (slot.status === 'error') slot.status = 'idle';
+        if (result.changed || clearedError) notify(sessionId);
         return { slot, ...result };
       } catch (error) {
         logHistoryFailure(sessionId, 'latest refresh', error);
+        slot.status = 'error';
+        slot.historyErrorCode = error instanceof SessionHistoryError ? error.code : undefined;
+        notify(sessionId);
         return { slot, applied: false, changed: false, deferred: false };
       }
     });
@@ -954,6 +991,7 @@ export function useSessionStore() {
   }, []);
 
   return useMemo(() => ({
+    getRevision,
     fetchFromServer,
     fetchMore,
     appendRealtime,
@@ -966,7 +1004,7 @@ export function useSessionStore() {
     getMessages,
     getSessionSlot,
   }), [
-    fetchFromServer, fetchMore, appendRealtime, truncateAt, refreshLatestFromServer,
+    getRevision, fetchFromServer, fetchMore, appendRealtime, truncateAt, refreshLatestFromServer,
     setActiveSession, isStale, updateStreaming, finalizeStreaming,
     getMessages, getSessionSlot,
   ]);

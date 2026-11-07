@@ -170,7 +170,10 @@ export const sessionDraftsDb = {
     const db = getConnection();
     return db.transaction(() => {
       const waiting = readStoredQueuedMessages(userId, scope);
-      const queuedMessage = { ...message, id: randomUUID() };
+      const id = message.id || randomUUID();
+      const existing = waiting.find((item) => item.id === id);
+      if (existing) return { queuedMessage: existing, queuedMessages: waiting, appended: false };
+      const queuedMessage = { ...message, id };
       const queuedMessages = [...waiting, queuedMessage];
       writeStoredQueuedMessage(userId, scope, JSON.stringify(queuedMessages));
       return { queuedMessage, queuedMessages, appended: waiting.length > 0 };

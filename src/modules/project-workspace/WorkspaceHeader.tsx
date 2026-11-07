@@ -49,6 +49,7 @@ export default function WorkspaceHeader({
 
         <div className="min-w-0 sm:flex-1">
           <WorkspaceTabs
+            containerOnly={selectedProject.strictFileIsolation}
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             shouldShowTasksTab={shouldShowTasksTab}

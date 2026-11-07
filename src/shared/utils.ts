@@ -3,6 +3,24 @@ import { twMerge } from 'tailwind-merge';
 
 import type { NormalizedMessage, Project, ProjectSession, QuickSettingsTab, SlashCommand } from '@/shared/types';
 
+//----------------- DATE AND TIME DISPLAY ------------
+
+/** Formats UI/export timestamps in local time using 00–23 hours regardless of browser or language preferences. */
+export function formatDateTime24(
+  value: Date | string | number,
+  options: Omit<Intl.DateTimeFormatOptions, 'hour12' | 'hourCycle'> = {
+    year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  },
+  locales?: string | string[],
+): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return '—';
+  return new Intl.DateTimeFormat(locales, { ...options, hourCycle: 'h23' }).format(date);
+}
+
+// ---------------------------
+
 //----------------- CHAT TRANSCRIPT BOUNDARY ------------
 
 /** Kinds that represent displayable transcript rows, rather than protocol control frames. */
@@ -31,21 +49,99 @@ export function isStorableChatMessage(value: unknown): value is NormalizedMessag
  */
 export const IS_PLATFORM = import.meta.env?.VITE_IS_PLATFORM === 'true';
 
-/** Returns the backend pinned into this page by Hub; direct installs have no backend selector. */
+/** Returns the backend pinned into this page by Hub's HTML wrapper or backend-specific URL. */
 export function getHubBackendId(): string | null {
+  // Hub is one workspace. Backend selection belongs to resources, never the page.
+  return null;
+}
+
+/** Detects the Hub-served CloudCLI application even when a static frontend host omits Hub's runtime injection script. */
+export function isHubRuntime(): boolean {
+  if (typeof window === 'undefined') return false;
+  const injected = (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__;
+  return Boolean(injected)
+    || new URLSearchParams(window.location.search).has('hub_backend')
+    || window.location.pathname === '/cloudcli'
+    || window.location.pathname.startsWith('/cloudcli/');
+}
+
+const HUB_RESOURCE_BACKENDS = new Map<string, string>();
+
+/** Associate a project or session ID with the Hub server that owns its data. */
+export function registerHubResourceBackend(kind: 'project' | 'session', resourceId: string, backendId: string): void {
+  if (resourceId && backendId) HUB_RESOURCE_BACKENDS.set(`${kind}:${resourceId}`, backendId);
+}
+
+/** Resolve the owning server for an already-loaded project or session ID. */
+export function getHubResourceBackend(kind: 'project' | 'session', resourceId: string | null | undefined): string | null {
+  if (!resourceId) return null;
+  return HUB_RESOURCE_BACKENDS.get(`${kind}:${resourceId}`) ?? null;
+}
+
+/** Infer a project or session owner from common CloudCLI API path, query and JSON-body shapes. */
+export function getHubRequestBackend(url: string, body?: BodyInit | null): string | null {
   if (typeof window === 'undefined') return null;
-  return (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__ ?? null;
+  const parsed = new URL(url, window.location.origin);
+  const projectPath = parsed.pathname.match(/^\/api\/(?:projects|file-tree\/projects)\/([^/]+)/);
+  if (projectPath) {
+    const backendId = getHubResourceBackend('project', decodeURIComponent(projectPath[1]));
+    if (backendId) return backendId;
+  }
+  const sessionPath = parsed.pathname.match(/^\/api\/(?:providers\/(?:[^/]+\/)?sessions)\/([^/]+)/);
+  if (sessionPath) {
+    const backendId = getHubResourceBackend('session', decodeURIComponent(sessionPath[1]));
+    if (backendId) return backendId;
+  }
+  const projectQuery = parsed.searchParams.get('project') ?? parsed.searchParams.get('projectId');
+  const projectBackend = getHubResourceBackend('project', projectQuery);
+  if (projectBackend) return projectBackend;
+  const sessionQuery = parsed.searchParams.get('sessionId');
+  const sessionBackend = getHubResourceBackend('session', sessionQuery);
+  if (sessionBackend) return sessionBackend;
+  if (body instanceof FormData) {
+    const projectId = body.get('projectId');
+    return typeof projectId === 'string' ? getHubResourceBackend('project', projectId) : null;
+  }
+  if (typeof body !== 'string') return null;
+  try {
+    const payload = JSON.parse(body) as Record<string, unknown>;
+    const scope = typeof payload.scope === 'string' ? payload.scope : null;
+    if (scope) {
+      const owner = scope.startsWith('project:')
+        ? getHubResourceBackend('project', scope.slice(8))
+        : getHubResourceBackend('session', scope);
+      if (owner) return owner;
+    }
+    const projectId = typeof payload.projectId === 'string'
+      ? payload.projectId
+      : typeof payload.project === 'string' ? payload.project : null;
+    const backendFromProject = getHubResourceBackend('project', projectId);
+    if (backendFromProject) return backendFromProject;
+    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : null;
+    return getHubResourceBackend('session', sessionId);
+  } catch {
+    return null;
+  }
 }
 
 /** Namespaces a browser cache or credential by backend while retaining legacy keys outside Hub. */
-export function getHubStorageKey(key: string): string {
-  const backendId = getHubBackendId();
+export function getHubStorageKey(key: string, backendId?: string | null): string {
+  if (isHubRuntime()) {
+    let accountId = 'signed-out';
+    try {
+      const token = localStorage.getItem('auth-token:hub');
+      if (token) {
+        const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+        if (typeof payload.hubUserId === 'string') accountId = payload.hubUserId;
+      }
+    } catch { /* Unauthenticated caches never share a signed-in account key. */ }
+    return `${key}:hub:${accountId}`;
+  }
   return backendId ? `${key}:${backendId}` : key;
 }
 
 /** Pins an API, EventSource, or WebSocket URL to this page's backend, including across other-tab switches. */
-export function withHubBackendUrl(url: string): string {
-  const backendId = getHubBackendId();
+export function withHubBackendUrl(url: string, backendId = getHubBackendId()): string {
   if (!backendId) return url;
   const parsed = new URL(url, window.location.origin);
   parsed.searchParams.set('hub_backend', backendId);
@@ -256,13 +352,17 @@ export const getSessionTitle = (session: ProjectSession): string => {
 };
 
 /**
- * Builds the browser tab title for the current selection: the session title when one is
+ * Keeps Electron titled CloudCLI; builds the browser title from the current selection when one is
  * open, otherwise the project name, otherwise the app name.
  */
 export const getPageTitle = (
   selectedProject: Project | null,
   selectedSession: ProjectSession | null,
 ): string => {
+  if (typeof window !== 'undefined' && ('cloudcliDesktopUpdates' in window && window.cloudcliDesktopUpdates)) {
+    return 'CloudCLI';
+  }
+
   if (selectedSession) {
     return getSessionTitle(selectedSession);
   }
@@ -293,3 +393,28 @@ export const getQuickSettingsTabId = (tab: QuickSettingsTab): string => `quick-s
 
 /** DOM id of the tabpanel a quick settings tab controls; pairs with `getQuickSettingsTabId`. */
 export const getQuickSettingsTabPanelId = (tab: QuickSettingsTab): string => `quick-settings-tabpanel-${tab}`;
+
+//----------------- SESSION PAGE LINKS ------------
+
+/** Builds a session deep link while retaining the deployed app prefix and current origin. Used by sidebar menus and recents links. */
+export function getSessionPageUrl(sessionId: string): string {
+  const url = new URL(window.location.href);
+  url.pathname = `${url.pathname.split('/session/')[0].replace(/\/$/, '')}/session/${encodeURIComponent(sessionId)}`;
+  return url.href;
+}
+
+//----------------- CHAT SEND RESULT OWNERSHIP ------------
+
+// Only live requests are retained; every receipt, timeout and failed local send releases its claim.
+const ownedChatSendResults = new Set<string>();
+
+/** The chat composer claims request-level protocol errors while it decides acceptance or durable queue fallback. */
+export function claimChatSendResult(clientMessageId: string): () => void {
+  ownedChatSendResults.add(clientMessageId);
+  return () => { ownedChatSendResults.delete(clientMessageId); };
+}
+
+/** Realtime chat rendering defers owned failures to their send controller, avoiding premature duplicate errors. */
+export function isChatSendResultOwned(clientMessageId: unknown): boolean {
+  return typeof clientMessageId === 'string' && ownedChatSendResults.has(clientMessageId);
+}

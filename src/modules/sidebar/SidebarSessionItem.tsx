@@ -3,8 +3,11 @@ import type { KeyboardEvent } from 'react';
 import { Check, CheckSquare, Edit2, Loader2, MoreHorizontal, Square, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { Dialog, DialogContent, DialogTitle, LLMProviderLogo, Tooltip, buttonVariants } from '@/shared/ui';
-import { cn } from '@/shared/utils';
+import { useSessionForkingProviders } from '@/shared/hooks/useProviderCapabilities';
+import { useSessionNeedsInput } from '@/shared/context/SessionInputStatus';
+
+import { Dialog, DialogContent, DialogTitle, LLMProviderLogo, Tooltip, buttonVariants, useAppContextMenu } from '@/shared/ui';
+import { cn, copyTextToClipboard, getSessionPageUrl } from '@/shared/utils';
 import { useOptionalAuth } from '@/modules/auth';
 import type { LLMProvider, Project, ProjectSession, SessionWithProvider } from '@/shared/types';
 import { PROVIDER_LABELS, createSessionViewModel, formatCompactAge } from '@/modules/sidebar/utils/sidebarProjectFormatting';
@@ -74,6 +77,9 @@ function SidebarSessionItem({
   onToggleSessionSelected,
   t,
 }: SidebarSessionItemProps) {
+  const openContextMenu = useAppContextMenu();
+  const forkableProviders = useSessionForkingProviders();
+  const needsInput = useSessionNeedsInput(session.id);
   const isCompact = useCompactSidebar();
   const sessionView = createSessionViewModel(session, currentTime, t);
   const isSelected = selectedSession?.id === session.id;
@@ -178,7 +184,15 @@ function SidebarSessionItem({
   };
 
   return (
-    <div className="group relative">
+    <div className="group relative" onContextMenu={(event) => openContextMenu(event, [
+      { key: 'open', label: '打开会话', onSelect: () => onSessionSelect(session, project.projectId) },
+      { key: 'rename', label: '重命名会话', onSelect: startMobileRename },
+      { key: 'copy-name', label: '复制会话名称', onSelect: async () => { if (!await copyTextToClipboard(sessionView.sessionName)) throw new Error('复制失败'); } },
+      { key: 'copy-id', label: copyLabel, disabled: isCopyPending, onSelect: handleCopyAction },
+      { key: 'copy-link', label: '复制会话链接', onSelect: async () => { if (!await copyTextToClipboard(getSessionPageUrl(session.id))) throw new Error('复制失败'); } },
+      ...(onForkSession && forkableProviders.has(session.__provider) ? [{ key: 'fork', label: '分叉会话', disabled: isProcessing, onSelect: () => onForkSession(session) }] : []),
+      { key: 'delete', label: '归档或删除会话…', disabled: isProcessing, isDanger: true, showDividerBefore: true, onSelect: requestDeleteSession },
+    ])}>
       {(showBackgroundIndicator || showRecentIndicator) && (
         <div className="absolute left-0 top-1/2 flex h-2 w-2 -translate-x-1 -translate-y-1/2 items-center justify-center leading-none">
           <Tooltip content={indicatorLabel} position="right">
@@ -204,7 +218,7 @@ function SidebarSessionItem({
           aria-disabled={isSelecting && !isSelectable ? true : undefined}
           tabIndex={isSelecting ? 0 : undefined}
           className={cn(
-            'relative mx-1 my-0.5 flex h-9 items-center rounded-lg px-2 transition-colors duration-150 active:scale-[0.98] hover:bg-accent/60',
+            'relative mx-1 my-[0.1rem] flex h-[1.8rem] items-center rounded-lg px-2 transition-colors duration-150 active:scale-[0.98] hover:bg-accent/60',
             isSelected && 'bg-accent/80',
             isChecked && 'bg-primary/10',
           )}
@@ -224,7 +238,7 @@ function SidebarSessionItem({
                 >
                   {sessionView.sessionName}
                 </div>
-                {isProcessing ? (
+                {needsInput ? <span role="status" className="ml-auto shrink-0 text-[11px] font-medium text-amber-600 dark:text-amber-400">Need input</span> : isProcessing ? (
                   <span className="ml-auto flex-shrink-0">
                     <Tooltip content={t('tooltips.processingSessionIndicator', 'Processing session')} position="top">
                       <span className="flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground">
@@ -395,7 +409,7 @@ function SidebarSessionItem({
           aria-disabled={isSelecting && !isSelectable ? true : undefined}
           className={cn(
             buttonVariants({ variant: 'ghost' }),
-            'h-9 w-full justify-start rounded-lg bg-transparent px-2 py-1 text-left font-normal transition-colors duration-150',
+            'h-[1.8rem] min-w-0 w-full justify-start rounded-lg bg-transparent px-2 py-1 text-left font-normal transition-colors duration-150',
             isSelecting ? 'pr-2' : 'pr-11',
             isSelected ? 'bg-accent/80' : 'hover:bg-accent/60',
             isChecked && 'bg-primary/10',
@@ -429,7 +443,7 @@ function SidebarSessionItem({
                 >
                   {sessionView.sessionName}
                 </div>
-                {isProcessing ? (
+                {needsInput ? <span role="status" className="ml-auto shrink-0 text-[11px] font-medium text-amber-600 dark:text-amber-400">Need input</span> : isProcessing ? (
                   <span
                     className={cn(
                       'ml-auto flex-shrink-0 transition-opacity duration-200',

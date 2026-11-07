@@ -313,3 +313,32 @@ test('startRun rejects a second concurrent run for the same session', async () =
     assert.ok(third);
   });
 });
+
+test('a completion listener may start the next run before the old complete is forwarded; identities and cursors stay distinct', async () => {
+  await withIsolatedDatabase(() => {
+    const appSessionId = 'handoff';
+    sessionsDb.createAppSession(appSessionId, 'codex', '/workspace/demo');
+    const connection = new FakeConnection();
+    const input = { appSessionId, provider: 'codex' as const, providerSessionId: null, connection, userId: 1 };
+    const old = chatRunRegistry.startRun(input)!;
+    old.writer.send({ kind: 'status', provider: 'codex', sessionId: appSessionId, text: 'old' });
+    let next: ReturnType<typeof chatRunRegistry.startRun>;
+    const unsubscribe = chatRunRegistry.onRunCompleted(() => {
+      next = chatRunRegistry.startRun(input);
+      assert.ok(next);
+      next.writer.send({ kind: 'status', provider: 'codex', sessionId: appSessionId, text: 'new' });
+    });
+    old.writer.sendComplete({ exitCode: 0 });
+    unsubscribe();
+    assert.ok(next!);
+    assert.notEqual(next!.runId, old.runId);
+    assert.ok(next!.startedAt > old.startedAt);
+    const currentStatus = connection.frames.find((event) => event.text === 'new')!;
+    const oldComplete = connection.frames.find((event) => event.kind === 'complete')!;
+    assert.equal(currentStatus.runId, next!.runId);
+    assert.equal(oldComplete.runId, old.runId);
+    assert.ok(Number(currentStatus.seq) > Number(oldComplete.seq));
+    assert.ok(connection.frames.indexOf(currentStatus) < connection.frames.indexOf(oldComplete));
+    assert.equal(chatRunRegistry.getRun(appSessionId)?.status, 'running');
+  });
+});

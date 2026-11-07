@@ -4,9 +4,10 @@ import { fireEvent, render } from '@testing-library/react';
 import { test, vi } from 'vitest';
 
 import '@/modules/i18n';
+import { ContextMenuProvider } from '@/shared/ui';
 import QueuedMessageCard from '@/modules/chat/transcript/QueuedMessageCard';
 
-test('queued turn stays on one row and exposes edit, reorder, and delete actions', () => {
+test('queued turn uses a user-message bubble and exposes its queue actions', () => {
   const onEdit = vi.fn();
   const onSteer = vi.fn();
   const onDelete = vi.fn();
@@ -34,9 +35,10 @@ test('queued turn stays on one row and exposes edit, reorder, and delete actions
     />,
   );
 
-  assert.equal(getByText('First line second line').tagName, 'SPAN');
-  assert.match(getByText('First line second line').className, /truncate/);
-  assert.equal(container.querySelectorAll('[class*="h-9"]').length, 1);
+  const bubble = container.querySelector('[class*="rounded-br-md"]');
+  assert.equal(bubble?.className.includes('bg-muted/60'), true);
+  assert.match(container.textContent ?? '', /First line\s+second line/);
+  assert.equal(bubble?.querySelector('[class*="truncate"]'), null);
   assert.equal(container.textContent?.includes('2'), true);
   assert.equal(queryByRole('button', { name: 'Queued message actions' }), null);
 
@@ -71,4 +73,19 @@ test('reorder arrows are disabled at the ends of the queue', () => {
   view.rerender(<QueuedMessageCard {...props} position={3} />);
   assert.equal((view.getByRole('button', { name: 'Move queued message up' }) as HTMLButtonElement).disabled, false);
   assert.equal((view.getByRole('button', { name: 'Move queued message down' }) as HTMLButtonElement).disabled, true);
+});
+
+test('queued right-click exposes steer/edit/delete and disables movement at the ends', () => {
+  const onSteer = vi.fn(); const onEdit = vi.fn(); const onDelete = vi.fn();
+  const view = render(<ContextMenuProvider><QueuedMessageCard content="Context queue" position={1} total={1} isDropTarget={false} canSteer
+    onSteer={onSteer} onEdit={onEdit} onDelete={onDelete} onMoveUp={() => {}} onMoveDown={() => {}} onDragStart={() => {}} onDragOver={() => {}} onDrop={() => {}} onDragEnd={() => {}} /></ContextMenuProvider>);
+  fireEvent.contextMenu(view.getByText('Context queue'));
+  assert.equal((view.getByRole('menuitem', { name: '上移' }) as HTMLButtonElement).disabled, true);
+  assert.equal((view.getByRole('menuitem', { name: '下移' }) as HTMLButtonElement).disabled, true);
+  fireEvent.click(view.getByRole('menuitem', { name: 'Steer：立即追加指令' }));
+  assert.equal(onSteer.mock.calls.length, 1);
+  fireEvent.contextMenu(view.getByText('Context queue')); fireEvent.click(view.getByRole('menuitem', { name: '编辑排队消息' }));
+  assert.equal(onEdit.mock.calls.length, 1);
+  fireEvent.contextMenu(view.getByText('Context queue')); fireEvent.click(view.getByRole('menuitem', { name: '删除排队消息' }));
+  assert.equal(onDelete.mock.calls.length, 1);
 });

@@ -2,8 +2,8 @@ import { memo, useEffect, useRef } from 'react';
 import { Check, ChevronDown, ChevronRight, Edit3, Folder, MoreHorizontal, Plus, Star, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { ActionMenu, buttonVariants } from '@/shared/ui';
-import { cn } from '@/shared/utils';
+import { ActionMenu, buttonVariants, useAppContextMenu } from '@/shared/ui';
+import { cn, copyTextToClipboard } from '@/shared/utils';
 import type { LLMProvider, MCPServerStatus, Project, ProjectSession, SessionWithProvider, SidebarSessionSelection } from '@/shared/types';
 import { getTaskIndicatorStatus } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import TaskIndicator from '@/modules/sidebar/TaskIndicator';
@@ -103,6 +103,7 @@ function SidebarProjectItem({
   onDeleteSelectedSessions,
   t,
 }: SidebarProjectItemProps) {
+  const openContextMenu = useAppContextMenu();
   const sessionCountDisplay = getSessionCountDisplay(project, sessions);
   const taskStatus = getTaskIndicatorStatus(project, mcpServerStatus);
   const mobileRenameInputRef = useRef<HTMLInputElement>(null);
@@ -169,7 +170,11 @@ function SidebarProjectItem({
 
   return (
     <div className={cn(isDeleting && 'opacity-50 pointer-events-none')}>
-      <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm" onContextMenu={(event) => openContextMenu(event, [
+        ...projectMenuItems,
+        { key: 'toggle', label: isExpanded ? '收起项目' : '展开项目', onSelect: toggleProject },
+        { key: 'copy-path', label: '复制项目路径', onSelect: async () => { if (!await copyTextToClipboard(project.fullPath)) throw new Error('复制失败'); } },
+      ])}>
         {isCompact && (
         <div>
           <div
@@ -179,7 +184,7 @@ function SidebarProjectItem({
             <div className="flex w-full min-w-0 items-center justify-between">
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <div className={cn('flex h-5 w-5 shrink-0 items-center justify-center', isStarred ? 'text-yellow-600 dark:text-yellow-400' : 'text-muted-foreground')}>
-                  <Folder className="h-3 w-3" />
+                  <Folder className="h-3 w-3" style={{ color: project.__hubBackendColor, fill: project.__hubBackendColor ?? 'none' }} />
                 </div>
 
                 <div className="min-w-0 flex-1">
@@ -212,7 +217,9 @@ function SidebarProjectItem({
                       }}
                     />
                   ) : (
-                    <h3 className="truncate text-sm font-normal text-foreground" title={project.fullPath}>{project.displayName}</h3>
+                    <div className="flex min-w-0 items-center">
+                      <h3 className="truncate text-sm font-normal text-foreground" title={project.fullPath}>{project.displayName}</h3>
+                    </div>
                   )}
                 </div>
               </div>
@@ -299,7 +306,7 @@ function SidebarProjectItem({
                   : 'text-muted-foreground',
               )}
             >
-              <Folder className="h-3 w-3" />
+              <Folder className="h-3 w-3" style={{ color: project.__hubBackendColor, fill: project.__hubBackendColor ?? 'none' }} />
             </div>
             <div className="min-w-0 flex-1 text-left">
               {isEditing ? (
@@ -324,8 +331,8 @@ function SidebarProjectItem({
                   />
                 </div>
               ) : (
-                <div className="truncate text-sm font-normal text-foreground" title={project.fullPath}>
-                  {project.displayName}
+                <div className="flex min-w-0 items-center" title={project.fullPath}>
+                  <div className="truncate text-sm font-normal text-foreground">{project.displayName}</div>
                 </div>
               )}
             </div>
@@ -386,6 +393,7 @@ function SidebarProjectItem({
       </div>
 
       <SidebarProjectSessions
+        key={project.projectId}
         project={project}
         isExpanded={isExpanded}
         sessions={sessions}

@@ -1,0 +1,491 @@
+#!/usr/bin/env python3
+"""Interactive, concurrent restart controls for the CloudCLI production stack."""
+
+from __future__ import annotations
+
+import curses
+import fcntl
+import hashlib
+import json
+import plistlib
+import shutil
+import signal
+import shlex
+import tarfile
+import uuid
+import os
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+
+SPINNER = "|/-\\"
+REMOTE_SSH = ("ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "Code")
+BACKEND_LABEL = "cn.hwaipy.cloudcli-prod"
+ROOT = Path(__file__).resolve().parent.parent
+STATE_DIR = ROOT / ".debug-local"
+BUILD_RECEIPT = STATE_DIR / "reload-backend-build.json"
+BUILD_TIMEOUT = 900
+FRONTEND_BUILD = STATE_DIR / "frontend-build"
+FRONTEND_RECEIPT = STATE_DIR / "reload-frontend-build.json"
+REMOTE_ROOT = "/home/ubuntu/apps/cloudcli-prod"
+BUSY_STATUSES = {"发布中", "准备中", "运行中", "检查构建", "编译中", "重启中"}
+
+
+@dataclass
+class Task:
+    key: str
+    title: str
+    status: str = "就绪"
+    detail: str = ""
+    started_at: float = 0.0
+    log_path: str = ""
+
+
+TASKS = {
+    "f": Task("f", "按需编译并发布前端"),
+    "b": Task("b", "重启后端"),
+    "h": Task("h", "重启 Hub"),
+}
+TASK_LOCK = threading.Lock()
+
+
+def run(command: list[str], timeout: int = 45) -> str:
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+    if result.returncode:
+        raise RuntimeError(output or f"命令退出码 {result.returncode}")
+    return output
+
+
+def ssh(command: str, timeout: int = 45) -> str:
+    return run([*REMOTE_SSH, command], timeout=timeout)
+
+
+def wait_local_health(url: str, timeout: float = 45) -> str:
+    import urllib.error
+    import urllib.request
+
+    deadline = time.monotonic() + timeout
+    last_error = "尚未就绪"
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as response:
+                body = response.read(300).decode("utf-8", errors="replace")
+                if response.status == 200:
+                    return body
+                last_error = f"HTTP {response.status}"
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            last_error = str(error)
+        time.sleep(0.5)
+    raise RuntimeError(f"健康检查超时：{last_error}")
+
+
+def frontend_progress(status: str, detail: str) -> None:
+    with TASK_LOCK:
+        TASKS["f"].status = status
+        TASKS["f"].detail = detail
+
+
+def frontend_inputs(env: dict[str, str]) -> str:
+    paths = []
+    for directory in ("src", "shared", "public"):
+        paths.extend(file for file in (ROOT / directory).rglob("*") if file.is_file())
+    for pattern in ("vite.config.*", "tsconfig*.json", "postcss.config.*", "tailwind.config.*", ".env*"):
+        paths.extend(file for file in ROOT.glob(pattern) if file.is_file())
+    for name in ("index.html", "package.json", "package-lock.json", ".npmrc", "node_modules/.package-lock.json", "scripts/desktop-web-manifest.mjs"):
+        file = ROOT / name
+        if file.is_file():
+            paths.append(file)
+    vite_env = {key: value for key, value in env.items() if key.startswith("VITE_") or key == "NODE_ENV"}
+    return hashlib.sha256((fingerprint(sorted(set(paths))) + json.dumps(vite_env, sort_keys=True)).encode()).hexdigest()
+
+
+def frontend_files() -> dict[str, str]:
+    return {str(file.relative_to(FRONTEND_BUILD)): hashlib.sha256(file.read_bytes()).hexdigest()
+            for file in sorted(FRONTEND_BUILD.rglob("*"))
+            if file.is_file() and file.name != "reload-manifest.json"}
+
+
+def validate_frontend() -> None:
+    import re
+    index = (FRONTEND_BUILD / "index.html").read_text()
+    assets = re.findall(r'(?:src|href)=[\"\'](/cloudcli/assets/[^\"\']+)', index)
+    if not assets or re.search(r'(?:src|href)=[\"\']/assets/', index):
+        raise RuntimeError("前端构建 base 错误，应为 /cloudcli/；未发布。")
+    desktop = json.loads((FRONTEND_BUILD / "desktop-assets.json").read_text())
+    for asset in desktop["assets"]:
+        target = FRONTEND_BUILD / asset["file"]
+        if not target.resolve().is_relative_to(FRONTEND_BUILD.resolve()) or not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != asset["sha256"]:
+            raise RuntimeError("桌面资源清单校验失败；未发布。")
+    boot = json.loads((FRONTEND_BUILD / "boot-assets.json").read_text())
+    for name in [x.removeprefix("/cloudcli/") for x in assets] + [x["file"] for x in boot["assets"]]:
+        target = FRONTEND_BUILD / name
+        if not target.resolve().is_relative_to(FRONTEND_BUILD.resolve()) or not target.is_file():
+            raise RuntimeError(f"前端构建缺少资源 {name}；未发布。")
+
+
+def frontend_remote(mode: str, digest: str, log_path: Path, *args: str) -> dict:
+    helper = (ROOT / "scripts/reload-frontend-release.py").read_text()
+    command = "python3 -c " + shlex.quote(helper) + " " + shlex.join([mode, digest, *args])
+    try:
+        output = ssh(command, timeout=180)
+    except Exception as error:
+        with log_path.open("a") as log:
+            log.write("\n远端发布错误: " + str(error) + "\n")
+        raise RuntimeError("前端发布/检查失败；按 L 后 F 查看完整日志。" + str(error)[-220:]) from error
+    with log_path.open("a") as log:
+        log.write("\n" + output + "\n")
+    return json.loads(output)
+
+
+def restart_frontend() -> str:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with (STATE_DIR / "reload-frontend.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("另一个 reloadCloudCLI 正在编译或发布前端，请稍后再试。")
+        log_path = STATE_DIR / f"frontend-build-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.log"
+        log_path.write_text("前端构建与发布日志\n")
+        with TASK_LOCK:
+            TASKS["f"].log_path = str(log_path)
+        frontend_progress("检查构建", "正在检查前端源码、配置与构建产物…")
+        backend_command, env = build_toolchain()
+        command = backend_command[:2] + ["run", "build:client", "--", "--base=/cloudcli/",
+                                        "--outDir", str(FRONTEND_BUILD), "--emptyOutDir"]
+        inputs = frontend_inputs(env)
+        try:
+            receipt = json.loads(FRONTEND_RECEIPT.read_text())
+        except (OSError, ValueError):
+            receipt = {}
+        unchanged = (receipt.get("inputs") == inputs and receipt.get("command") == command
+                     and receipt.get("files") == frontend_files()
+                     and (FRONTEND_BUILD / "index.html").is_file())
+        if not unchanged:
+            frontend_progress("编译中", "正在编译前端（/cloudcli/）；失败时保留线上版本。")
+            build_backend(command, env, log_path, label="前端")
+            validate_frontend()
+            if inputs != frontend_inputs(env):
+                raise RuntimeError("编译期间前端源码发生变化，未发布；请再次按 F。")
+            receipt = {"inputs": inputs, "command": command, "files": frontend_files()}
+            temporary = FRONTEND_RECEIPT.with_suffix(".tmp")
+            temporary.write_text(json.dumps(receipt, sort_keys=True))
+            temporary.replace(FRONTEND_RECEIPT)
+        validate_frontend()
+        manifest = FRONTEND_BUILD / "reload-manifest.json"
+        manifest.write_text(json.dumps({"inputs": inputs, "files": frontend_files()}, sort_keys=True))
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        frontend_progress("发布中", "正在核对远端版本和实际加载资源…")
+        if frontend_remote("check", digest, log_path).get("matches"):
+            return ("前端构建与线上版本一致，已跳过编译/发布；资源校验通过" if unchanged
+                    else "前端编译完成，线上内容已一致，跳过发布；资源校验通过")
+        release_id = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + uuid.uuid4().hex[:8]
+        archive = STATE_DIR / (release_id + '.tar.gz')
+        with tarfile.open(archive, 'w:gz') as tar:
+            for file in sorted(FRONTEND_BUILD.rglob('*')):
+                if file.is_file():
+                    tar.add(file, arcname=str(file.relative_to(FRONTEND_BUILD)), recursive=False)
+        remote_archive = REMOTE_ROOT + '/.upload-' + release_id + '.tar.gz'
+        try:
+            output = run(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", str(archive),
+                          "Code:" + remote_archive], timeout=180)
+        except Exception as error:
+            with log_path.open('a') as log:
+                log.write("\n上传失败: " + str(error))
+            raise RuntimeError("前端上传失败，未切换线上版本；按 L 后 F 查看日志。") from error
+        with log_path.open('a') as log:
+            log.write("\n上传完成 " + output)
+        result = frontend_remote("deploy", digest, log_path, remote_archive, release_id)
+        return f"前端发布成功；入口与启动资源校验通过；版本 {Path(result['release']).name}"
+
+
+def backend_progress(status: str, detail: str) -> None:
+    with TASK_LOCK:
+        TASKS["b"].status = status
+        TASKS["b"].detail = detail
+
+
+def fingerprint(paths: list[Path]) -> str:
+    """Hash names and bytes so deletions and preserved timestamps are detected."""
+    digest = hashlib.sha256()
+    for file in sorted(paths):
+        digest.update(str(file.relative_to(ROOT)).encode())
+        digest.update(b"\0")
+        with file.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def backend_inputs() -> str:
+    paths = []
+    for directory in (ROOT / "server", ROOT / "shared"):
+        paths.extend(file for file in directory.rglob("*") if file.is_file()
+                     and "__pycache__" not in file.parts)
+    paths.extend(file for file in ROOT.glob("tsconfig*.json") if file.is_file())
+    for name in ("package.json", "package-lock.json", ".npmrc",
+                 "node_modules/.package-lock.json", "scripts/promote-dist-server.mjs"):
+        file = ROOT / name
+        if file.is_file():
+            paths.append(file)
+    return fingerprint(paths)
+
+
+def backend_outputs() -> str:
+    return fingerprint([file for file in (ROOT / "dist-server").rglob("*") if file.is_file()])
+
+
+def build_toolchain() -> tuple[list[str], dict[str, str]]:
+    """Use the LaunchAgent's Node, including npm's lifecycle subprocesses."""
+    config = Path.home() / "Library/LaunchAgents" / f"{BACKEND_LABEL}.plist"
+    settings = plistlib.loads(config.read_bytes()) if config.exists() else {}
+    agent_env = settings.get("EnvironmentVariables", {})
+    node = agent_env.get("CLOUDCLI_PROD_NODE") or os.environ.get("CLOUDCLI_PROD_NODE")
+    node = node or shutil.which("node", path=agent_env.get("PATH", os.environ.get("PATH", "")))
+    if not node or not os.access(node, os.X_OK):
+        raise RuntimeError("找不到生产后端的 Node；未重启服务。请检查 LaunchAgent 配置。")
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join([str(Path(node).parent), str(ROOT / "node_modules/.bin"),
+                                  agent_env.get("PATH", ""), env.get("PATH", ""), "/opt/homebrew/bin"])
+    npm = shutil.which("npm", path=env["PATH"])
+    if not npm:
+        raise RuntimeError("找不到 npm；未重启服务。请先安装构建工具。")
+    npm_cli = str(Path(npm).resolve())
+    return [node, npm_cli, "run", "build:server"], env
+
+
+def build_backend(command: list[str], env: dict[str, str], log_path: Path, label: str = "后端") -> None:
+    """The npm lifecycle builds in dist-server.next and promotes only on success."""
+    with log_path.open("w") as log:
+        log.write(f"cwd: {ROOT}\ncommand: {command!r}\n\n")
+        log.flush()
+        process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=log,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            code = process.wait(timeout=BUILD_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            raise RuntimeError(f"{label}编译超时（{BUILD_TIMEOUT} 秒），未重启；按 L 查看日志。")
+    if code:
+        lines = log_path.read_text(errors="replace").splitlines()
+        reason = next((line.strip() for line in lines if "error TS" in line or "not found" in line),
+                      next((line.strip() for line in reversed(lines) if line.strip()), "无错误输出"))
+        raise RuntimeError(f"{label}编译失败（退出码 {code}），未重启；{reason[:180]}；按 L 查看日志。")
+
+
+def ensure_backend_build() -> str:
+    backend_progress("检查构建", "正在比较后端源码、构建配置与产物…")
+    command, env = build_toolchain()
+    inputs = backend_inputs()
+    try:
+        receipt = json.loads(BUILD_RECEIPT.read_text())
+    except (OSError, ValueError):
+        receipt = {}
+    entry = ROOT / "dist-server/server/index.js"
+    if (entry.is_file() and receipt.get("inputs") == inputs
+            and receipt.get("command") == command and receipt.get("outputs") == backend_outputs()):
+        return "后端构建未变化，已跳过编译"
+
+    log_path = STATE_DIR / f"backend-build-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}.log"
+    with TASK_LOCK:
+        TASKS["b"].log_path = str(log_path)
+    backend_progress("编译中", "构建已过期或尚未验证，正在编译后端；按 L 查看日志。")
+    build_backend(command, env, log_path)
+    if not entry.is_file():
+        raise RuntimeError("构建未生成后端入口，未重启；按 L 查看日志。")
+    if inputs != backend_inputs():
+        raise RuntimeError("编译期间源码发生变化，未重启；请再次按 B 编译最新版本。")
+    receipt = {"inputs": inputs, "outputs": backend_outputs(), "command": command}
+    temporary = BUILD_RECEIPT.with_suffix(".tmp")
+    temporary.write_text(json.dumps(receipt, indent=2) + "\n")
+    temporary.replace(BUILD_RECEIPT)
+    return "后端编译成功"
+
+
+def restart_backend() -> str:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    # Separate invocations of this UI must not build/promote the same tree at once.
+    with (STATE_DIR / "reload-backend.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("另一个 reloadCloudCLI 正在构建或重启后端，请稍后再试。")
+        result = ensure_backend_build()
+        backend_progress("重启中", f"{result}；正在重启并检查健康状态…")
+        domain = f"gui/{os.getuid()}"
+        run(["/bin/launchctl", "kickstart", "-k", f"{domain}/{BACKEND_LABEL}"])
+        health = wait_local_health("http://127.0.0.1:3001/health")
+        return f"{result}；LaunchAgent 已启动；健康检查通过：{health}"
+
+
+def restart_hub() -> str:
+    ssh("sudo -n systemctl restart cloudcli-hub.service")
+    active = ssh("sudo -n systemctl is-active cloudcli-hub.service")
+    health = ssh("curl --max-time 5 -fsS http://127.0.0.1:3003/health")
+    if "active" not in active.splitlines() or '"status":"ok"' not in health.replace(" ", ""):
+        raise RuntimeError(f"Hub 检查失败：{active} {health}")
+    return f"systemd active；Hub 健康检查通过：{health}"
+
+
+RUNNERS = {"f": restart_frontend, "b": restart_backend, "h": restart_hub}
+
+
+def worker(task: Task) -> None:
+    with TASK_LOCK:
+        task.status = "运行中"
+        task.started_at = time.monotonic()
+        task.detail = "正在重启并检查状态…"
+    try:
+        detail = RUNNERS[task.key]()
+    except Exception as error:  # keep the UI alive and allow other actions
+        with TASK_LOCK:
+            task.status = "失败"
+            task.detail = str(error).strip() or error.__class__.__name__
+    else:
+        with TASK_LOCK:
+            task.status = "完成"
+            task.detail = detail
+
+
+def start_task(key: str, threads: list[threading.Thread], notice: list[str]) -> None:
+    task = TASKS[key]
+    with TASK_LOCK:
+        if task.status in BUSY_STATUSES:
+            notice[0] = f"{task.title}已经在运行，其他功能仍可继续选择。"
+            return
+        task.status = "准备中"
+        task.detail = "正在启动任务…"
+    thread = threading.Thread(target=worker, args=(task,), daemon=True)
+    threads.append(thread)
+    thread.start()
+    notice[0] = f"已启动：{task.title}。可以继续选择其他功能。"
+
+
+def draw_line(screen: curses.window, y: int, x: int, text: str, width: int, attr: int = 0) -> None:
+    if y < 0 or y >= curses.LINES or x >= width:
+        return
+    safe_text = text.replace("\n", " ").replace("\r", " ")
+    try:
+        screen.addnstr(y, x, safe_text, max(0, width - x - 1), attr)
+    except curses.error:
+        pass
+
+
+def show_build_log(screen: curses.window) -> None:
+    """A scrollable, live tail keeps compiler diagnostics accessible in a small TUI."""
+    position = None
+    selected = "f" if TASKS["f"].log_path else "b"
+    while True:
+        with TASK_LOCK:
+            log_path = TASKS[selected].log_path
+        try:
+            lines = Path(log_path).read_text(errors="replace").splitlines() if log_path else ["本次尚无该组件构建日志。"]
+        except OSError as error:
+            lines = [str(error)]
+        height, width = screen.getmaxyx()
+        count = max(1, height - 4)
+        maximum = max(0, len(lines) - count)
+        start = maximum if position is None else min(maximum, max(0, position))
+        screen.erase()
+        draw_line(screen, 0, 1, f"{selected.upper()} 构建日志 · F/B 切换 · ↑↓/PgUp/PgDn 滚动 · End 跟随 · Q 返回", width, curses.A_BOLD)
+        draw_line(screen, 1, 1, log_path, width)
+        for index, line in enumerate(lines[start:start + count]):
+            draw_line(screen, index + 2, 1, line, width)
+        screen.refresh()
+        key = screen.getch()
+        if key in (ord("q"), ord("Q"), 27):
+            return
+        if key in (ord("f"), ord("F"), ord("b"), ord("B")):
+            selected = chr(key).lower()
+            position = None
+        elif key == curses.KEY_UP:
+            position = max(0, start - 1)
+        elif key == curses.KEY_DOWN:
+            position = min(maximum, start + 1)
+        elif key == curses.KEY_PPAGE:
+            position = max(0, start - count)
+        elif key == curses.KEY_NPAGE:
+            position = min(maximum, start + count)
+        elif key == curses.KEY_HOME:
+            position = 0
+        elif key == curses.KEY_END:
+            position = None
+
+
+def tui(screen: curses.window) -> None:
+    curses.curs_set(0)
+    screen.keypad(True)
+    screen.timeout(100)
+    threads: list[threading.Thread] = []
+    notice = ["选择功能后立即执行；运行中可继续选择其他功能。"]
+    frame = 0
+
+    while True:
+        screen.erase()
+        height, width = screen.getmaxyx()
+        draw_line(screen, 0, 2, "CloudCLI 生产服务控制", width, curses.A_BOLD)
+        draw_line(screen, 1, 2, "F 编译/发布前端 · B 编译/重启后端 · H 重启 Hub · L 日志 · Q 退出", width)
+        draw_line(screen, 2, 2, "前后端按需编译；编译失败保留线上服务；前端发布失败自动回滚。", width)
+
+        for index, task in enumerate(TASKS.values()):
+            y = 4 + index * 3
+            with TASK_LOCK:
+                status = task.status
+                detail = task.detail
+                started_at = task.started_at
+            if status in BUSY_STATUSES:
+                marker = SPINNER[frame % len(SPINNER)]
+                elapsed = f"{time.monotonic() - started_at:.0f}s" if started_at else ""
+                label = f"[{marker}] {status} {elapsed}"
+            else:
+                marker = {"就绪": "-", "完成": "✓", "失败": "!"}.get(status, "-")
+                label = f"[{marker}] {status}"
+            draw_line(screen, y, 3, f"{task.key.upper()}  {task.title}      {label}", width, curses.A_BOLD)
+            draw_line(screen, y + 1, 5, detail, width)
+
+        draw_line(screen, height - 2, 2, notice[0], width, curses.A_REVERSE)
+        screen.refresh()
+        frame += 1
+
+        key = screen.getch()
+        if key in (ord("q"), ord("Q"), 27):
+            if any(thread.is_alive() for thread in threads):
+                notice[0] = "仍有构建或重启任务在运行；任务结束后再按 Q 退出。"
+                continue
+            return
+        if key in (ord("l"), ord("L")):
+            show_build_log(screen)
+        elif key in (ord("f"), ord("F"), ord("1")):
+            start_task("f", threads, notice)
+        elif key in (ord("b"), ord("B"), ord("2")):
+            start_task("b", threads, notice)
+        elif key in (ord("h"), ord("H"), ord("3")):
+            start_task("h", threads, notice)
+
+
+def main() -> int:
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print("请在 OfficeMac 的交互式 SSH 终端中运行 reloadCloudCLI。", file=sys.stderr)
+        return 2
+    try:
+        curses.wrapper(tui)
+    except KeyboardInterrupt:
+        return 130
+    except curses.error as error:
+        print(f"无法启动终端界面：{error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

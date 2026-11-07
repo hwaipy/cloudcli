@@ -158,3 +158,11 @@ test('a replacement echo survives a kept turn that repeats its text', () => {
   const persisted = [...kept, userRow('persisted', 'continue', '2026-01-01T00:00:25.000Z')];
   assert.deepEqual(removeOptimisticUserEchoes(persisted, [echo]), []);
 });
+
+test('native turn identity reconciles a delayed accepted input and preserves an identical other turn', () => {
+  const input = createUserMessage('local_send-id', '2026-11-05T00:00:00Z', { provider: 'codex', content: 'same', transcriptAnchorId: 'new-turn' });
+  const prior = createUserMessage('old', '2026-11-05T00:00:01Z', { provider: 'codex', content: 'same', transcriptAnchorId: 'old-turn' });
+  assert.deepEqual(removeOptimisticUserEchoes([prior], [input]), [input]);
+  const persisted = createUserMessage('persisted', '2026-11-05T01:00:00Z', { provider: 'codex', content: 'same', transcriptAnchorId: 'new-turn' });
+  assert.deepEqual(removeOptimisticUserEchoes([prior, persisted], [input]), []);
+});

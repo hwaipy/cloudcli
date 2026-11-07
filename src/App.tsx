@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import { I18nextProvider } from 'react-i18next';
 
+import { ContextMenuProvider } from '@/shared/ui';
 import { ThemeProvider } from '@/shared/context/ThemeContext';
 import { UiPreferencesProvider } from '@/shared/context/UiPreferencesContext';
 import { AuthProvider, ProtectedRoute } from '@/modules/auth';
@@ -112,6 +113,7 @@ export default function App() {
   return (
     <I18nextProvider i18n={i18n}>
       <ThemeProvider>
+        <ContextMenuProvider>
         <UiPreferencesProvider>
           <AuthProvider>
             <ProtectedRoute>
@@ -132,6 +134,7 @@ export default function App() {
             </ProtectedRoute>
           </AuthProvider>
         </UiPreferencesProvider>
+        </ContextMenuProvider>
       </ThemeProvider>
     </I18nextProvider>
   );

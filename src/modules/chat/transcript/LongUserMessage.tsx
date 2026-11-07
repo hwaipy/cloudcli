@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDownIcon } from 'lucide-react';
 
@@ -81,21 +81,51 @@ function UserMessagePart({ part, collapsedByDefault }: { part: MessagePart; coll
   );
 }
 
-/** Used by MessageComponent to keep long user input compact without hiding nearby context. */
-export function LongUserMessage({ content }: { content: string }) {
-  const parts = useMemo(() => {
-    const segments = splitFencedCode(content);
-    // A long document made of many short blocks still needs a compact view.
-    return content.length > 3000 && !segments.some(isLongPart)
-      ? [{ kind: 'text' as const, content }]
-      : segments;
+function UserMessageContent({ content }: { content: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Latch an oversized rendered message into a whole-document preview. Child
+  // previews can otherwise add up to several screens despite each being capped.
+  const [needsWholePreview, setNeedsWholePreview] = useState(content.length > 3000);
+  const interactedRef = useRef(false);
+  const segments = useMemo(() => splitFencedCode(content), [content]);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const measure = () => {
+      // Do not immediately fold again when the user intentionally expands a block.
+      if (!interactedRef.current && container.scrollHeight > 480) setNeedsWholePreview(true);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
   }, [content]);
 
+  const parts = needsWholePreview ? [{ kind: 'text' as const, content }] : segments;
   return (
-    <div dir="auto" className="min-w-0 break-words font-serif text-sm">
+    <div
+      ref={containerRef}
+      dir="auto"
+      className="min-w-0 break-words font-serif text-sm"
+      onClickCapture={(event) => {
+        if ((event.target as HTMLElement).closest('button')) interactedRef.current = true;
+      }}
+    >
       {parts.map((part, index) => (
-        <UserMessagePart key={`${index}-${part.kind}`} part={part} collapsedByDefault={isLongPart(part)} />
+        <UserMessagePart
+          key={`${needsWholePreview ? 'whole' : 'part'}-${index}-${part.kind}`}
+          part={part}
+          collapsedByDefault={needsWholePreview || isLongPart(part)}
+        />
       ))}
     </div>
   );
+}
+
+/** Used by MessageComponent to keep long user input compact without hiding nearby context. */
+export function LongUserMessage({ content }: { content: string }) {
+  // An edited/replaced message must not inherit the old content's expanded state.
+  return <UserMessageContent key={content} content={content} />;
 }

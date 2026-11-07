@@ -1,3 +1,4 @@
+import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import type { CSSProperties } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
@@ -69,7 +70,7 @@ export type ProviderModelActions = {
 //----------------- PROJECTS AND SESSIONS ------------
 
 /** Identifies the workspace pane the user is looking at; plugin panes are namespaced by plugin id. */
-export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'tasks' | 'browser' | `plugin:${string}`;
+export type AppTab = 'chat' | 'files' | 'git' | 'tasks' | 'browser' | `plugin:${string}`;
 
 /** A message queued to be sent to a session at a future time. */
 export type ScheduledMessage = {
@@ -101,6 +102,8 @@ export type ProjectSession = {
   // Tags the session with the owning project's DB `projectId` so UI handlers
   // (session switching, sidebar focus, etc.) can match against selectedProject.
   __projectId?: string;
+  /** Hub server that owns this conversation when projects are aggregated. */
+  __hubBackendId?: string;
   [key: string]: unknown;
 };
 
@@ -125,6 +128,8 @@ type ProjectTaskmasterInfo = {
 // uses the same identifier for routing, state keys and API calls.
 /** A workspace project as the UI knows it: identity, path, star state and its loaded sessions. */
 export type Project = {
+  /** Whether Codex and terminal execution are restricted to a project container. */
+  strictFileIsolation?: boolean;
   projectId: string;
   displayName: string;
   fullPath: string;
@@ -133,6 +138,12 @@ export type Project = {
   sessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
   taskmaster?: ProjectTaskmasterInfo;
+  /** Hub server that owns this project. Empty for direct non-Hub installs. */
+  __hubBackendId?: string;
+  /** Human-readable Hub server label for aggregated project lists. */
+  __hubBackendName?: string;
+  /** Persisted Hub color used to identify the owning backend in navigation. */
+  __hubBackendColor?: string;
   [key: string]: unknown;
 };
 
@@ -269,6 +280,9 @@ export type ServerEvent = {
   type?: string;
   sessionId?: string;
   seq?: number;
+  /** Identity and start time of the gateway run; old completion events cannot end newer runs. */
+  runId?: string;
+  runStartedAt?: number;
   [key: string]: unknown;
 };
 
@@ -360,6 +374,10 @@ export type SubagentInfo = {
 
 /** One rendered entry in a chat transcript — user turn, assistant turn, tool call and result, local command output, or subagent container — and the shape the chat message list and message components consume. */
 export type ChatMessage = {
+  /** Fork boundary for a completed assistant round; separate from user edit anchors. */
+  forkAnchorId?: string;
+  /** Explicit destination for delayed local echoes; never infer it from the visible session. */
+  sessionId?: string;
   type: string;
   content?: string;
   displayText?: string;
@@ -388,6 +406,8 @@ export type ChatMessage = {
   isStreaming?: boolean;
   /** Codex prose is a progress update or the completed answer; absent for other providers and legacy rows. */
   codexPhase?: 'commentary' | 'final_answer';
+  /** Structured asynchronous question choices supplied on Codex agent messages. */
+  codexQuestions?: unknown;
   /** Ordered Codex progress, tool calls, and reasoning folded after the final answer arrives. */
   codexUpdates?: ChatMessage[];
   /** Elapsed time from the user's prompt (or first visible work) to the final answer. */
@@ -463,6 +483,10 @@ export type PendingPermissionRequest = {
 
 /** One question asked by the AskUserQuestion tool, with its answer options and whether more than one option may be selected. */
 export type Question = {
+  /** Codex answer key; Claude questions may omit it. */
+  id?: string;
+  /** Requests masked free text rather than showing sensitive input on screen. */
+  isSecret?: boolean;
   question: string;
   header?: string;
   options: QuestionOption[];
@@ -547,6 +571,8 @@ export type NormalizedMessage = {
   content?: string;
   /** Codex's persisted prose phase, or commentary for live SDK text before history reconciliation. */
   codexPhase?: 'commentary' | 'final_answer';
+  /** Structured asynchronous question choices supplied on Codex agent messages. */
+  codexQuestions?: unknown;
   /**
    * The model that answered this turn, as the backend read it off the
    * provider's own record of the row (today: Claude's `message.model`). Never
@@ -1286,8 +1312,8 @@ export type ExistingPrdFile = {
 
 //----------------- PROJECT CREATION WIZARD ------------
 
-/** The one-based index of the step currently shown by the project-creation wizard: 1 configures the workspace, 2 reviews it before creation. */
-export type WizardStep = 1 | 2;
+/** The active project-creation wizard step: 1 selects a Hub backend, 2 selects a path, 3 confirms creation. */
+export type WizardStep = 1 | 2 | 3;
 
 /** How the project-creation wizard authenticates a GitHub clone: reuse a 'stored' credential, enter a 'new' token, or use 'none' and rely on public access or an SSH key. */
 export type TokenMode = 'stored' | 'new' | 'none';
@@ -1304,15 +1330,6 @@ export type GithubTokenCredential = {
   id: number;
   credential_name: string;
   is_active: boolean;
-};
-
-/** The full set of user-entered values carried across the project-creation wizard's steps, owned by ProjectCreationWizard and passed down to each step. */
-export type WizardFormState = {
-  workspacePath: string;
-  githubUrl: string;
-  tokenMode: TokenMode;
-  selectedGithubToken: string;
-  newGithubToken: string;
 };
 
 // ---------------------------
@@ -1419,7 +1436,7 @@ export type AgentContext = {
 };
 
 /** Identifier of a top-level section in the settings dialog; use it whenever a tab is stored, compared or requested so deep links, the sidebar and the command palette all agree on the same set of names. */
-export type SettingsMainTab = 'agents' | 'appearance' | 'git' | 'api' | 'voice' | 'tasks' | 'browser' | 'notifications' | 'plugins' | 'account' | 'admin' | 'about';
+export type SettingsMainTab = 'agents' | 'appearance' | 'git' | 'api' | 'voice' | 'tasks' | 'browser' | 'notifications' | 'plugins' | 'account' | 'admin' | 'backends' | 'about';
 
 /** The coding-agent CLI a settings screen is configuring, aliasing LLMProvider so agent-scoped settings read as being about an agent rather than a chat model. */
 export type AgentProvider = LLMProvider;
@@ -1894,3 +1911,37 @@ type TaskStatus =
 
 /** A TaskMaster task's priority; high, medium and low are the known values and the string fallback tolerates anything else TaskMaster emits. */
 type TaskPriority = 'high' | 'medium' | 'low' | string;
+
+//----------------- APPLICATION ACTION MENUS ------------
+
+/** One executable action shared by overflow and contextual menus across feature modules. */
+export type ActionMenuItem = {
+  key: string;
+  label: string;
+  description?: string;
+  icon?: LucideIcon;
+  onSelect: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+  isDanger?: boolean;
+  showDividerBefore?: boolean;
+  closeOnSelect?: boolean;
+};
+
+//----------------- ELECTRON DESKTOP UPDATES ------------
+
+/** Download/application state supplied only by the sandboxed desktop preload bridge. */
+export type DesktopUpdateState = {
+  web: { phase: 'idle' | 'downloading' | 'ready' | 'error'; percent?: number; version?: string; error?: string };
+  shell: { phase: 'idle' | 'downloading' | 'ready' | 'error'; percent?: number; version?: string; error?: string };
+  version: string;
+  packaged: boolean;
+};
+
+/** Narrow update-only IPC surface. It grants no filesystem, process or generic IPC access. */
+export type DesktopUpdateBridge = {
+  state(): Promise<DesktopUpdateState>;
+  check(): Promise<DesktopUpdateState>;
+  apply(): Promise<void>;
+  onState(callback: (state: DesktopUpdateState) => void): () => void;
+};

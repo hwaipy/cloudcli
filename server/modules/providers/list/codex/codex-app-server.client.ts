@@ -3,6 +3,8 @@ import { stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import readline from 'node:readline';
 
+import { isolatedCodexLaunch, resolveIsolatedProject } from '@/modules/project-isolation/index.js';
+import type { CodexProcessLaunch } from '@/shared/types.js';
 import { AppError } from '@/shared/utils.js';
 
 /**
@@ -69,9 +71,10 @@ export function resolveCodexLauncher(): string {
  */
 async function withAppServer<T>(
   run: (call: (method: string, params: unknown) => Promise<unknown>) => Promise<T>,
+  launch?: CodexProcessLaunch,
 ): Promise<T> {
   const launcher = resolveCodexLauncher();
-  const child = spawn(process.execPath, [launcher, 'app-server'], {
+  const child = spawn(launch?.command ?? process.execPath, launch?.args ?? [launcher, 'app-server'], {
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -185,6 +188,7 @@ async function withAppServer<T>(
   } finally {
     reader.close();
     child.kill();
+    launch?.cleanup?.();
   }
 }
 
@@ -211,6 +215,8 @@ export const codexAppServer = {
     lastTurnId?: string;
     cwd: string;
   }): Promise<CodexThreadFork> {
+    const project = resolveIsolatedProject({ projectPath: input.cwd });
+    const launch = project ? await isolatedCodexLaunch(project) : undefined;
     return withAppServer(async (call) => {
       const result = await call('thread/fork', {
         threadId: input.threadId,
@@ -218,6 +224,7 @@ export const codexAppServer = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
       }) as { thread?: { id?: unknown; path?: unknown } } | undefined;
 
+      await launch?.syncState?.();
       const threadId = typeof result?.thread?.id === 'string' ? result.thread.id : '';
       const path = typeof result?.thread?.path === 'string' ? result.thread.path : '';
       if (!threadId || !path) {
@@ -240,6 +247,6 @@ export const codexAppServer = {
       }
 
       return { threadId, path };
-    });
+    }, launch);
   },
 };

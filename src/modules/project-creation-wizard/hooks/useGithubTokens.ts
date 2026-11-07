@@ -6,21 +6,24 @@ import type { GithubTokenCredential } from '@/shared/types';
 type UseGithubTokensParams = {
   shouldLoad: boolean;
   selectedTokenId: string;
+  backendId?: string;
   onAutoSelectToken: (tokenId: string) => void;
 };
 
 export const useGithubTokens = ({
   shouldLoad,
   selectedTokenId,
+  backendId,
   onAutoSelectToken,
 }: UseGithubTokensParams) => {
   const [tokens, setTokens] = useState<GithubTokenCredential[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const hasLoadedRef = useRef(false);
+  const hasLoadedRef = useRef('');
+  const backendKey = backendId ?? 'default';
 
   useEffect(() => {
-    if (!shouldLoad || hasLoadedRef.current) {
+    if (!shouldLoad || hasLoadedRef.current === backendKey) {
       return;
     }
 
@@ -31,15 +34,15 @@ export const useGithubTokens = ({
       setLoadError(null);
 
       try {
-        const activeTokens = await fetchGithubTokenCredentials();
+        const activeTokens = await fetchGithubTokenCredentials(backendId);
         if (isDisposed) {
           return;
         }
 
         setTokens(activeTokens);
-        hasLoadedRef.current = true;
+        hasLoadedRef.current = backendKey;
 
-        if (activeTokens.length > 0 && !selectedTokenId) {
+        if (activeTokens.length > 0 && !activeTokens.some((token) => String(token.id) === selectedTokenId)) {
           onAutoSelectToken(String(activeTokens[0].id));
         }
       } catch (error) {
@@ -58,7 +61,7 @@ export const useGithubTokens = ({
     return () => {
       isDisposed = true;
     };
-  }, [onAutoSelectToken, selectedTokenId, shouldLoad]);
+  }, [backendId, backendKey, onAutoSelectToken, selectedTokenId, shouldLoad]);
 
   const selectedTokenName = useMemo(
     () => tokens.find((token) => String(token.id) === selectedTokenId)?.credential_name || null,

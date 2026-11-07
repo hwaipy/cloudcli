@@ -124,7 +124,12 @@ beforeEach(() => {
   // tests are about which writer wins, and it is not one of the two.
   vi.stubGlobal('requestAnimationFrame', () => 0);
   vi.stubGlobal('cancelAnimationFrame', () => undefined);
-  localStorage.clear();
+  vi.stubGlobal('localStorage', {
+    clear: vi.fn(),
+    getItem: vi.fn(() => null),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+  });
 });
 
 afterEach(() => {
@@ -203,6 +208,62 @@ describe('deferred scroll-to-bottom', () => {
   });
 });
 
+describe('older-message scroll restoration', () => {
+  it('does not restore a stale anchor after the user keeps scrolling during the request', async () => {
+    const messages = new Map<string, NormalizedMessage[]>([
+      [SESSION_A, [buildMessage(0, '2026-01-01T00:00:00.000Z')]],
+    ]);
+    const store = createStore(messages);
+    let resolveFetchMore!: (value: {
+      slot: ReturnType<typeof store.getSessionSlot>;
+      prependedCount: number;
+    }) => void;
+    const initialSlot = store.getSessionSlot(SESSION_A);
+    store.getSessionSlot.mockReturnValue({ ...initialSlot, hasMore: true, total: 2 });
+    store.fetchFromServer.mockImplementation(async () => ({ ...initialSlot, hasMore: true, total: 2 }));
+    store.fetchMore.mockImplementation(() => new Promise((resolve) => {
+      resolveFetchMore = resolve;
+    }));
+
+    const { result } = await renderChatSessionState({
+      session: { id: SESSION_A } as ProjectSession,
+      store,
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const container = createContainer(5000, 500);
+    // Start at the top so the gesture begins loading older history.
+    container.element.scrollTop = 0;
+    container.writes.length = 0;
+    (result.current.scrollContainerRef as { current: HTMLDivElement | null }).current = container.element;
+
+    act(() => {
+      result.current.handleScrollIntent();
+    });
+    expect(store.fetchMore).toHaveBeenCalledTimes(1);
+
+    // The user continues scrolling while the request is still in flight.
+    act(() => {
+      container.element.scrollTop = 240;
+      result.current.handleScrollIntent();
+    });
+    container.writes.length = 0;
+
+    const prependedMessage = buildMessage(2, '2025-12-31T23:59:59.000Z');
+    messages.set(SESSION_A, [prependedMessage, ...messages.get(SESSION_A)!]);
+    await act(async () => {
+      resolveFetchMore({
+        slot: { ...initialSlot, hasMore: false, total: 2, offset: 0 },
+        prependedCount: 1,
+      });
+      await Promise.resolve();
+    });
+
+    expect(container.writes).toEqual([]);
+  });
+});
+
 describe('search jump ownership', () => {
   it('does not follow the user into the next session', { timeout: 20_000 }, async () => {
     const messages = new Map<string, NormalizedMessage[]>([
@@ -255,5 +316,30 @@ describe('search jump ownership', () => {
       0,
       'and must not flash the search highlight on one of its rows',
     );
+  });
+});
+
+describe('visited session history cache', () => {
+  it('reuses A after A → B → A without refetching the first page', async () => {
+    const store = createStore(new Map([
+      [SESSION_A, [buildMessage(0, '2026-01-01T00:00:00Z')]],
+      [SESSION_B, [buildMessage(1, '2026-01-01T00:00:01Z')]],
+    ]));
+    const { result, rerender } = await renderChatSessionState({ session: { id: SESSION_A } as ProjectSession, store });
+    act(() => rerender({ session: { id: SESSION_B } as ProjectSession }));
+    act(() => rerender({ session: { id: SESSION_A } as ProjectSession }));
+    expect(store.fetchFromServer).not.toHaveBeenCalled();
+    expect(store.refreshLatestFromServer).not.toHaveBeenCalled();
+    expect(result.current.isLoadingSessionMessages).toBe(false);
+  });
+
+  it('refreshes stale cached history in the background without a blocking first-page load', async () => {
+    const store = createStore(new Map([[SESSION_A, [buildMessage(0, '2026-01-01T00:00:00Z')]]]));
+    store.isStale.mockReturnValue(true);
+    const { result } = await renderChatSessionState({ session: { id: SESSION_A } as ProjectSession, store });
+    await act(async () => {});
+    expect(store.fetchFromServer).not.toHaveBeenCalled();
+    expect(store.refreshLatestFromServer).toHaveBeenCalled();
+    expect(result.current.isLoadingSessionMessages).toBe(false);
   });
 });

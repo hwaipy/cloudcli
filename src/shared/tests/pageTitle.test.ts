@@ -51,3 +51,15 @@ test('falls back to the project title when no session is selected', () => {
 test('falls back to the app title when no project or session is selected', () => {
   assert.equal(getPageTitle(null, null), 'CloudCLI UI');
 });
+
+
+test('keeps the Electron title fixed across selections', () => {
+  Object.defineProperty(window, 'cloudcliDesktopUpdates', { configurable: true, value: {} });
+  try {
+    assert.equal(getPageTitle(project, { id: 'one', summary: 'First session' }), 'CloudCLI');
+    assert.equal(getPageTitle(project, { id: 'two', summary: 'Second session' }), 'CloudCLI');
+    assert.equal(getPageTitle(null, null), 'CloudCLI');
+  } finally {
+    Reflect.deleteProperty(window, 'cloudcliDesktopUpdates');
+  }
+});

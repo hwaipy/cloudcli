@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, type Dispatch, type SetStateAction, useState } from 'react';
 
-import { ChatInterface } from '@/modules/chat';
+import { ChatInterface, useSessionStore } from '@/modules/chat';
 import { FileTree } from '@/modules/file-tree';
-import { StandaloneShell } from '@/modules/standalone-shell';
 import { GitPanel } from '@/modules/git-panel';
 import { PluginTabContent } from '@/modules/plugins';
 import { BrowserUsePanel, useBrowserUseEnabled } from '@/modules/browser-use';
@@ -39,7 +38,7 @@ type WorkspaceMainProps = {
   onRenameSession: (sessionId: string, summary: string) => Promise<boolean>;
 };
 
-/** Rendered by ProjectMainRegion to show the selected project's active tab: chat, files, shell, git, tasks, browser or a plugin. */
+/** Rendered by ProjectMainRegion to show the selected project's active tab: chat, files, git, tasks, browser or a plugin. */
 function WorkspaceMain({
   selectedProject,
   selectedSession,
@@ -59,6 +58,9 @@ function WorkspaceMain({
   onProjectsRefresh,
   onRenameSession,
 }: WorkspaceMainProps) {
+  // Keep transcript history above the keyed chat so project/new-chat resets
+  // clear composer state without discarding previously visited sessions.
+  const historyStore = useSessionStore();
   const preferences = useUiPreferences();
   const { showRawParameters, showThinking, sendByCtrlEnter, codexEnterQueues } = preferences;
 
@@ -70,8 +72,8 @@ function WorkspaceMain({
   // so that re-clicking the same folder is a new request the tree acts on.
   const [revealDirectory, setRevealDirectory] = useState<DirectoryRevealRequest | null>(null);
 
-  const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
-  const shouldShowBrowserTab = browserUseEnabled;
+  const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled && !selectedProject?.strictFileIsolation);
+  const shouldShowBrowserTab = browserUseEnabled && !selectedProject?.strictFileIsolation;
 
   const {
     editingFile,
@@ -92,6 +94,10 @@ function WorkspaceMain({
   // Resolves bare/partial file references (e.g. links inside chat messages) to
   // real project files before opening them in the in-app editor.
   const resolvedFileOpen = useFileOpenResolver(selectedProject, handleFileOpen);
+
+  useEffect(() => {
+    if (selectedProject?.strictFileIsolation && !['chat', 'files'].includes(activeTab)) setActiveTab('chat');
+  }, [activeTab, selectedProject?.strictFileIsolation, setActiveTab]);
 
   useEffect(() => {
     if (!shouldShowTasksTab && activeTab === 'tasks') {
@@ -160,6 +166,9 @@ function WorkspaceMain({
           <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
             <WorkspaceErrorBoundary showDetails>
               <ChatInterface
+                key={`${selectedProject.projectId}:new-${newSessionTrigger}`}
+                historyStore={historyStore}
+                historyRevision={historyStore.getRevision()}
                 isActive={activeTab === 'chat'}
                 selectedProject={selectedProject}
                 selectedSession={selectedSession}
@@ -190,18 +199,7 @@ function WorkspaceMain({
             </div>
           )}
 
-          {activeTab === 'shell' && (
-            <div className="h-full w-full overflow-hidden">
-              <StandaloneShell
-                project={selectedProject}
-                session={selectedSession}
-                showHeader={false}
-                isActive={activeTab === 'shell'}
-              />
-            </div>
-          )}
-
-          {activeTab === 'git' && (
+          {activeTab === 'git' && !selectedProject.strictFileIsolation && (
             <div className="h-full overflow-hidden">
               <GitPanel
                 selectedProject={selectedProject}
@@ -221,7 +219,7 @@ function WorkspaceMain({
             </div>
           )}
 
-          {activeTab.startsWith('plugin:') && (
+          {activeTab.startsWith('plugin:') && !selectedProject.strictFileIsolation && (
             <div className="h-full overflow-hidden">
               <PluginTabContent
                 pluginName={activeTab.replace('plugin:', '')}

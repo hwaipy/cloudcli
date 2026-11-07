@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { pipeline } from 'node:stream/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createZstdCompress } from 'node:zlib';
 
 import Database from 'better-sqlite3';
 
@@ -108,6 +111,43 @@ test('Codex token usage uses the latest token_count snapshot', async () => {
         provider: 'codex',
         jsonl_path: sessionFilePath,
       }),
+    });
+
+    assert.deepEqual(await service.getSessionTokenUsage('app-session'), {
+      used: 35,
+      total: 250_000,
+      sessionTotalTokens: 49,
+      inputTokens: 30,
+      outputTokens: 5,
+      breakdown: { input: 30, output: 5 },
+    });
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
+});
+
+test('Codex token usage reads compressed rollout snapshots', async () => {
+  const tempDirectory = await mkdtemp(path.join(tmpdir(), 'provider-token-usage-codex-zstd-'));
+  const sourcePath = path.join(tempDirectory, 'rollout-provider-session.jsonl');
+  const sessionFilePath = `${sourcePath}.zst`;
+
+  try {
+    await writeFile(sourcePath, JSON.stringify({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { input_tokens: 40, output_tokens: 9, total_tokens: 49 },
+          last_token_usage: { input_tokens: 30, output_tokens: 5, total_tokens: 35 },
+          model_context_window: 250_000,
+        },
+      },
+    }));
+    await pipeline(createReadStream(sourcePath), createZstdCompress(), createWriteStream(sessionFilePath));
+    await rm(sourcePath);
+
+    const service = createProviderTokenUsageService({
+      getSessionById: () => createSessionRow({ provider: 'codex', jsonl_path: sessionFilePath }),
     });
 
     assert.deepEqual(await service.getSessionTokenUsage('app-session'), {

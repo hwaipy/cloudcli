@@ -1,4 +1,6 @@
 import express from 'express';
+
+import { getIsolationCapabilities } from '@/modules/project-isolation/index.js';
 import { requireOwnedProject, requireUserId } from '@/modules/access/index.js';
 
 import { createProject, updateProjectDisplayName } from '@/modules/projects/services/project-management.service.js';
@@ -66,6 +68,8 @@ function parseNonNegativeIntQuery(value: unknown, name: string, fallback: number
   return parsedValue;
 }
 
+router.get('/isolation-capabilities', asyncHandler(async (_req, res) => { res.json(await getIsolationCapabilities()); }));
+
 router.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -125,9 +129,13 @@ router.post(
       });
     }
 
+    if (requestBody.strictFileIsolation !== undefined && typeof requestBody.strictFileIsolation !== 'boolean') {
+      throw new AppError('strictFileIsolation must be a boolean', { code: 'INVALID_ISOLATION_MODE', statusCode: 400 });
+    }
     const projectCreationResult = await createProject({
       projectPath,
       customName,
+      strictFileIsolation: requestBody.strictFileIsolation === true,
       ownerUserId: requireUserId(req),
     });
 

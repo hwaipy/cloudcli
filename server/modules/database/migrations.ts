@@ -13,6 +13,7 @@ import {
   SESSIONS_TABLE_SCHEMA_SQL,
   USER_PREFERENCES_TABLE_SCHEMA_SQL,
   USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL,
+  HUB_USER_MAPPINGS_TABLE_SCHEMA_SQL,
   VAPID_KEYS_TABLE_SCHEMA_SQL,
 } from '@/modules/database/schema.js';
 
@@ -585,6 +586,7 @@ export const runMigrations = (db: Database) => {
 
     db.exec(APP_CONFIG_TABLE_SCHEMA_SQL);
     db.exec(USER_NOTIFICATION_PREFERENCES_TABLE_SCHEMA_SQL);
+    db.exec(HUB_USER_MAPPINGS_TABLE_SCHEMA_SQL);
     db.exec(VAPID_KEYS_TABLE_SCHEMA_SQL);
     db.exec(PUSH_SUBSCRIPTIONS_TABLE_SCHEMA_SQL);
     db.exec('CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user_id ON push_subscriptions(user_id)');
@@ -619,6 +621,7 @@ export const runMigrations = (db: Database) => {
     // original account. New accounts never inherit previously indexed data.
     const projectColumns = getTableInfo(db, 'projects').map((column) => column.name);
     const sessionColumns = getTableInfo(db, 'sessions').map((column) => column.name);
+    addColumnToTableIfNotExists(db, 'projects', projectColumns, 'strict_file_isolation', 'INTEGER NOT NULL DEFAULT 0');
     addColumnToTableIfNotExists(db, 'projects', projectColumns, 'owner_user_id', 'INTEGER REFERENCES users(id)');
     addColumnToTableIfNotExists(db, 'sessions', sessionColumns, 'owner_user_id', 'INTEGER REFERENCES users(id)');
     db.exec(`

@@ -1,3 +1,4 @@
+import { getHubResourceBackend } from '@/shared/utils';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import type { FitAddon } from '@xterm/addon-fit';
@@ -136,7 +137,7 @@ export function useShellConnection({
       }
 
       try {
-        const wsUrl = getShellWebSocketUrl();
+        const wsUrl = getShellWebSocketUrl(selectedProjectRef.current?.__hubBackendId ?? getHubResourceBackend('project', selectedProjectRef.current?.projectId) ?? undefined);
         if (!wsUrl) {
           connectingRef.current = false;
           setIsConnecting(false);

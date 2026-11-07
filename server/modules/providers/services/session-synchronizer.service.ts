@@ -37,8 +37,17 @@ const pruneOrphanedSessions = async (): Promise<number> => {
   const knownDirectoryExists = new Map<string, boolean>();
   let pruned = 0;
 
-  for (const { session_id: sessionId, jsonl_path: jsonlPath } of sessionsDb.getSessionsWithTranscriptPath()) {
+  for (const { session_id: sessionId, provider, jsonl_path: jsonlPath } of sessionsDb.getSessionsWithTranscriptPath()) {
     if (await pathExists(jsonlPath)) {
+      continue;
+    }
+
+    // Codex can atomically replace an indexed JSONL file with its compressed
+    // sibling. Keep the existing app row while the next scan updates jsonl_path.
+    const compressedSibling = provider === 'codex' && jsonlPath.endsWith('.jsonl')
+      ? `${jsonlPath}.zst`
+      : null;
+    if (compressedSibling && await pathExists(compressedSibling)) {
       continue;
     }
 

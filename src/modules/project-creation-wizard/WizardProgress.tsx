@@ -6,17 +6,18 @@ import type { WizardStep } from '@/shared/types';
 
 type WizardProgressProps = {
   step: WizardStep;
+  isHubMode: boolean;
 };
 
-/** Rendered by ProjectCreationWizard to show which of its two steps is active. */
-export default function WizardProgress({ step }: WizardProgressProps) {
+/** Rendered by ProjectCreationWizard to show backend, path, and confirmation progress. */
+export default function WizardProgress({ step, isHubMode }: WizardProgressProps) {
   const { t } = useTranslation();
-  const steps: WizardStep[] = [1, 2];
+  const steps: WizardStep[] = isHubMode ? [1, 2, 3] : [2, 3];
 
   return (
     <div className="px-6 pb-2 pt-4">
       <div className="flex items-center justify-between">
-        {steps.map((currentStep) => (
+        {steps.map((currentStep, index) => (
           <Fragment key={currentStep}>
             <div className="flex items-center gap-2">
               <div
@@ -28,16 +29,18 @@ export default function WizardProgress({ step }: WizardProgressProps) {
                       : 'bg-gray-200 text-gray-500 dark:bg-gray-700'
                 }`}
               >
-                {currentStep < step ? <Check className="h-4 w-4" /> : currentStep}
+                {currentStep < step ? <Check className="h-4 w-4" /> : index + 1}
               </div>
               <span className="hidden text-sm font-medium text-gray-700 dark:text-gray-300 sm:inline">
                 {currentStep === 1
-                  ? t('projectWizard.steps.configure')
-                  : t('projectWizard.steps.confirm')}
+                  ? t('projectWizard.steps.backend')
+                  : currentStep === 2
+                    ? t('projectWizard.steps.path')
+                    : t('projectWizard.steps.confirm')}
               </span>
             </div>
 
-            {currentStep < 2 && (
+            {index < steps.length - 1 && (
               <div
                 className={`mx-2 h-1 flex-1 rounded ${
                   currentStep < step ? 'bg-green-500' : 'bg-gray-200 dark:bg-gray-700'

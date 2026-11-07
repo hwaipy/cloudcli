@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { afterEach, test, vi } from 'vitest';
 
+import { ContextMenuProvider } from '@/shared/ui';
 import type { MCPServerStatus, Project, ProjectSession, SidebarProjectListProps } from '@/shared/types';
 
 let isCompactLayout = false;
@@ -35,7 +36,7 @@ function renderProject(compact: boolean, withOpenSession = false) {
   const onToggleStarProject = vi.fn();
 
   render(
-    <SidebarProjectItem
+    <ContextMenuProvider><SidebarProjectItem
       project={project}
       selectedProject={withOpenSession ? { ...project, projectId: 'other-project' } : null}
       selectedSession={withOpenSession ? ({ id: 'open-session' } as ProjectSession) : null}
@@ -75,7 +76,7 @@ function renderProject(compact: boolean, withOpenSession = false) {
       onCancelSessionSelection={noop}
       onDeleteSelectedSessions={noop}
       t={t}
-    />,
+    /></ContextMenuProvider>,
   );
 
   return { onToggleProject, onProjectSelect, onNewSession, onStartEditingProject, onDeleteProject, onToggleStarProject };
@@ -119,5 +120,16 @@ for (const compact of [false, true]) {
     fireEvent.click(screen.getByRole('menuitem', { name: 'projects.delete' }));
     assert.deepEqual(callbacks.onDeleteProject.mock.calls[0], [project]);
     assert.equal(callbacks.onToggleProject.mock.calls.length, 0);
+  });
+}
+
+for (const compact of [false, true]) {
+  test(`${compact ? 'compact' : 'desktop'} project right-click reuses project actions without changing the current session`, () => {
+    const callbacks = renderProject(compact, true);
+    fireEvent.contextMenu(screen.getByText('project one'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'sessions.newSession' }));
+    assert.deepEqual(callbacks.onNewSession.mock.calls, [[project]]);
+    assert.equal(callbacks.onToggleProject.mock.calls.length, 0);
+    assert.equal(callbacks.onProjectSelect.mock.calls.length, 0);
   });
 }

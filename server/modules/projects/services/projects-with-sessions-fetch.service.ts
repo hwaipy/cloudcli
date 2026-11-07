@@ -25,6 +25,7 @@ type SessionRepositoryRow = {
 };
 
 export type ProjectListItem = {
+  strictFileIsolation?: boolean;
   projectId: string;
   path: string;
   displayName: string;
@@ -192,6 +193,7 @@ export async function getProjectsWithSessions(
     project_path: string;
     custom_project_name?: string | null;
     isStarred?: number;
+    strict_file_isolation?: number;
   }>;
   const totalProjects = projectRows.length;
   const projects: ProjectListItem[] = [];
@@ -226,6 +228,7 @@ export async function getProjectsWithSessions(
       displayName,
       fullPath: projectPath,
       isStarred: Boolean(row.isStarred),
+      strictFileIsolation: Boolean(row.strict_file_isolation),
       sessions: sessionsPage.sessions,
       sessionMeta: {
         hasMore: sessionsPage.hasMore,
@@ -260,6 +263,7 @@ export async function getArchivedProjectsWithSessions(
     project_path: string;
     custom_project_name?: string | null;
     isStarred?: number;
+    strict_file_isolation?: number;
   }>;
 
   const archivedProjects: ArchivedProjectListItem[] = [];
@@ -278,6 +282,7 @@ export async function getArchivedProjectsWithSessions(
       displayName,
       fullPath: row.project_path,
       isStarred: Boolean(row.isStarred),
+      strictFileIsolation: Boolean(row.strict_file_isolation),
       isArchived: true,
       sessions: sessionsPage.sessions,
       sessionMeta: {

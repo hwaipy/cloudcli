@@ -37,6 +37,7 @@ export const PromptInput = React.forwardRef<HTMLFormElement, PromptInputProps>(
     return (
       <PromptInputContext.Provider value={contextValue}>
         <form
+          data-message-composer
           ref={ref}
           data-slot="prompt-input"
           className={cn(

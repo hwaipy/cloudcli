@@ -5,7 +5,12 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { closeConnection, initializeDatabase, scheduledMessagesDb, sessionDraftsDb, sessionsDb, userDb } from '@/modules/database/index.js';
-import { dispatchDueScheduledMessages, dispatchQueuedMessages } from '@/modules/scheduled-messages/services/scheduled-message-dispatcher.service.js';
+import {
+  closeScheduledMessageDispatcher,
+  dispatchDueScheduledMessages,
+  dispatchQueuedMessages,
+  initializeScheduledMessageDispatcher,
+} from '@/modules/scheduled-messages/services/scheduled-message-dispatcher.service.js';
 import { scheduledMessagesService } from '@/modules/scheduled-messages/services/scheduled-messages.service.js';
 import { chatRunRegistry, clientUserIds, connectedClients } from '@/modules/websocket/index.js';
 
@@ -24,6 +29,7 @@ async function withIsolatedDatabase(runTest: (userId: number) => void | Promise<
     sessionsDb.createAppSession(SESSION_ID, 'claude', tempDirectory, 'Scheduled session');
     await runTest(Number(user.id));
   } finally {
+    closeScheduledMessageDispatcher();
     chatRunRegistry.clearAll();
     connectedClients.clear();
     closeConnection();
@@ -196,6 +202,30 @@ test('follow-ups queued during one turn are sent as separate turns in order', as
 
     assert.deepEqual(runs.map((run) => run.command), ['follow-up A', 'follow-up B', 'follow-up C']);
     assert.ok(runs.every((run) => run.options.model === 'opus'));
+    assert.equal(sessionDraftsDb.getDrafts(userId).length, 0);
+  });
+});
+
+test('a queued turn starts immediately when its active session turn completes', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'run the waiting message', attachments: [] });
+    const firstRun = chatRunRegistry.startRun({
+      appSessionId: SESSION_ID,
+      provider: 'claude',
+      providerSessionId: null,
+      connection: null,
+      userId,
+    });
+    assert.ok(firstRun);
+
+    const runs: RunCall[] = [];
+    initializeScheduledMessageDispatcher(createRuntime(runs));
+    assert.equal(runs.length, 0, 'the queued turn waits while the original turn is active');
+
+    chatRunRegistry.completeRun(SESSION_ID, { exitCode: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    assert.deepEqual(runs.map((run) => run.command), ['run the waiting message']);
     assert.equal(sessionDraftsDb.getDrafts(userId).length, 0);
   });
 });
@@ -536,5 +566,45 @@ test('a socket that cannot be written to does not stop a claimed message from be
     assert.equal(runs.length, 1);
     assert.equal(runs[0].command, 'still goes');
     assert.equal(closedTab.frames.length, 0);
+  });
+});
+
+test('a queue captured under default permissions cannot reset a later unrestricted choice', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.saveDraft(userId, SESSION_ID, {
+      text: '', queuedMessage: { content: 'an old queued message', options: { permissionMode: 'default' } },
+    });
+    sessionsDb.setSessionPermissionMode(SESSION_ID, 'bypassPermissions');
+    const runs: RunCall[] = [];
+    assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 1);
+    assert.equal(runs[0].options.permissionMode, 'bypassPermissions');
+    assert.equal(sessionsDb.getSessionById(SESSION_ID)?.permission_mode, 'bypassPermissions');
+  });
+});
+
+test('retrying a busy-send queue fallback with the same request id does not append a duplicate', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    const message = { id: 'send-stable-id', content: 'same request', attachments: [] };
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, message);
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, message);
+    const runs: RunCall[] = [];
+    assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 1);
+    assert.equal(runs.length, 1);
+  });
+});
+
+test('a competing run winning after queue claim restores the claimed message using its structured busy result', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { id: 'race-head', content: 'must survive the race', attachments: [] });
+    const originalStart = chatRunRegistry.startRun;
+    chatRunRegistry.startRun = (input) => { originalStart(input); return null; };
+    const runs: RunCall[] = [];
+    try { assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 1); }
+    finally { chatRunRegistry.startRun = originalStart; }
+    assert.equal(runs.length, 0);
+    assert.equal(sessionDraftsDb.listQueuedMessages().length, 1);
+    chatRunRegistry.completeRun(SESSION_ID, { exitCode: 0 });
+    assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 1);
+    assert.equal(runs[0].command, 'must survive the race');
   });
 });

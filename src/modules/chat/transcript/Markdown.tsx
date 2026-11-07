@@ -3,9 +3,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+
 import rehypeKatex from 'rehype-katex';
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useTranslation } from 'react-i18next';
+import { remarkCodexFileCitations } from '@/modules/chat/utils/remarkCodexFileCitations';
 
 import { MermaidDiagram } from '@/modules/code-editor';
 import { MarkdownImage } from '@/modules/chat/transcript/MarkdownImage';
@@ -269,9 +271,11 @@ function MarkdownBodyRenderer({ children, breaks = false }: Omit<MarkdownProps, 
   // render, and almost no assistant message contains math. Only wire the two
   // plugins up when the text has a delimiter they could act on.
   const hasMath = useMemo(() => MATH_DELIMITER.test(content), [content]);
+  const hasFileCitations = content.includes(':codex-file-citation{');
   const remarkPlugins = useMemo(
     () => {
       const plugins: unknown[] = [remarkGfm];
+      if (hasFileCitations) plugins.push(remarkCodexFileCitations);
       if (hasMath) {
         plugins.push([remarkMath, { singleDollarTextMath: false }]);
       }
@@ -280,7 +284,7 @@ function MarkdownBodyRenderer({ children, breaks = false }: Omit<MarkdownProps, 
       }
       return plugins as any;
     },
-    [breaks, hasMath],
+    [breaks, hasMath, hasFileCitations],
   );
   const rehypePlugins = useMemo(() => (hasMath ? [rehypeKatex] : EMPTY_PLUGINS), [hasMath]);
   const { openFileInEditor, openDirectory } = usePaletteOps();
@@ -288,16 +292,17 @@ function MarkdownBodyRenderer({ children, breaks = false }: Omit<MarkdownProps, 
   const components = useMemo(
     () => ({
       ...markdownComponents,
-      a: ({ href, children: linkChildren }: { href?: string; children?: React.ReactNode }) => {
+      a: ({ href, children: linkChildren, 'data-codex-file-path': citationPath, title }: { href?: string; children?: React.ReactNode; 'data-codex-file-path'?: string; title?: string }) => {
         // Prefer the href when it is a real path; otherwise fall back to the
         // link text, since models often emit `[src/foo.ts]()` with an empty href.
         const linkText = childrenToText(linkChildren);
-        const fileRef = looksLikeFilePath(href) ? href : looksLikeFilePath(linkText) ? linkText : undefined;
+        const fileRef = citationPath || (looksLikeFilePath(href) ? href : looksLikeFilePath(linkText) ? linkText : undefined);
 
         if (fileRef && !isExternalHref(href)) {
           return (
             <a
               href={href || fileRef}
+              title={title}
               className="cursor-pointer text-blue-600 hover:underline dark:text-blue-400"
               onClick={(event) => {
                 event.preventDefault();

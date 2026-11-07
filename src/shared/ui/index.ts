@@ -32,3 +32,5 @@ export { PillBar, Pill } from '@/shared/ui/PillBar';
 export { ScrollArea } from '@/shared/ui/ScrollArea';
 export { Shimmer } from '@/shared/ui/Shimmer';
 export { Tooltip } from '@/shared/ui/Tooltip';
+
+export { ContextMenuProvider, useAppContextMenu } from '@/shared/ui/ContextMenu';

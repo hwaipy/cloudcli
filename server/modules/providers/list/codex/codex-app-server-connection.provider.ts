@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
+import type { CodexProcessLaunch } from '@/shared/types.js';
 import { resolveCodexLauncher } from '@/modules/providers/list/codex/codex-app-server.client.js';
 
 type RpcMessage = {
-  id?: number;
+  id?: string | number;
   method?: string;
   params?: unknown;
   result?: unknown;
@@ -23,12 +24,13 @@ export class CodexAppServerConnection {
   private readonly pending = new Map<number, PendingRequest>();
   private readonly listeners = new Set<(message: RpcMessage) => void>();
   private readonly closeListeners = new Set<(error: Error) => void>();
+  private requestHandler?: (id: string | number, method: string, params: unknown) => boolean;
   private nextId = 1;
   private closed = false;
   private readonly ready: Promise<void>;
 
-  constructor() {
-    this.child = spawn(process.execPath, [resolveCodexLauncher(), 'app-server'], {
+  constructor(private readonly launch?: CodexProcessLaunch) {
+    this.child = spawn(launch?.command ?? process.execPath, launch?.args ?? [resolveCodexLauncher(), 'app-server'], {
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -42,7 +44,7 @@ export class CodexAppServerConnection {
     this.child.stderr.on('data', () => {});
     this.ready = this.request('initialize', {
       clientInfo: { name: 'cloudcli', title: 'CloudCLI', version: '1' },
-      capabilities: {},
+      capabilities: { experimentalApi: true },
     }).then(() => {
       this.write({ jsonrpc: '2.0', method: 'initialized', params: {} });
     });
@@ -70,7 +72,8 @@ export class CodexAppServerConnection {
       else pending.resolve(message.result);
       return;
     }
-    if (typeof message.id === 'number' && message.method) {
+    if ((typeof message.id === 'number' || typeof message.id === 'string') && message.method) {
+      if (this.requestHandler?.(message.id, message.method, message.params)) return;
       // Permission requests fail closed until this transport has an approval UI.
       if (message.method === 'item/commandExecution/requestApproval'
         || message.method === 'item/fileChange/requestApproval'
@@ -87,9 +90,21 @@ export class CodexAppServerConnection {
     }
   }
 
+  /** Used by the runtime to handle supported server-to-client RPCs without treating them as notifications. */
+  onRequest(handler: (id: string | number, method: string, params: unknown) => boolean): void {
+    this.requestHandler = handler;
+  }
+
+  /** Used by the question bridge to answer the original server RPC, preserving numeric or string request IDs. */
+  respond(id: string | number, result: unknown): void {
+    this.write({ jsonrpc: '2.0', id, result });
+  }
+
   private fail(error: Error): void {
     if (this.closed) return;
     this.closed = true;
+    this.requestHandler = undefined;
+    this.launch?.cleanup?.();
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);
@@ -121,7 +136,9 @@ export class CodexAppServerConnection {
 
   async call(method: string, params: unknown): Promise<unknown> {
     await this.ready;
-    return this.request(method, params);
+    const result = await this.request(method, params);
+    if (method === 'thread/fork') await this.launch?.syncState?.();
+    return result;
   }
 
   subscribe(listener: (message: RpcMessage) => void, onClose: (error: Error) => void): () => void {

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 
 import { act, renderHook } from '@testing-library/react';
-import { test } from 'vitest';
+import { test, vi } from 'vitest';
 
+import { claimChatSendResult } from '@/shared/utils';
 import { useChatRealtimeHandlers } from '@/modules/chat/hooks/useChatRealtimeHandlers';
 import type { SessionStore } from '@/modules/chat/hooks/useSessionStore';
 import type { NormalizedMessage, ProjectSession, ServerEvent } from '@/shared/types';
@@ -41,8 +42,24 @@ test('Steer acknowledgement and unknown control frames never enter the transcrip
   emit({ kind: 'unrecognized_control', id: 'control-1' });
   emit({ kind: 'text', id: 'update-1', role: 'assistant', content: '正在修改', codexPhase: 'commentary' });
   emit({ kind: 'text', id: 'final-1', role: 'assistant', content: '完成', codexPhase: 'final_answer' });
+  const release = claimChatSendResult('owned-send');
+  emit({ kind: 'protocol_error', code: 'RUN_IN_PROGRESS', clientMessageId: 'owned-send', error: 'busy' });
+  release();
   emit({ kind: 'complete', id: 'complete-1', success: false });
 
   assert.deepEqual(messages.map((message) => message.id), ['steer-1', 'update-1', 'final-1']);
   assert.deepEqual(refreshed, ['session-1']);
+});
+
+
+test('an old complete cannot end a newer run, while an unowned busy refusal stays visible', () => {
+  let listener: ((event: ServerEvent) => void) | null = null;
+  const background = vi.fn(); const processing = vi.fn(); const errors: NormalizedMessage[] = [];
+  renderHook(() => useChatRealtimeHandlers({ isActive: true, subscribe: (callback) => { listener = callback; return () => {}; }, provider: 'codex', selectedSession: { id: 's' } as ProjectSession, currentSessionId: 's', setTokenBudget: () => {}, pendingPermissionRequests: [], setPendingPermissionRequests: () => {}, streamTimerRef: { current: null }, accumulatedStreamRef: { current: '' }, lastSeqRef: { current: new Map() }, statusCheckSentAtRef: { current: new Map() }, onSessionBackground: background, onSessionProcessing: processing, requestLatestMessages: async () => {}, sessionStore: { appendRealtime: (_id: string, message: NormalizedMessage) => errors.push(message), getMessages: () => [], updateStreaming: () => {}, finalizeStreaming: () => {} } as unknown as SessionStore }));
+  act(() => listener?.({ kind: 'status', sessionId: 's', text: 'Processing', runId: 'new', runStartedAt: 20, seq: 10 }));
+  act(() => listener?.({ kind: 'complete', sessionId: 's', runId: 'old', runStartedAt: 10, seq: 9 }));
+  assert.equal(background.mock.calls.length, 0);
+  assert.equal(processing.mock.calls.length, 1);
+  act(() => listener?.({ kind: 'protocol_error', sessionId: 's', code: 'RUN_IN_PROGRESS', clientMessageId: 'unowned', error: 'explicit refusal' }));
+  assert.equal(errors.at(-1)?.content, 'explicit refusal');
 });

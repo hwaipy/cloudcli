@@ -1,5 +1,8 @@
 import { resolve as resolvePath } from 'node:path';
 
+import { isolatedCodexLaunch, resolveIsolatedProject, stageIsolationAttachments } from '@/modules/project-isolation/index.js';
+import type { CodexProcessLaunch, NormalizedMessage } from '@/shared/types.js';
+
 import {
   appendFilesInputTag,
   createCompleteMessage,
@@ -8,7 +11,9 @@ import {
 } from '@/shared/index.js';
 import { notifyRunFailed, notifyRunStopped } from '@/modules/notifications/index.js';
 import { CodexAppServerConnection } from '@/modules/providers/list/codex/codex-app-server-connection.provider.js';
-import type { AnyRecord, ProviderRuntimeContext, ProviderRuntimeWriter } from '@/shared/index.js';
+import type { AnyRecord, ProviderRuntimeContext, ProviderRuntimeWriter, ProviderPermissionDecision } from '@/shared/index.js';
+
+import { CodexUserInputRequests } from './codex-user-input.service.js';
 
 type ActiveTurn = {
   id: string | null;
@@ -27,13 +32,16 @@ type ActiveTurn = {
   interruptTimer: ReturnType<typeof setTimeout> | null;
 };
 
-type AppServerConnection = Pick<CodexAppServerConnection, 'call' | 'subscribe' | 'close'>;
+type AppServerConnection = Pick<CodexAppServerConnection, 'call' | 'subscribe' | 'close' | 'onRequest' | 'respond'>;
 
 type LiveThread = {
   connection: AppServerConnection;
   threadId: string;
+  model?: string;
   active: ActiveTurn | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  isolationProjectId?: string;
+  syncState?: CodexProcessLaunch['syncState'];
 };
 
 const IDLE_MS = 10 * 60_000;
@@ -69,6 +77,7 @@ function emitItem(active: ActiveTurn, item: AnyRecord, overrides: AnyRecord = {}
       fields.itemType = 'agent_message';
       fields.message = { role: 'assistant', content: overrides.text ?? item.text ?? '' };
       fields.phase = item.phase;
+      fields.codexQuestions = item.questions;
       if (!fields.message.content) return;
       break;
     case 'reasoning':
@@ -196,7 +205,8 @@ function handleNotification(live: LiveThread, message: { method?: string; params
 }
 
 type RuntimeOptions = {
-  createConnection?: () => AppServerConnection;
+  createConnection?: (launch?: CodexProcessLaunch) => AppServerConnection;
+  resolveIsolation?: typeof resolveIsolatedProject;
   idleMs?: number;
   turnTimeoutMs?: number;
   interruptGraceMs?: number;
@@ -204,23 +214,27 @@ type RuntimeOptions = {
 
 /** Builds the experimental runtime; provider tests inject a scripted connection to verify lifecycle behavior. */
 export function createCodexAppServerRuntime({
-  createConnection = () => new CodexAppServerConnection(),
+  resolveIsolation = resolveIsolatedProject,
+  createConnection = (launch?: CodexProcessLaunch) => new CodexAppServerConnection(launch),
   idleMs = IDLE_MS,
   turnTimeoutMs = TURN_TIMEOUT_MS,
   interruptGraceMs = INTERRUPT_GRACE_MS,
 }: RuntimeOptions = {}) {
   const liveThreads = new Map<string, LiveThread>();
+  const questions = new CodexUserInputRequests();
 
   function dispose(appSessionId: string): void {
     const live = liveThreads.get(appSessionId);
     if (!live) return;
     if (live.idleTimer) clearTimeout(live.idleTimer);
     liveThreads.delete(appSessionId);
+    questions.cancel(appSessionId);
     live.connection.close();
   }
 
   function scheduleIdleClose(appSessionId: string, live: LiveThread): void {
     if (live.idleTimer) clearTimeout(live.idleTimer);
+    if (questions.listPending(appSessionId).length) return;
     live.idleTimer = setTimeout(() => {
       if (!live.active && liveThreads.get(appSessionId) === live) dispose(appSessionId);
     }, idleMs);
@@ -228,7 +242,9 @@ export function createCodexAppServerRuntime({
   }
 
 async function acquireThread(appSessionId: string, providerSessionId: string | null, options: AnyRecord): Promise<LiveThread> {
+  const isolatedProject = resolveIsolation(options);
   let live = liveThreads.get(appSessionId);
+  if (live && live.isolationProjectId !== isolatedProject?.project_id) { dispose(appSessionId); live = undefined; }
   if (live && providerSessionId && live.threadId !== providerSessionId) {
     dispose(appSessionId); // An edit/fork changed the native thread id.
     live = undefined;
@@ -238,8 +254,10 @@ async function acquireThread(appSessionId: string, providerSessionId: string | n
     live.idleTimer = null;
     return live;
   }
-  const connection = createConnection();
+  const launch = isolatedProject ? await isolatedCodexLaunch(isolatedProject) : undefined;
+  const connection = createConnection(launch);
   const permissions = permissionOptions(options.permissionMode);
+  if (isolatedProject) permissions.sandbox = 'danger-full-access'; // The outer container is the enforced filesystem boundary.
   const cwd = String(options.cwd || options.projectPath || process.cwd());
   try {
     const response = asRecord(await connection.call(providerSessionId ? 'thread/resume' : 'thread/start', providerSessionId
@@ -247,12 +265,29 @@ async function acquireThread(appSessionId: string, providerSessionId: string | n
       : { cwd, approvalPolicy: permissions.approvalPolicy, sandbox: permissions.sandbox, model: options.model, serviceName: 'cloudcli' }));
     const threadId = asRecord(response.thread).id;
     if (typeof threadId !== 'string' || !threadId) throw new Error('Codex App Server returned no thread id.');
-    live = { connection, threadId, active: null, idleTimer: null };
+    live = { connection, threadId, model: typeof response.model === 'string' ? response.model : options.model, active: null, idleTimer: null, isolationProjectId: isolatedProject?.project_id, syncState: launch?.syncState };
     liveThreads.set(appSessionId, live);
     const owned = live;
+    connection.onRequest((id, method, raw) => {
+      if (method !== 'item/tool/requestUserInput' && method !== 'tool/requestUserInput') return false;
+      const params = asRecord(raw);
+      const active = owned.active;
+      if (!active || params.threadId !== owned.threadId || (active.id && params.turnId !== active.id)) return false;
+      return questions.receive(appSessionId, id, params, active.writer, (result) => connection.respond(id, result));
+    });
     connection.subscribe(
-      (message) => handleNotification(owned, message),
+      (message) => {
+        if (message.method === 'serverRequest/resolved') {
+          const params = asRecord(message.params);
+          if (params.threadId === owned.threadId && (typeof params.requestId === 'string' || typeof params.requestId === 'number')) {
+            questions.cancel(appSessionId, params.requestId);
+            if (!owned.active) scheduleIdleClose(appSessionId, owned);
+          }
+        }
+        handleNotification(owned, message);
+      },
       (error) => {
+        questions.cancel(appSessionId);
         if (owned.active) {
           owned.active.connectionError = error;
           owned.active.resolve('failed');
@@ -269,6 +304,13 @@ async function acquireThread(appSessionId: string, providerSessionId: string | n
 }
 
 return {
+  permissions: {
+    listPending: (sessionId: string) => questions.listPending(sessionId),
+    resolve: (requestId: string, decision: ProviderPermissionDecision) => {
+      questions.resolve(requestId, decision);
+      for (const [sessionId, live] of liveThreads) if (!live.active) scheduleIdleClose(sessionId, live);
+    },
+  },
   async run(command: string, options: AnyRecord, writer: ProviderRuntimeWriter, context: ProviderRuntimeContext): Promise<void> {
     const appSessionId = String(options.sessionId || '');
     if (!appSessionId) throw new Error('App Server requires an app session id.');
@@ -291,6 +333,7 @@ return {
       itemText: new Map(), itemOutput: new Map(), items: new Map(),
       turnTimer: null, interruptTimer: null,
     };
+    questions.updateWriter(appSessionId, writer);
     live.active = active;
     if (turnTimeoutMs > 0) {
       active.turnTimer = setTimeout(() => {
@@ -306,15 +349,24 @@ return {
     let failure: Error | null = null;
     try {
       const cwd = String(options.cwd || options.projectPath || process.cwd());
-      const prompt = appendFilesInputTag(command, options.files);
-      const images = normalizeImageDescriptors(options.images);
+      const isolated = live.isolationProjectId ? resolveIsolation(options) : null;
+      const files = isolated ? await stageIsolationAttachments(isolated, Array.isArray(options.files) ? options.files : [], Number(writer.userId) || undefined) : options.files;
+      const imageFiles = isolated ? await stageIsolationAttachments(isolated, Array.isArray(options.images) ? options.images : [], Number(writer.userId) || undefined) : options.images;
+      const prompt = appendFilesInputTag(command, files);
+      const images = normalizeImageDescriptors(imageFiles);
       const input = [
         { type: 'text', text: prompt || (images.length ? 'Please analyze the attached image(s).' : ''), text_elements: [] },
         ...images.map((image) => ({ type: 'localImage', path: resolvePath(cwd, image.path) })),
       ];
       const permissions = permissionOptions(options.permissionMode);
+      if (live.isolationProjectId) permissions.sandbox = 'danger-full-access';
+      const collaborationModel = model || live.model;
       const result = asRecord(await live.connection.call('turn/start', {
         threadId: live.threadId, input, cwd,
+        ...(collaborationModel ? { collaborationMode: {
+          mode: options.permissionMode === 'plan' ? 'plan' : 'default',
+          settings: { model: collaborationModel, reasoning_effort: typeof options.effort === 'string' && options.effort !== 'default' ? options.effort : null, developer_instructions: null },
+        } } : {}),
         ...(model ? { model } : {}),
         ...(typeof options.effort === 'string' && options.effort !== 'default' ? { effort: options.effort } : {}),
         approvalPolicy: permissions.approvalPolicy,
@@ -325,7 +377,19 @@ return {
       const turnId = asRecord(result.turn).id;
       if (typeof turnId !== 'string') throw new Error('Codex App Server returned no turn id.');
       active.id = turnId;
+      // Enrich the gateway-owned input instead of interpreting userMessage items.
+      // The stable row id lets the frontend replace, then reconcile by native turn.
+      const acceptedInput = options.acceptedUserMessage as NormalizedMessage | undefined;
+      if (acceptedInput?.kind === 'text' && acceptedInput.role === 'user') {
+        writer.send({ ...acceptedInput, transcriptAnchorId: turnId });
+      }
       const status = await done;
+      const snapshots = await live.syncState?.();
+      if (snapshots?.length) {
+        // The registry imports this runtime; load its indexer only after runtime initialization.
+        const { sessionSynchronizerService } = await import('@/modules/providers/services/session-synchronizer.service.js');
+        for (const file of snapshots) await sessionSynchronizerService.synchronizeProviderFile('codex', file);
+      }
       if (status === 'failed') throw active.connectionError ?? new Error('Codex App Server turn failed.');
       if (status === 'interrupted' || active.aborted) return;
       send(writer, createCompleteMessage({ provider: 'codex', sessionId: appSessionId, actualSessionId: live.threadId, exitCode: 0 }));
@@ -340,6 +404,7 @@ return {
     } finally {
       if (active.turnTimer) clearTimeout(active.turnTimer);
       if (active.interruptTimer) clearTimeout(active.interruptTimer);
+      questions.finishTurn(appSessionId, active.aborted || Boolean(failure));
       live.active = null;
       if (failure) dispose(appSessionId);
       else if (liveThreads.get(appSessionId) === live) scheduleIdleClose(appSessionId, live);

@@ -1,11 +1,11 @@
 import { FolderPlus, Plus, RefreshCw, Search, Settings, X, PanelLeftClose, Server } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
+import { DesktopUpdateButton } from '@/modules/desktop-updates';
 import { Button, Input } from '@/shared/ui';
 import { CLOUDCLI_WORDMARK_FONT_FAMILY } from '@/shared/constants';
 import { IS_PLATFORM } from '@/shared/utils';
 import type { SidebarSearchMode } from '@/shared/types';
-import GitHubStarBadge from '@/modules/sidebar/GitHubStarBadge';
 import SidebarModeTabs from '@/modules/sidebar/SidebarModeTabs';
 
 const MOD_KEY =
@@ -105,10 +105,11 @@ export default function SidebarHeader({
           )}
 
           <div className="flex flex-shrink-0 items-center gap-0.5">
+            <DesktopUpdateButton />
             {hubBackendId && (
-              <a href="/hub/" className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent/80 hover:text-foreground" title={t('hub.switchBackend', { backend: hubBackendId })} aria-label={t('hub.switchBackend', { backend: hubBackendId })}>
+              <button type="button" onClick={onShowSettings} className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent/80 hover:text-foreground" title={t('hub.manageBackends', 'Manage backends')} aria-label={t('hub.manageBackends', 'Manage backends')}>
                 <Server className="h-3.5 w-3.5" />
-              </a>
+              </button>
             )}
             <Button
               variant="ghost"
@@ -154,8 +155,6 @@ export default function SidebarHeader({
             </Button>
           </div>
         </div>
-
-        <GitHubStarBadge />
 
         {/* Search bar */}
         {showSearchTools && (
@@ -221,10 +220,11 @@ export default function SidebarHeader({
           )}
 
           <div className="flex flex-shrink-0 gap-1.5">
+            <DesktopUpdateButton />
             {hubBackendId && (
-              <a href="/hub/" className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground" title={t('hub.switchBackend', { backend: hubBackendId })} aria-label={t('hub.switchBackend', { backend: hubBackendId })}>
+              <button type="button" onClick={onShowSettings} className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground" title={t('hub.manageBackends', 'Manage backends')} aria-label={t('hub.manageBackends', 'Manage backends')}>
                 <Server className="h-4 w-4" />
-              </a>
+              </button>
             )}
             <button
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted/50 transition-all active:scale-95"

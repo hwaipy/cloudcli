@@ -53,3 +53,16 @@ test('keeps taskmaster metadata when a realtime project snapshot omits it', () =
   assert.equal(result, selectedProject);
   assert.equal(result.taskmaster, selectedProject.taskmaster);
 });
+
+test('refreshes the open workspace backend label and color while preserving them on partial realtime snapshots', () => {
+  const result = mergeProjectSelectionMetadata(selectedProject, {
+    ...selectedProject,
+    __hubBackendId: 'ubuntu-vm',
+    __hubBackendName: 'Workbench Server',
+    __hubBackendColor: '#3b82f6',
+  });
+  assert.equal(result.__hubBackendName, 'Workbench Server');
+  assert.equal(result.__hubBackendColor, '#3b82f6');
+  assert.equal(result.sessions, selectedProject.sessions);
+  assert.equal(mergeProjectSelectionMetadata(result, selectedProject), result);
+});

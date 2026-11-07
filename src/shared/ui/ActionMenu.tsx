@@ -3,23 +3,14 @@ import { createPortal } from 'react-dom';
 import { ChevronDown, Loader2, type LucideIcon } from 'lucide-react';
 
 import { cn } from '@/shared/utils';
+import type { ActionMenuItem } from '@/shared/types';
 import { Button } from '@/shared/ui/Button';
 
 type ButtonVariant = 'default' | 'destructive' | 'outline' | 'secondary' | 'ghost' | 'link';
 type ButtonSize = 'default' | 'sm' | 'lg' | 'icon';
 
-export type ActionMenuItem = {
-  key: string;
-  label: string;
-  description?: string;
-  icon?: LucideIcon;
-  onSelect: () => void;
-  disabled?: boolean;
-  loading?: boolean;
-  isDanger?: boolean;
-  showDividerBefore?: boolean;
-  closeOnSelect?: boolean;
-};
+export type { ActionMenuItem } from '@/shared/types';
+
 
 type ActionMenuProps = {
   label: string;
@@ -101,9 +92,12 @@ export function ActionMenu({
       }
     };
 
+    const closeForContextMenu = () => setMenuOpen(false);
+    document.addEventListener('cloudcli:context-menu-open', closeForContextMenu);
     document.addEventListener('mousedown', closeOnOutsideClick);
     document.addEventListener('keydown', closeOnEscape);
     return () => {
+      document.removeEventListener('cloudcli:context-menu-open', closeForContextMenu);
       document.removeEventListener('mousedown', closeOnOutsideClick);
       document.removeEventListener('keydown', closeOnEscape);
     };

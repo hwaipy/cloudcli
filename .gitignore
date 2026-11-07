@@ -154,3 +154,7 @@ server/**/tests/file-tree-outside-*/
 
 # Isolated local debug instance
 .debug-local/
+
+# Python interpreter caches
+__pycache__/
+*.py[cod]

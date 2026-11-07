@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { preflightProjectIsolation, ensureProjectContainer, removeProjectIsolation } from '@/modules/project-isolation/index.js';
 import { projectsDb } from '@/modules/database/index.js';
 import type {
   CreateProjectPathResult,
@@ -13,12 +14,17 @@ type CreateProjectInput = {
   projectPath: string;
   customName?: string | null;
   ownerUserId?: number;
+  strictFileIsolation?: boolean;
 };
 
 type CreateProjectDependencies = {
+  preflightIsolation?: typeof preflightProjectIsolation;
+  prepareContainer?: typeof ensureProjectContainer;
+  removeIsolation?: typeof removeProjectIsolation;
+  deleteCreatedProject?: (projectId: string) => void;
   validatePath: (projectPath: string) => Promise<WorkspacePathValidationResult>;
   ensureWorkspaceDirectory: (projectPath: string) => Promise<void>;
-  persistProjectPath: (projectPath: string, customName: string | null, ownerUserId?: number) => CreateProjectPathResult;
+  persistProjectPath: (projectPath: string, customName: string | null, ownerUserId?: number, strictFileIsolation?: boolean) => CreateProjectPathResult;
   getProjectByPath: (projectPath: string) => ProjectRepositoryRow | null;
 };
 
@@ -29,6 +35,7 @@ type ProjectApiView = {
   displayName: string;
   customName: string | null;
   isArchived: boolean;
+  strictFileIsolation: boolean;
   isStarred: boolean;
   sessions: [];
   sessionMeta: {
@@ -54,8 +61,8 @@ const defaultDependencies: CreateProjectDependencies = {
       });
     }
   },
-  persistProjectPath: (projectPath: string, customName: string | null, ownerUserId?: number): CreateProjectPathResult =>
-    projectsDb.createProjectPath(projectPath, customName, ownerUserId),
+  persistProjectPath: (projectPath: string, customName: string | null, ownerUserId?: number, strictFileIsolation?: boolean): CreateProjectPathResult =>
+    projectsDb.createProjectPath(projectPath, customName, ownerUserId, strictFileIsolation),
   getProjectByPath: (projectPath: string): ProjectRepositoryRow | null =>
     projectsDb.getProjectPath(projectPath),
 };
@@ -77,6 +84,7 @@ function mapProjectRowToApiView(projectRow: ProjectRepositoryRow): ProjectApiVie
     displayName: resolveDisplayName(projectRow.custom_project_name, projectRow.project_path),
     customName: projectRow.custom_project_name,
     isArchived: Boolean(projectRow.isArchived),
+    strictFileIsolation: Boolean(projectRow.strict_file_isolation),
     isStarred: Boolean(projectRow.isStarred),
     sessions: [],
     sessionMeta: {
@@ -110,8 +118,10 @@ export async function createProject(
   const resolvedProjectPath = normalizeProjectPath(pathValidation.resolvedPath);
   await dependencies.ensureWorkspaceDirectory(resolvedProjectPath);
 
+  if (input.strictFileIsolation) await (dependencies.preflightIsolation ?? preflightProjectIsolation)(resolvedProjectPath);
+
   const normalizedCustomName = resolveDisplayName(input.customName ?? null, resolvedProjectPath);
-  const persistedProject = dependencies.persistProjectPath(resolvedProjectPath, normalizedCustomName, input.ownerUserId);
+  const persistedProject = dependencies.persistProjectPath(resolvedProjectPath, normalizedCustomName, input.ownerUserId, input.strictFileIsolation);
 
   if (persistedProject.outcome === 'active_conflict') {
     throw new AppError('Project path already exists and is active', {
@@ -129,7 +139,12 @@ export async function createProject(
     });
   }
 
-  // Archived rows intentionally remain archived when reused, as requested.
+  if (input.strictFileIsolation) {
+    try { await (dependencies.prepareContainer ?? ensureProjectContainer)(projectRow); } catch (error) {
+      if (persistedProject.outcome === 'created') { await (dependencies.removeIsolation ?? removeProjectIsolation)(projectRow); (dependencies.deleteCreatedProject ?? projectsDb.deleteProjectById)(projectRow.project_id); }
+      throw error;
+    }
+  }
   return {
     outcome: persistedProject.outcome,
     project: mapProjectRowToApiView(projectRow),

@@ -52,8 +52,12 @@ const backgroundOnly: SessionActivityMap = new Map([[
 
 const uploads = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/api/assets/files'));
 
-const render = (processingSessions: SessionActivityMap) => {
-  const sent: Array<{ type: string }> = [];
+const render = (processingSessions: SessionActivityMap, withServerEvents = false) => {
+  const sent: Array<Record<string, unknown>> = [];
+  const listeners = new Set<(event: never) => void>();
+  const emit = (event: Record<string, unknown>) => {
+    for (const listener of listeners) listener(event as never);
+  };
   const view = renderHook(() =>
     useChatComposerState({
       selectedProject: PROJECT,
@@ -68,7 +72,13 @@ const render = (processingSessions: SessionActivityMap) => {
       processingSessions,
       canAbortSession: false,
       tokenBudget: null,
-      sendMessage: (message) => { sent.push(message as { type: string }); },
+      sendMessage: (message) => { sent.push(message as Record<string, unknown>); return true; },
+      ...(withServerEvents ? {
+        subscribe: (listener: (event: never) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      } : {}),
       scrollToBottom: () => undefined,
       addMessage: () => undefined,
       setIsUserScrolledUp: () => undefined,
@@ -76,7 +86,7 @@ const render = (processingSessions: SessionActivityMap) => {
     }),
   );
   const sends = () => sent.filter((message) => message.type === 'chat.send');
-  return { view, sends };
+  return { view, sends, emit };
 };
 
 type View = ReturnType<typeof render>['view'];
@@ -214,4 +224,30 @@ test('a session with nothing in the background sends without asking', async () =
 
   assert.equal(view.result.current.backgroundSendPrompt, null);
   assert.equal(sends().length, 1);
+});
+
+test('a send rejected behind an older queue is appended to the queue without erasing newer typing', async () => {
+  const { view, sends, emit } = render(new Map(), true);
+  await act(async () => { view.result.current.setInput('later request'); });
+
+  const pending = startSubmit(view);
+  await waitFor(() => assert.equal(sends().length, 1));
+  const clientMessageId = sends()[0]?.clientMessageId;
+  await act(async () => { view.result.current.setInput('new text typed while confirming'); });
+
+  await act(async () => {
+    emit({
+      kind: 'protocol_error',
+      code: 'QUEUED_MESSAGES_PENDING',
+      error: 'Earlier queued messages must run first.',
+      sessionId: SESSION.id,
+      clientMessageId,
+    });
+    await pending;
+  });
+
+  assert.equal(appendQueuedMessage.mock.calls.length, 1);
+  assert.equal(appendQueuedMessage.mock.calls[0]?.[1]?.content, 'later request');
+  assert.equal(view.result.current.queuedDrafts[0]?.content, 'later request');
+  assert.equal(view.result.current.input, 'new text typed while confirming');
 });

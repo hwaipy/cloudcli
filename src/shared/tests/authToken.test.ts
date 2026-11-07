@@ -114,7 +114,7 @@ test('getStoredAuthToken: a live token is returned and left in storage', () => {
   assert.equal(localStorage.getItem('auth-token'), token);
 });
 
-test('Hub backend credentials use separate browser storage slots', () => {
+test('Hub account credential is shared while browsing different backends', () => {
   localStorage.clear();
   const hubWindow = window as Window & { __CLOUDCLI_BACKEND_ID__?: string };
   const now = Math.floor(Date.now() / 1000);
@@ -122,14 +122,14 @@ test('Hub backend credentials use separate browser storage slots', () => {
   const labToken = makeToken({ iat: now, exp: now + 600, backend: 'lab' });
   try {
     hubWindow.__CLOUDCLI_BACKEND_ID__ = 'office';
-    assert.equal(getAuthTokenStorageKey(), 'auth-token:office');
+    assert.equal(getAuthTokenStorageKey(), 'auth-token:hub');
     assert.equal(storeAuthToken(officeToken), true);
     hubWindow.__CLOUDCLI_BACKEND_ID__ = 'lab';
-    assert.equal(getStoredAuthToken(), null);
+    assert.equal(getStoredAuthToken(), officeToken);
     assert.equal(storeAuthToken(labToken), true);
     assert.equal(getStoredAuthToken(), labToken);
-    hubWindow.__CLOUDCLI_BACKEND_ID__ = 'office';
-    assert.equal(getStoredAuthToken(), officeToken);
+    assert.equal(localStorage.getItem('auth-token:office'), null);
+    assert.equal(localStorage.getItem('auth-token:lab'), null);
   } finally {
     delete hubWindow.__CLOUDCLI_BACKEND_ID__;
   }

@@ -447,7 +447,13 @@ export const createProviderModelsService = (dependencies: ProviderModelsServiceD
 
     const row = sessions.getSessionById(sessionId);
     if (!row || (row.provider && row.provider !== provider)) return null;
+    const previousMode = row.permission_mode;
     sessions.setSessionPermissionMode(sessionId, normalizedMode);
+    if (previousMode !== normalizedMode) {
+      console.info('[SessionPermissions] Saved permission choice', {
+        provider, sessionId, previousMode, permissionMode: normalizedMode,
+      });
+    }
     return { provider, sessionId, permissionMode: normalizedMode };
   };
 

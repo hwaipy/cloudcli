@@ -53,6 +53,7 @@ function createFakePty() {
 test('a stale socket close cannot detach the socket that replaced it', () => {
   const pty = createFakePty();
   const dependencies = {
+    resolveIsolation: () => null,
     resolveProviderSessionId: () => null,
     spawnPty: () => pty as never,
   };
@@ -90,6 +91,7 @@ test('shell output detects and normalizes a wrapped authentication URL', () => {
   const pty = createFakePty();
   const socket = createFakeSocket();
   const dependencies = {
+    resolveIsolation: () => null,
     resolveProviderSessionId: () => null,
     spawnPty: () => pty as never,
   };
@@ -125,6 +127,7 @@ test('shell output detects and normalizes a wrapped authentication URL', () => {
 test('bypassPermissions launches claude with --dangerously-skip-permissions', () => {
   const spawnedCommands: string[] = [];
   const dependencies = {
+    resolveIsolation: () => null,
     resolveProviderSessionId: () => null,
     spawnPty: (_shell: string, args: string | string[]) => {
       spawnedCommands.push(Array.isArray(args) ? args[args.length - 1] : args);
@@ -165,6 +168,7 @@ test('bypassPermissions launches claude with --dangerously-skip-permissions', ()
 test('bypassPermissions carries through to resumed claude sessions', () => {
   const spawnedCommands: string[] = [];
   const dependencies = {
+    resolveIsolation: () => null,
     resolveProviderSessionId: () => 'resumed-session-id',
     spawnPty: (_shell: string, args: string | string[]) => {
       spawnedCommands.push(Array.isArray(args) ? args[args.length - 1] : args);
@@ -199,6 +203,7 @@ test('a missing project directory is reported as an error frame and starts no pt
   const socket = createFakeSocket();
   let spawnCount = 0;
   const dependencies = {
+    resolveIsolation: () => null,
     resolveProviderSessionId: () => null,
     spawnPty: () => {
       spawnCount += 1;
@@ -233,6 +238,7 @@ type SpawnCall = { shell: string; args: string[]; command: string; env: Record<s
 function spawnRecorder(resumeSessionId: string | null = null) {
   const calls: SpawnCall[] = [];
   const dependencies = {
+    resolveIsolation: () => null,
     resolveProviderSessionId: () => resumeSessionId,
     spawnPty: (shell: string, args: string | string[], options?: { env?: Record<string, string | undefined> }) => {
       calls.push({
@@ -745,4 +751,38 @@ test('other shells and initial commands only get the COLORFGBG hint', () => {
       ['0;15', '0;15', '0;15', '15;0']
     );
   });
+});
+
+test('strict project terminal uses the container launcher and releases its runtime lease on exit', async () => {
+  const socket = createFakeSocket();
+  const terminal = createFakePty();
+  let released = 0;
+  let spawned: { command: string; args: string[] } | undefined;
+  handleShellConnection(socket as never, {
+    resolveProviderSessionId: () => null,
+    resolveIsolation: () => ({ project_id: 'strict-terminal' }) as never,
+    launchIsolatedShell: async (_project, command) => ({ command: 'docker', args: ['exec', '-it', 'strict-container', 'bash', '-c', command], cleanup: () => { released += 1; } }),
+    spawnPty: ((command: string, args: string[]) => { spawned = { command, args }; return terminal; }) as never,
+  });
+  socket.emit('message', JSON.stringify({ type: 'init', projectPath: process.cwd(), sessionId: 'strict-terminal-test', provider: 'plain-shell', isPlainShell: true }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(spawned?.command, 'docker');
+  assert.equal(spawned?.args[2], 'strict-container');
+  terminal.emitExit();
+  assert.equal(released, 1);
+});
+
+test('strict terminal preparation failure never falls back to a host shell', async () => {
+  const socket = createFakeSocket();
+  let spawned = false;
+  handleShellConnection(socket as never, {
+    resolveProviderSessionId: () => null,
+    resolveIsolation: () => ({ project_id: 'strict-terminal-failed' }) as never,
+    launchIsolatedShell: async () => { throw new Error('Docker unavailable'); },
+    spawnPty: (() => { spawned = true; return createFakePty(); }) as never,
+  });
+  socket.emit('message', JSON.stringify({ type: 'init', projectPath: process.cwd(), sessionId: 'strict-terminal-failed-test', provider: 'plain-shell', isPlainShell: true }));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(spawned, false);
+  assert.match(socket.frames.join('\n'), /Docker unavailable/);
 });

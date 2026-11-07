@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import test from 'node:test';
+import { createZstdCompress } from 'node:zlib';
 
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 
@@ -88,6 +91,24 @@ test('synchronizeSessions keeps sessions whose whole transcript directory is mis
 
     assert.equal(result.prunedOrphans, 0);
     assert.ok(sessionsDb.getSessionById('unmounted-session'));
+  });
+});
+
+test('synchronizeSessions does not prune an indexed JSONL path with a compressed sibling', async () => {
+  await withIsolatedDatabase(async (workspace) => {
+    const transcriptDirectory = path.join(workspace, 'transcripts');
+    await mkdir(transcriptDirectory, { recursive: true });
+    const oldPath = path.join(transcriptDirectory, 'compressed.jsonl');
+    const sourcePath = path.join(transcriptDirectory, 'source.jsonl');
+    await writeFile(sourcePath, '{"type":"session_meta","payload":{"id":"compressed-session"}}\n');
+    await pipeline(createReadStream(sourcePath), createZstdCompress(), createWriteStream(`${oldPath}.zst`));
+    await rm(sourcePath);
+    sessionsDb.createSession('compressed-session', 'codex', PROJECT_PATH, 'Compressed', undefined, undefined, oldPath);
+
+    const result = await sessionSynchronizerService.synchronizeSessions();
+
+    assert.equal(result.prunedOrphans, 0);
+    assert.ok(sessionsDb.getSessionById('compressed-session'));
   });
 });
 

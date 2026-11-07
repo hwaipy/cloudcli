@@ -1,6 +1,7 @@
 import { createElement } from 'react';
 
 import type { ChatMessage, DiffLine, LLMProvider, Project } from '@/shared/types';
+import { formatDateTime24 } from '@/shared/utils';
 import { TranscriptExportDocument } from '@/modules/chat/export/TranscriptExportDocument';
 
 type BuildTranscriptHtmlInput = {
@@ -75,7 +76,7 @@ export async function buildTranscriptHtml(input: BuildTranscriptHtmlInput): Prom
   const styles = dropUnresolvableUrls(collectDocumentStyles());
   const title = escapeHtml(input.sessionTitle);
   const isDark = document.documentElement.classList.contains('dark');
-  const exportedAt = escapeHtml(input.exportedAt.toLocaleString());
+  const exportedAt = escapeHtml(formatDateTime24(input.exportedAt));
   const messageCount = input.messages.length;
 
   return `<!DOCTYPE html>

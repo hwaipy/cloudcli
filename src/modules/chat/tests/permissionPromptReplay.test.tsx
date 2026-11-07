@@ -88,3 +88,12 @@ test('an unanswered request stays pending through a resolution for another id', 
   assert.equal(pending.length, 1);
   assert.equal(pending[0].requestId, 'req-open');
 });
+
+test('non-blocking Codex question remains answerable after completion and retracts on resolution', () => {
+  const { dispatch, getPending } = renderHandlers();
+  dispatch({ ...requestEvent('async-question', 1), input: { isBlocking: false, questions: [{ id: 'choice', question: 'Which?' }] } } as ServerEvent);
+  dispatch({ kind: 'complete', sessionId: 'viewed-session', success: false, seq: 2 } as unknown as ServerEvent);
+  assert.equal(getPending().length, 1);
+  dispatch(resolvedEvent('async-question', 3));
+  assert.deepEqual(getPending(), []);
+});

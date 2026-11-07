@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { writeDesktopManifest } from './scripts/desktop-web-manifest.mjs'
 import { getConnectableHost, normalizeLoopbackHost } from './shared/networkHosts.js'
 
 // The client shows the installed package version so it can be compared against the
@@ -35,11 +36,12 @@ const bootAssetsPlugin = {
 
     bootFiles = [...files]
   },
-  writeBundle(options) {
+  async writeBundle(options) {
     if (!options.dir) throw new Error('Boot assets need an output directory')
     // Vite may change JS/CSS after generateBundle; measure the written files.
     const assets = bootFiles.map(file => ({ file, bytes: statSync(join(options.dir, file)).size }))
     writeFileSync(join(options.dir, 'boot-assets.json'), JSON.stringify({ assets }))
+    await writeDesktopManifest(options.dir)
   },
 }
 

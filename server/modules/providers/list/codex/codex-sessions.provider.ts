@@ -2,10 +2,13 @@ import fsSync from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
+import { StringDecoder } from 'node:string_decoder';
 
+import { isolatedCodexHomes } from '@/modules/project-isolation/index.js';
 import { sessionsDb } from '@/modules/database/index.js';
 import { codexAppServer } from '@/modules/providers/list/codex/codex-app-server.client.js';
 import { parseFilesInputTag, toImageAttachments } from '@/shared/image-attachments.js';
+import { createCodexRolloutReadStream } from '@/shared/index.js';
 import type { IProviderSessions } from '@/shared/interfaces.js';
 import { prepareTranscriptMessages } from '@/shared/message-unification.js';
 import type {
@@ -160,14 +163,24 @@ async function readCodexLiveTurnIds(filePath: string): Promise<string[]> {
 
 /** Resolve reference-backed history without requiring the source to remain indexed. */
 async function findCodexHistorySource(filePath: string, threadId: string): Promise<string | null> {
+  const isolatedHome = isolatedCodexHomes().find((home) => filePath.startsWith(home + path.sep));
   const indexed = sessionsDb.getSessionByProviderSessionId(threadId);
   if (indexed?.provider === PROVIDER && indexed.jsonl_path) {
-    try {
-      if ((await fsp.stat(indexed.jsonl_path)).isFile()) {
-        return indexed.jsonl_path;
+    const indexedPath = indexed.jsonl_path;
+    const alternate = indexedPath.endsWith('.jsonl.zst')
+      ? indexedPath.slice(0, -'.zst'.length)
+      : `${indexedPath}.zst`;
+    for (const candidate of [indexedPath, alternate]) {
+      if (isolatedHome && !candidate.startsWith(isolatedHome + path.sep)) continue;
+      try {
+        // A paginated continuation can retain its original thread id. The
+        // index then points to the continuation, not its frozen predecessor.
+        // Search the native base rollout instead of recursing into this file.
+        if ((await fsp.realpath(candidate)) !== filePath
+          && (await fsp.stat(candidate)).isFile()) return candidate;
+      } catch {
+        // The native CLI can move or compress a rollout independently.
       }
-    } catch {
-      // The native CLI can archive a rollout without updating the app row.
     }
   }
 
@@ -176,8 +189,10 @@ async function findCodexHistorySource(filePath: string, threadId: string): Promi
     if (path.basename(directory) === 'sessions' || path.basename(directory) === 'archived_sessions') {
       const home = path.dirname(directory);
       for (const storage of ['sessions', 'archived_sessions']) {
-        const found = await findFileWithSuffix(path.join(home, storage), `-${threadId}.jsonl`, 3);
-        if (found) return found;
+        for (const suffix of [`-${threadId}.jsonl`, `-${threadId}.jsonl.zst`]) {
+          const found = await findFileWithSuffix(path.join(home, storage), suffix, 3);
+          if (found) return found;
+        }
       }
       break;
     }
@@ -203,54 +218,107 @@ async function* readCodexRolloutLines(
       code: 'CODEX_HISTORY_SOURCE_INVALID', statusCode: 502,
     });
   }
-  if (endByteOffset !== undefined) {
+  if (endByteOffset === 0) return;
+  if (endByteOffset !== undefined && !canonicalPath.endsWith('.jsonl.zst')) {
     if ((await fsp.stat(canonicalPath)).size < endByteOffset) {
       throw new AppError('The source transcript is shorter than the Codex fork snapshot.', {
         code: 'CODEX_HISTORY_SOURCE_INVALID', statusCode: 502,
       });
     }
-    if (endByteOffset === 0) return;
   }
   const nextAncestors = new Set(ancestors).add(canonicalPath);
-  const stream = fsSync.createReadStream(canonicalPath, {
-    ...(endByteOffset !== undefined ? { end: endByteOffset - 1 } : {}),
-  });
-  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const stream = endByteOffset !== undefined && !canonicalPath.endsWith('.jsonl.zst')
+    ? fsSync.createReadStream(canonicalPath, { end: endByteOffset - 1 })
+    : createCodexRolloutReadStream(canonicalPath);
   let readMetadata = false;
+  let byteCount = 0;
+  let lastByte: number | undefined;
+  let bufferedLine = '';
+  const utf8 = new StringDecoder('utf8');
   try {
-    for await (const line of lines) {
-      let entry: AnyRecord | undefined;
-      if (!readMetadata) {
-        try { entry = readObjectRecord(JSON.parse(line)) ?? undefined; } catch { /* Skip malformed rows. */ }
+    for await (const rawChunk of stream) {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk as Uint8Array);
+      const remaining = endByteOffset === undefined ? chunk.length : Math.max(0, endByteOffset - byteCount);
+      const selected = chunk.subarray(0, remaining);
+      if (selected.length > 0) {
+        byteCount += selected.length;
+        lastByte = selected[selected.length - 1];
+        bufferedLine += utf8.write(selected);
       }
-      if (entry?.type === 'session_meta') {
-        readMetadata = true;
-        const payload = readObjectRecord(entry.payload);
-        if (payload?.history_base != null) {
-          const base = readObjectRecord(payload.history_base);
-          const threadId = readNonEmptyString(base?.thread_id);
-          const offset = base?.end_byte_offset;
-          if (!threadId || !/^[a-zA-Z0-9-]+$/.test(threadId)
-            || typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) {
-            throw new AppError('Codex fork history has an invalid source boundary.', {
-              code: 'CODEX_HISTORY_SOURCE_INVALID', statusCode: 502,
-            });
-          }
-          const sourcePath = await findCodexHistorySource(canonicalPath, threadId);
-          if (!sourcePath) {
-            throw new AppError('The source transcript referenced by this Codex fork is unavailable.', {
-              code: 'CODEX_HISTORY_SOURCE_UNAVAILABLE', statusCode: 502,
-            });
-          }
-          yield* readCodexRolloutLines(sourcePath, offset, nextAncestors);
-        }
+
+      let newlineIndex = bufferedLine.indexOf('\n');
+      while (newlineIndex >= 0) {
+        const line = bufferedLine.slice(0, newlineIndex).replace(/\r$/, '');
+        bufferedLine = bufferedLine.slice(newlineIndex + 1);
+        yield* processCodexRolloutLine(line, canonicalPath, nextAncestors, !readMetadata, (value) => {
+          if (value) readMetadata = true;
+        });
+        newlineIndex = bufferedLine.indexOf('\n');
       }
-      yield line;
     }
+
+    bufferedLine += utf8.end();
+    if (endByteOffset !== undefined && (byteCount !== endByteOffset || lastByte !== 0x0a)) {
+      throw new AppError('The source transcript is shorter than or misaligned with the Codex fork snapshot.', {
+        code: 'CODEX_HISTORY_SOURCE_INVALID', statusCode: 502,
+      });
+    }
+    if (bufferedLine.length > 0) {
+      yield* processCodexRolloutLine(bufferedLine, canonicalPath, nextAncestors, !readMetadata, (value) => {
+        if (value) readMetadata = true;
+      });
+    }
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    if (canonicalPath.endsWith('.jsonl.zst')) {
+      throw new AppError('Codex compressed transcript could not be decompressed.', {
+        code: 'CODEX_HISTORY_SOURCE_INVALID', statusCode: 502,
+      });
+    }
+    throw error;
   } finally {
-    lines.close();
     stream.destroy();
   }
+}
+
+async function* processCodexRolloutLine(
+  line: string,
+  canonicalPath: string,
+  nextAncestors: Set<string>,
+  shouldInspectMetadata: boolean,
+  setReadMetadata: (value: boolean) => void,
+): AsyncGenerator<string> {
+  let entry: AnyRecord | undefined;
+  if (shouldInspectMetadata) {
+    try {
+      entry = readObjectRecord(JSON.parse(line)) ?? undefined;
+    } catch {
+      // Keep malformed transcript rows visible to the normal parser.
+    }
+  }
+  if (shouldInspectMetadata && entry?.type === 'session_meta') {
+    setReadMetadata(true);
+    const payload = readObjectRecord(entry.payload);
+    if (payload?.history_base != null) {
+      const base = readObjectRecord(payload.history_base);
+      const threadId = readNonEmptyString(base?.thread_id);
+      const offset = base?.end_byte_offset;
+      if (!threadId || !/^[a-zA-Z0-9-]+$/.test(threadId)
+        || typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) {
+        throw new AppError('Codex fork history has an invalid source boundary.', {
+          code: 'CODEX_HISTORY_SOURCE_INVALID', statusCode: 502,
+        });
+      }
+      const sourcePath = await findCodexHistorySource(canonicalPath, threadId);
+      if (!sourcePath) {
+        throw new AppError('The source transcript referenced by this Codex fork is unavailable.', {
+          code: 'CODEX_HISTORY_SOURCE_UNAVAILABLE', statusCode: 502,
+        });
+      }
+      yield* readCodexRolloutLines(sourcePath, offset, nextAncestors);
+    }
+  }
+  yield line;
 }
 
 /**
@@ -302,7 +370,7 @@ function extractCodexTextContent(content: unknown): string {
 
       const record = item as AnyRecord;
       if (
-        (record.type === 'input_text' || record.type === 'output_text' || record.type === 'text')
+        (record.type === 'input_text' || record.type === 'output_text' || record.type === 'text' || record.type === 'Text')
         && typeof record.text === 'string'
       ) {
         return record.text;
@@ -1002,13 +1070,12 @@ async function findCodexSubagentRollout(
   parentFilePath: string,
   agentThreadId: string,
 ): Promise<string | null> {
-  const suffix = `-${agentThreadId}.jsonl`;
   let directory = path.dirname(parentFilePath);
 
   for (let level = 0; level <= SUBAGENT_LOOKUP_PARENT_LEVELS; level += 1) {
-    const match = await findFileWithSuffix(directory, suffix, level === 0 ? 0 : level);
-    if (match) {
-      return match;
+    for (const suffix of [`-${agentThreadId}.jsonl`, `-${agentThreadId}.jsonl.zst`]) {
+      const match = await findFileWithSuffix(directory, suffix, level === 0 ? 0 : level);
+      if (match) return match;
     }
     const parent = path.dirname(directory);
     if (parent === directory) {
@@ -1293,6 +1360,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
   }
 
   const messages: AnyRecord[] = [];
+  const asyncQuestionsByText = new Map<string, unknown>();
   let tokenUsage: AnyRecord | null = null;
   let sessionTotalTokens: number | undefined;
 
@@ -1438,6 +1506,12 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
       // `UserMessage`; wire `response_item` user rows are internal, not prompts.
       if (payload.type === 'item_completed') {
         const item = readObjectRecord(payload.item);
+        if (item?.type === 'AgentMessage' && Array.isArray(item.questions)) {
+          const questionText = extractCodexTextContent(item.content);
+          asyncQuestionsByText.set(questionText.trim(), item.questions);
+          messages.push({ type: 'assistant', uuid: item.id, timestamp, message: { role: 'assistant', content: questionText },
+            codexQuestions: item.questions, codexPhase: item.phase === 'commentary' ? 'commentary' : 'final_answer' });
+        }
         if (item?.type === 'UserMessage') {
           const content = extractCodexTextContent(item.content);
           const images = extractCodexTypedUserImages(item.content);
@@ -1491,6 +1565,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
 
     // ── response_item ──────────────────────────────────────────────────────
     if (payload.type === 'message' && payload.role === 'assistant') {
+      if (asyncQuestionsByText.has(extractCodexTextContent(payload.content).trim())) continue;
       const cited = readCodexMemoryCitations(extractCodexTextContent(payload.content));
       const textContent = cited.text;
       if (!textContent.trim()) {
@@ -1516,6 +1591,7 @@ async function getCodexSessionMessages(sessionId: string): Promise<CodexHistoryR
         type: 'assistant',
         timestamp,
         message: { role: 'assistant', content: textContent },
+        codexQuestions: asyncQuestionsByText.get(textContent.trim()),
         codexPhase: payload.phase === 'final_answer' || payload.phase === 'commentary'
           ? payload.phase
           : undefined,
@@ -2125,6 +2201,7 @@ export class CodexSessionsProvider implements IProviderSessions {
         role: 'assistant',
         content,
         codexPhase: raw.codexPhase,
+        codexQuestions: raw.codexQuestions,
         memoryCitations: raw.memoryCitations,
       })];
     }
@@ -2213,6 +2290,7 @@ export class CodexSessionsProvider implements IProviderSessions {
             role: 'assistant',
             content: text,
             codexPhase: raw.phase === 'final_answer' ? 'final_answer' : 'commentary',
+            codexQuestions: raw.codexQuestions,
             memoryCitations: cited.memoryCitations,
           })];
         }

@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { WebSocket } from 'ws';
 
 import { canReadAsset } from '@/modules/assets/index.js';
-import { sessionDraftsDb, sessionsDb } from '@/modules/database/index.js';
+import { chatSendReceiptsDb, sessionDraftsDb, sessionsDb } from '@/modules/database/index.js';
 import { providerCapabilitiesService, providerModelsService, sessionsService } from '@/modules/providers/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
 import { broadcastSessionUpserted } from '@/modules/websocket/services/session-upsert-broadcast.service.js';
@@ -136,6 +136,7 @@ function sendProtocolError(
   sessionId?: string,
   extra: AnyRecord = {}
 ): void {
+  console.info('[ChatAdmission]', { timestamp: new Date().toISOString(), sessionId, clientMessageId: extra.clientMessageId, currentRunId: sessionId ? chatRunRegistry.getRun(sessionId)?.runId : undefined, result: 'rejected', errorCode: code });
   sendJson(ws, {
     kind: 'protocol_error',
     code,
@@ -151,6 +152,21 @@ function readRequiredSessionId(data: AnyRecord): string | null {
   return sessionId.length > 0 ? sessionId : null;
 }
 
+function clientMessageReceipt(data: AnyRecord): AnyRecord {
+  return typeof data.clientMessageId === 'string' && data.clientMessageId.trim()
+    ? { clientMessageId: data.clientMessageId.trim() }
+    : {};
+}
+
+/** A direct send must not start ahead of an earlier server-owned queued turn. */
+function hasQueuedTurnAhead(userId: string | number | null, sessionId: string): boolean {
+  const numericUserId = Number(userId);
+  if (!Number.isSafeInteger(numericUserId) || numericUserId < 1) return false;
+  return sessionDraftsDb.listQueuedMessages().some((message) =>
+    message.userId === numericUserId && message.sessionId === sessionId,
+  );
+}
+
 /**
  * Handles `chat.send`: resolves the session row (provider, project path, and
  * provider-native id all come from the database — never from the client),
@@ -162,12 +178,37 @@ async function handleChatSend(
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies
 ): Promise<void> {
+  const clientMessageId = typeof data.clientMessageId === 'string' ? data.clientMessageId.trim() : '';
+  const sessionId = readRequiredSessionId(data);
+  const numericUserId = Number(userId);
+  const hasReceipt = clientMessageId && sessionId && Number.isSafeInteger(numericUserId) && numericUserId > 0
+    && chatSendReceiptsDb.hasAccepted(numericUserId, sessionId, clientMessageId);
+  if (ws && hasReceipt) {
+    sendJson(ws, { kind: 'chat_send_accepted', sessionId, clientMessageId, userMessageId: `local_${clientMessageId}` });
+    return;
+  }
+
   const resolved = resolveSendTarget(ws, data, dependencies, 'chat.send');
   if (!resolved) {
     return;
   }
 
-  await dispatchRun(ws, userId, resolved.sessionId, resolved.session, data, dependencies);
+  if (hasQueuedTurnAhead(userId, resolved.sessionId)) {
+    sendProtocolError(
+      ws,
+      'QUEUED_MESSAGES_PENDING',
+      'Earlier queued messages must run before a new direct message.',
+      resolved.sessionId,
+      clientMessageReceipt(data),
+    );
+    return;
+  }
+
+  await dispatchRun(ws, userId, resolved.sessionId, resolved.session, data, dependencies, {}, undefined, true, () => {
+    if (!ws || !clientMessageId || !Number.isSafeInteger(numericUserId) || numericUserId < 1) return;
+    chatSendReceiptsDb.recordAccepted(numericUserId, resolved.sessionId, clientMessageId);
+    sendJson(ws, { kind: 'chat_send_accepted', sessionId: resolved.sessionId, clientMessageId, userMessageId: `local_${clientMessageId}` });
+  });
 }
 
 type ResolvedSendTarget = {
@@ -188,7 +229,7 @@ function resolveSendTarget(
 ): ResolvedSendTarget | null {
   const sessionId = readRequiredSessionId(data);
   if (!sessionId) {
-    sendProtocolError(ws, 'SESSION_ID_REQUIRED', `${frameName} requires a sessionId.`);
+    sendProtocolError(ws, 'SESSION_ID_REQUIRED', `${frameName} requires a sessionId.`, undefined, clientMessageReceipt(data));
     return null;
   }
 
@@ -198,14 +239,15 @@ function resolveSendTarget(
       ws,
       'SESSION_NOT_FOUND',
       `Session "${sessionId}" was not found. Create it via POST /api/providers/sessions first.`,
-      sessionId
+      sessionId,
+      clientMessageReceipt(data)
     );
     return null;
   }
 
   const provider = session.provider as LLMProvider;
   if (!dependencies.runtime.hasRuntime(provider)) {
-    sendProtocolError(ws, 'UNSUPPORTED_PROVIDER', `Provider "${provider}" is not available.`, sessionId);
+    sendProtocolError(ws, 'UNSUPPORTED_PROVIDER', `Provider "${provider}" is not available.`, sessionId, clientMessageReceipt(data));
     return null;
   }
 
@@ -228,7 +270,8 @@ async function dispatchRun(
   extraRuntimeOptions: AnyRecord = {},
   beforeRun?: (run: NonNullable<ReturnType<typeof chatRunRegistry.startRun>>) => void | Promise<void>,
   recordSendTime = true,
-): Promise<{ started: boolean; error: string | null }> {
+  onAccepted?: () => void,
+): Promise<{ started: boolean; error: string | null; code?: string }> {
   const provider = session.provider as LLMProvider;
   const clientOptions = (data.options ?? {}) as AnyRecord;
   const requestedPermissionMode = typeof clientOptions.permissionMode === 'string'
@@ -236,7 +279,7 @@ async function dispatchRun(
     : '';
   if (requestedPermissionMode
     && !providerCapabilitiesService.getProviderCapabilities(provider).permissionModes.includes(requestedPermissionMode)) {
-    if (ws) sendProtocolError(ws, 'INVALID_PERMISSION_MODE', 'Unsupported permission mode.', sessionId);
+    if (ws) sendProtocolError(ws, 'INVALID_PERMISSION_MODE', 'Unsupported permission mode.', sessionId, clientMessageReceipt(data));
     return { started: false, error: 'Unsupported permission mode.' };
   }
 
@@ -254,19 +297,24 @@ async function dispatchRun(
         ws,
         'RUN_IN_PROGRESS',
         `Session "${sessionId}" already has a run in progress.`,
-        sessionId
+        sessionId,
+        clientMessageReceipt(data)
       );
     }
-    return { started: false, error: 'A run is already in progress for this session.' };
+    return { started: false, error: 'A run is already in progress for this session.', code: 'RUN_IN_PROGRESS' };
   }
 
-  if (!ws) {
+  // Every admitted run has the same audience, whether started by a socket or queue.
+  {
     for (const subscriber of sessionSubscribers.get(sessionId) ?? []) {
       if (subscriber.readyState === WS_OPEN_STATE) {
         chatRunRegistry.attachConnection(sessionId, subscriber);
       }
     }
   }
+
+  run.writer.send(createNormalizedMessage({ kind: 'status', provider, sessionId, text: 'Processing…' }));
+  console.info('[ChatAdmission]', { timestamp: new Date().toISOString(), sessionId, runId: run.runId, clientMessageId: data.clientMessageId, action: ws ? 'chat.send' : 'queue-dispatch', result: 'accepted' });
 
   const command = typeof data.content === 'string' ? data.content : '';
 
@@ -279,9 +327,16 @@ async function dispatchRun(
   if (typeof clientOptions.effort === 'string' && clientOptions.effort.trim()) {
     providerModelsService.setSessionEffort(provider, sessionId, clientOptions.effort);
   }
-  if (requestedPermissionMode) {
+  // The dedicated permission endpoint owns changes to an established choice.
+  // A browser or durable queue may carry an older mode for minutes or days;
+  // dispatching that message must not overwrite the session's current setting.
+  const savedPermissionMode = sessionsDb.getSessionById(sessionId)?.permission_mode?.trim();
+  if (!savedPermissionMode && requestedPermissionMode) {
+    // Compatibility for externally imported sessions that have no choice yet.
     providerModelsService.setSessionPermissionMode(provider, sessionId, requestedPermissionMode);
   }
+  const effectivePermissionMode = savedPermissionMode || requestedPermissionMode
+    || providerCapabilitiesService.getProviderCapabilities(provider).defaultPermissionMode;
 
   const attachmentCandidates = [
     ...normalizeAttachmentDescriptors(clientOptions.images),
@@ -307,6 +362,7 @@ async function dispatchRun(
   const runtimeOptions: AnyRecord = {
     ...clientOptions,
     ...extraRuntimeOptions,
+    permissionMode: effectivePermissionMode,
     // Attachments are re-validated server-side: only direct children of the
     // global upload store may reach provider runtimes or their file tools.
     attachments: uniqueAttachments,
@@ -330,20 +386,25 @@ async function dispatchRun(
         console.error('[Chat] Failed to broadcast user message order', { sessionId, error });
       });
     }
-    if (!ws) {
-      // Detached queued turns have no browser-originated optimistic echo.
-      // Publish one before the provider starts so the executing message appears
-      // in the transcript immediately for every subscribed tab.
-      run.writer.send(createNormalizedMessage({
-        id: generateMessageId('local'), kind: 'text', role: 'user',
-        provider, sessionId, content: command,
-        images: runtimeOptions.images, files: runtimeOptions.files,
-      }));
-    }
-    await dependencies.runtime.run(provider, command, runtimeOptions, run.writer);
+    // Gateway is the sole authority for accepted input. Record it before invoking
+    // the provider so disconnect/replay and every subscribed client see it.
+    const clientMessageId = typeof data.clientMessageId === 'string' ? data.clientMessageId.trim() : '';
+    const acceptedUserMessage = createNormalizedMessage({
+      id: clientMessageId ? `local_${clientMessageId}` : generateMessageId('local'),
+      kind: 'text', role: 'user', provider, sessionId, content: command,
+      images: runtimeOptions.images, files: runtimeOptions.files,
+    });
+    run.writer.send(acceptedUserMessage);
+    // App Server enriches this same row with its native turn anchor; it must
+    // not independently emit userMessage items as a second source of input.
+    runtimeOptions.acceptedUserMessage = acceptedUserMessage;
+    const runPromise = dependencies.runtime.run(provider, command, runtimeOptions, run.writer);
+    onAccepted?.();
+    await runPromise;
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
     console.error(`[Chat] Provider runtime "${provider}" failed`, { sessionId, error: failure });
+    if (ws) sendProtocolError(ws, 'RUN_START_FAILED', failure, sessionId, clientMessageReceipt(data));
   } finally {
     // Safety net: a runtime that crashed (or resolved) without emitting its
     // terminal `complete` would otherwise leave the session stuck in
@@ -371,15 +432,34 @@ async function handleChatEditSend(
   data: AnyRecord,
   dependencies: ChatWebSocketDependencies
 ): Promise<void> {
+  const clientMessageId = typeof data.clientMessageId === 'string' ? data.clientMessageId.trim() : '';
+  const numericUserId = Number(userId);
+  const sessionIdForReceipt = readRequiredSessionId(data);
+  const hasReceipt = clientMessageId && sessionIdForReceipt && Number.isSafeInteger(numericUserId) && numericUserId > 0
+    && chatSendReceiptsDb.hasAccepted(numericUserId, sessionIdForReceipt, clientMessageId);
+  if (hasReceipt) {
+    sendJson(ws, { kind: 'chat_send_accepted', sessionId: sessionIdForReceipt, clientMessageId });
+    return;
+  }
   const resolved = resolveSendTarget(ws, data, dependencies, 'chat.edit-send');
   if (!resolved) {
     return;
   }
 
   const { sessionId, session, provider } = resolved;
+  if (hasQueuedTurnAhead(userId, sessionId)) {
+    sendProtocolError(
+      ws,
+      'QUEUED_MESSAGES_PENDING',
+      'Earlier queued messages must run before an edited message can be sent.',
+      sessionId,
+      clientMessageReceipt(data),
+    );
+    return;
+  }
   const anchorId = typeof data.anchorId === 'string' ? data.anchorId.trim() : '';
   if (!anchorId) {
-    sendProtocolError(ws, 'ANCHOR_REQUIRED', 'chat.edit-send requires the anchorId of the message being replaced.', sessionId);
+    sendProtocolError(ws, 'ANCHOR_REQUIRED', 'chat.edit-send requires the anchorId of the message being replaced.', sessionId, clientMessageReceipt(data));
     return;
   }
 
@@ -391,18 +471,19 @@ async function handleChatEditSend(
         ws,
         'EDIT_NOT_SUPPORTED',
         `Provider "${provider}" cannot replace an already-sent message.`,
-        sessionId
+        sessionId,
+        clientMessageReceipt(data)
       );
       return;
     }
     if (!anchor.found) {
-      sendProtocolError(ws, 'ANCHOR_NOT_FOUND', 'That message is no longer in the transcript.', sessionId);
+      sendProtocolError(ws, 'ANCHOR_NOT_FOUND', 'That message is no longer in the transcript.', sessionId, clientMessageReceipt(data));
       return;
     }
     resumeThroughId = anchor.resumeThroughId;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    sendProtocolError(ws, 'ANCHOR_LOOKUP_FAILED', `Could not read the transcript: ${message}`, sessionId);
+    sendProtocolError(ws, 'ANCHOR_LOOKUP_FAILED', `Could not read the transcript: ${message}`, sessionId, clientMessageReceipt(data));
     return;
   }
 
@@ -451,12 +532,19 @@ async function handleChatEditSend(
           await sessionsService.rewindSessionForEdit(sessionId, resumeThroughId);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          sendProtocolError(ws, 'EDIT_REWIND_FAILED', `Could not rewind the conversation: ${message}`, sessionId);
+          sendProtocolError(ws, 'EDIT_REWIND_FAILED', `Could not rewind the conversation: ${message}`, sessionId, clientMessageReceipt(data));
           // Ends the run before the provider is asked to continue a
           // conversation that was not rewound after all.
           throw error;
         }
       }
+    },
+    true,
+    () => {
+      if (clientMessageId && Number.isSafeInteger(numericUserId) && numericUserId > 0) {
+        chatSendReceiptsDb.recordAccepted(numericUserId, sessionId, clientMessageId);
+      }
+      if (clientMessageId) sendJson(ws, { kind: 'chat_send_accepted', sessionId, clientMessageId, userMessageId: `local_${clientMessageId}` });
     },
   );
 }
@@ -653,19 +741,20 @@ function handleChatSubscribe(
     // keeps producing events through the same writer (task progress, the
     // turn the CLI pushes when a task reports), so a tab opened during that
     // work attaches too; the registry keeps the run while the work lasts.
-    if (isProcessing || dependencies.runtime.hasBackgroundWork(sessionId)) {
+    const pendingPermissions = dependencies.runtime.getPendingApprovalsForSession(sessionId);
+    if (isProcessing || pendingPermissions.length > 0 || dependencies.runtime.hasBackgroundWork(sessionId)) {
       chatRunRegistry.attachConnection(sessionId, ws);
     }
 
-    // Pending approvals are tracked under the app session id inside the
-    // Claude runtime, so they can be looked up directly.
-    const pendingPermissions = dependencies.runtime.getPendingApprovalsForSession(sessionId);
+    // Provider prompts use the stable app session ID, including non-blocking Codex questions.
 
     sendJson(ws, {
       kind: 'chat_subscribed',
       sessionId,
       isProcessing,
       lastSeq: run?.lastSeq ?? 0,
+      runId: run?.runId,
+      runStartedAt: run?.startedAt,
       pendingPermissions,
       timestamp: new Date().toISOString(),
     });
@@ -684,8 +773,7 @@ function handleChatSubscribe(
 
 /**
  * Handles `chat.permission-response`: forwards a tool-approval decision to the
- * pending approval resolver (Claude is the only provider with interactive
- * approvals today, but the message is intentionally provider-neutral).
+ * pending provider resolver, including Codex questions that may outlive a turn.
  */
 function handlePermissionResponse(
   ws: WebSocket,
@@ -697,11 +785,13 @@ function handlePermissionResponse(
     return;
   }
 
-  const matchingRun = chatRunRegistry.listRunningRuns().find((run) =>
+  const requestedSessionId = typeof data.sessionId === 'string' ? data.sessionId : null;
+  const sessionId = requestedSessionId ?? chatRunRegistry.listRunningRuns().find((run) =>
     dependencies.runtime.getPendingApprovalsForSession(run.sessionId).some((request) =>
       typeof request === 'object' && request !== null && 'requestId' in request
-      && request.requestId === data.requestId));
-  if (!matchingRun || !ownsSession(userId, matchingRun.sessionId)) {
+      && request.requestId === data.requestId))?.sessionId;
+  if (!sessionId || !ownsSession(userId, sessionId) || !dependencies.runtime.getPendingApprovalsForSession(sessionId).some((request) =>
+    typeof request === 'object' && request !== null && 'requestId' in request && request.requestId === data.requestId)) {
     sendProtocolError(ws, 'PERMISSION_NOT_FOUND', 'Permission request not found.');
     return;
   }
@@ -755,9 +845,11 @@ export async function runDetachedChatTurn(
     interruptActiveRun?: boolean;
     /** Queued turns were ranked when the user submitted them. */
     alreadyRecordedUserSend?: boolean;
+    /** Correlation only; never interpreted as a new user instruction. */
+    queuedMessageId?: string;
   },
   dependencies: ChatWebSocketDependencies,
-): Promise<{ started: boolean; error: string | null }> {
+): Promise<{ started: boolean; error: string | null; code?: string }> {
   const session = sessionsDb.getSessionById(input.sessionId);
   if (!session || session.owner_user_id !== Number(input.userId)) {
     return { started: false, error: 'The session no longer exists.' };
@@ -771,7 +863,7 @@ export async function runDetachedChatTurn(
   const activeRun = chatRunRegistry.getRun(input.sessionId);
   if (activeRun && activeRun.status === 'running') {
     if (!input.interruptActiveRun) {
-      return { started: false, error: 'A run was already in progress for this session.' };
+      return { started: false, error: 'A run was already in progress for this session.', code: 'RUN_IN_PROGRESS' };
     }
     // Same shape as `chat.abort`: cancel the provider run and emit the
     // terminal `complete` on its behalf, so every watching client sees the
@@ -790,7 +882,7 @@ export async function runDetachedChatTurn(
     input.userId,
     input.sessionId,
     session,
-    { sessionId: input.sessionId, content: input.content, options: input.options ?? {} },
+    { sessionId: input.sessionId, clientMessageId: input.queuedMessageId, content: input.content, options: input.options ?? {} },
     dependencies,
     {},
     undefined,

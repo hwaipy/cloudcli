@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { sessionsDb } from '@/modules/database/index.js';
 import { ChatSessionWriter } from '@/modules/websocket/services/chat-session-writer.service.js';
 import { broadcastSessionUpserted } from '@/modules/websocket/services/session-upsert-broadcast.service.js';
@@ -24,6 +25,7 @@ type ChatRunStatus = 'running' | 'completed';
  *   can replay exactly the events it missed via `chat.subscribe`.
  */
 type ChatRun = {
+  runId: string;
   appSessionId: string;
   provider: LLMProvider;
   providerSessionId: string | null;
@@ -44,7 +46,7 @@ const COMPLETED_RUN_RETENTION_MS = 5 * 60 * 1000;
 
 /**
  * Upper bound on buffered events per run so a very long tool-heavy run cannot
- * grow memory unbounded. When exceeded, the oldest events are dropped —
+ * grow memory unbounded. When exceeded, oldest progress events are dropped first —
  * a reconnecting client whose `lastSeq` predates the buffer falls back to a
  * REST history refresh, which is always the authoritative source.
  */
@@ -58,6 +60,9 @@ const MAX_BUFFERED_EVENTS_PER_RUN = 5000;
  * path all consult it instead of asking each provider runtime individually.
  */
 const runs = new Map<string, ChatRun>();
+// Event cursors remain monotonic across queued runs for the lifetime of this backend.
+const sessionSequences = new Map<string, number>();
+const runCompletionListeners = new Set<(appSessionId: string) => void>();
 
 /**
  * Answers whether a completed run must stay registered a while longer. Set by
@@ -109,12 +114,15 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
     return null;
   }
 
-  run.lastSeq += 1;
+  run.lastSeq = (sessionSequences.get(run.appSessionId) ?? 0) + 1;
+  sessionSequences.set(run.appSessionId, run.lastSeq);
 
   const outbound: NormalizedMessage = {
     ...message,
     sessionId: run.appSessionId,
     seq: run.lastSeq,
+    runId: run.runId,
+    runStartedAt: run.startedAt,
   };
 
   if (message.kind === 'complete') {
@@ -128,7 +136,23 @@ function decorateAndRecordEvent(run: ChatRun, message: NormalizedMessage): Norma
 
   run.events.push(outbound);
   if (run.events.length > MAX_BUFFERED_EVENTS_PER_RUN) {
-    run.events.splice(0, run.events.length - MAX_BUFFERED_EVENTS_PER_RUN);
+    // A stale isolated history snapshot cannot restore this turn's input.
+    // Prefer dropping progress snapshots over accepted user rows on long runs.
+    const progressIndex = run.events.findIndex(event => !(event.kind === 'text' && event.role === 'user'));
+    run.events.splice(progressIndex >= 0 ? progressIndex : 0, 1);
+  }
+
+  if (message.kind === 'complete') {
+    for (const listener of runCompletionListeners) {
+      try {
+        listener(run.appSessionId);
+      } catch (error) {
+        console.error('[ChatRunRegistry] Run completion listener failed', {
+          appSessionId: run.appSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   return outbound;
@@ -179,6 +203,12 @@ function recordProviderSessionId(run: ChatRun, providerSessionId: string): void 
  * regardless of which provider runtime produced them.
  */
 export const chatRunRegistry = {
+  /** Used by the scheduled-messages module to drain the session queue on turn completion; returns an unsubscribe function. */
+  onRunCompleted(listener: (appSessionId: string) => void): () => void {
+    runCompletionListeners.add(listener);
+    return () => runCompletionListeners.delete(listener);
+  },
+
   /** Installs the check that keeps a completed run registered while its session still has background work. */
   setRetentionGuard(guard: (appSessionId: string) => boolean): void {
     retainCompletedRun = guard;
@@ -207,14 +237,15 @@ export const chatRunRegistry = {
     }
 
     const run: ChatRun = {
+      runId: randomUUID(),
       appSessionId: input.appSessionId,
       provider: input.provider,
       providerSessionId: input.providerSessionId,
       status: 'running',
-      lastSeq: 0,
+      lastSeq: sessionSequences.get(input.appSessionId) ?? 0,
       events: [],
       writer: null as unknown as ChatSessionWriter,
-      startedAt: Date.now(),
+      startedAt: Math.max(Date.now(), (existing?.startedAt ?? 0) + 1),
       completedAt: null,
     };
 
@@ -330,5 +361,7 @@ export const chatRunRegistry = {
    */
   clearAll(): void {
     runs.clear();
+    sessionSequences.clear();
+    runCompletionListeners.clear();
   },
 };

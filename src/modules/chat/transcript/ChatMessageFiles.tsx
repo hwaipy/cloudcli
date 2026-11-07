@@ -1,11 +1,14 @@
 import { DownloadIcon, FileArchiveIcon, FileCodeIcon, FileIcon, FileTextIcon } from 'lucide-react';
 import { useState } from 'react';
 
+import { useAppContextMenu } from '@/shared/ui';
+import { copyTextToClipboard, getHubResourceBackend } from '@/shared/utils';
 import { api } from '@/shared/api';
 import type { ChatAttachment } from '@/shared/types';
 
 type ChatMessageFilesProps = {
   files: ChatAttachment[];
+  projectId?: string | null;
 };
 
 const formatFileSize = (size?: number) => {
@@ -24,7 +27,9 @@ const getFileIcon = (file: ChatAttachment) => {
   return FileIcon;
 };
 
-function ChatMessageFile({ file }: { file: ChatAttachment }) {
+function ChatMessageFile({ file, projectId }: { file: ChatAttachment; projectId?: string | null }) {
+  const openContextMenu = useAppContextMenu();
+  // A download cannot be started twice while its authenticated request is in flight.
   const [isDownloading, setIsDownloading] = useState(false);
   const name = file.name || file.path?.split(/[\\/]/).pop() || 'Attached file';
   const FileTypeIcon = getFileIcon(file);
@@ -37,7 +42,7 @@ function ChatMessageFile({ file }: { file: ChatAttachment }) {
 
     setIsDownloading(true);
     try {
-      const response = await api.assets.file(storedName);
+      const response = await api.assets.file(storedName, getHubResourceBackend('project', projectId) ?? undefined);
       if (!response.ok) return;
       const blobUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
@@ -55,6 +60,11 @@ function ChatMessageFile({ file }: { file: ChatAttachment }) {
   return (
     <button
       type="button"
+      onContextMenu={(event) => openContextMenu(event, [
+        { key: 'download', label: '下载附件', disabled: !file.path || isDownloading, onSelect: download },
+        { key: 'copy-name', label: '复制文件名', onSelect: async () => { if (!await copyTextToClipboard(name)) throw new Error('复制失败'); } },
+        { key: 'copy-path', label: '复制文件路径', disabled: !file.path, onSelect: async () => { if (!await copyTextToClipboard(file.path || '')) throw new Error('复制失败'); } },
+      ])}
       onClick={() => void download()}
       disabled={!file.path || isDownloading}
       className="group/file flex w-64 max-w-full items-center gap-3 rounded-xl border border-border/50 bg-card px-3 py-2.5 text-left shadow-sm transition-colors hover:bg-accent/60 disabled:cursor-default disabled:hover:bg-card"
@@ -81,13 +91,13 @@ function ChatMessageFile({ file }: { file: ChatAttachment }) {
  * Rendered by chat's MessageComponent to list the non-image file attachments
  * on a user turn as downloadable cards.
  */
-export default function ChatMessageFiles({ files }: ChatMessageFilesProps) {
+export default function ChatMessageFiles({ files, projectId }: ChatMessageFilesProps) {
   if (!files?.length) return null;
 
   return (
     <div className="flex max-w-full flex-wrap justify-end gap-2">
       {files.map((file, index) => (
-        <ChatMessageFile key={file.path || file.name || index} file={file} />
+        <ChatMessageFile projectId={projectId} key={file.path || file.name || index} file={file} />
       ))}
     </div>
   );

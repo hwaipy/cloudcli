@@ -2,10 +2,12 @@ import fsSync, { type Dirent } from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import readline from 'node:readline';
 
 import Database from 'better-sqlite3';
 
 import { sessionsDb } from '@/modules/database/index.js';
+import { createCodexRolloutReadStream } from '@/shared/index.js';
 import type { AnyRecord } from '@/shared/types.js';
 import { AppError, getOpenCodeDatabasePath, readCodexContextUsage, readCodexSessionTotalTokens } from '@/shared/utils.js';
 
@@ -176,7 +178,8 @@ async function findCodexSessionFile(
       continue;
     }
 
-    if (entry.name.includes(providerSessionId) && entry.name.endsWith('.jsonl')) {
+    if (entry.name.includes(providerSessionId)
+      && (entry.name.endsWith('.jsonl') || entry.name.endsWith('.jsonl.zst'))) {
       return entryPath;
     }
   }
@@ -212,6 +215,43 @@ function findCodexTokenUsage(fileContent: string): TokenUsageResult | null {
     }
   }
 
+  return latestSessionTotal === undefined
+    ? null
+    : { ...emptyCodexTokenUsage(), contextUsed: null, sessionTotalTokens: latestSessionTotal };
+}
+
+async function findCodexTokenUsageInRollout(filePath: string): Promise<TokenUsageResult | null> {
+  const stream = createCodexRolloutReadStream(filePath);
+  const lineReader = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let latestSessionTotal: number | undefined;
+  let latestContextUsage: ReturnType<typeof readCodexContextUsage> = null;
+  try {
+    for await (const line of lineReader) {
+      try {
+        const entry = JSON.parse(line) as AnyRecord;
+        const tokenInfo = entry.type === 'event_msg' && entry.payload?.type === 'token_count'
+          ? entry.payload.info
+          : null;
+        if (!tokenInfo) continue;
+
+        const sessionTotal = readCodexSessionTotalTokens(tokenInfo);
+        if (sessionTotal !== undefined) latestSessionTotal = sessionTotal;
+        latestContextUsage = readCodexContextUsage(tokenInfo) ?? latestContextUsage;
+      } catch {
+        // Codex may be writing the last JSONL row while this read happens.
+      }
+    }
+  } finally {
+    lineReader.close();
+    stream.destroy();
+  }
+
+  if (latestContextUsage) {
+    return {
+      ...latestContextUsage,
+      ...(latestSessionTotal !== undefined ? { sessionTotalTokens: latestSessionTotal } : {}),
+    };
+  }
   return latestSessionTotal === undefined
     ? null
     : { ...emptyCodexTokenUsage(), contextUsed: null, sessionTotalTokens: latestSessionTotal };
@@ -473,11 +513,17 @@ export function createProviderTokenUsageService(
         const indexedFilePath = session.jsonl_path && dependencies.fileExists(session.jsonl_path)
           ? session.jsonl_path
           : null;
-        const sessionFilePath = indexedFilePath ?? await findCodexSessionFile(
-          path.join(dependencies.getHomeDirectory(), '.codex', 'sessions'),
-          providerSessionId,
-          dependencies,
-        );
+        let sessionFilePath = indexedFilePath;
+        if (!sessionFilePath) {
+          for (const storage of ['sessions', 'archived_sessions']) {
+            sessionFilePath = await findCodexSessionFile(
+              path.join(dependencies.getHomeDirectory(), '.codex', storage),
+              providerSessionId,
+              dependencies,
+            );
+            if (sessionFilePath) break;
+          }
+        }
 
         if (!sessionFilePath) {
           throw new AppError(`Codex session file for "${sessionId}" was not found.`, {
@@ -486,11 +532,13 @@ export function createProviderTokenUsageService(
           });
         }
 
+        if (sessionFilePath.endsWith('.jsonl.zst')) {
+          return await findCodexTokenUsageInRollout(sessionFilePath) ?? emptyCodexTokenUsage();
+        }
+
         const tail = await dependencies.readTextFileTail(sessionFilePath, TOKEN_USAGE_TAIL_BYTES);
         const tailUsage = findCodexTokenUsage(tail.content);
-        if (tailUsage || tail.isComplete) {
-          return tailUsage ?? emptyCodexTokenUsage();
-        }
+        if (tailUsage || tail.isComplete) return tailUsage ?? emptyCodexTokenUsage();
 
         // A tail this large with no token_count row is pathological, but the
         // whole file is still authoritative when it happens.

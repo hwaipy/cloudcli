@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next';
 import { ArrowDownIcon } from 'lucide-react';
 
+import { QuestionAnswerContext } from '@/modules/chat/context/QuestionAnswerContext';
+
 import { useTasksSettings } from '@/modules/task-master';
 import { usePaletteOpsRegister } from '@/modules/command-palette';
 import { useWebSocket } from '@/shared/context/WebSocketContext';
@@ -22,6 +24,7 @@ import { useChatSessionState } from '@/modules/chat/hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '@/modules/chat/hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '@/modules/chat/hooks/useChatComposerState';
 import { useSessionStore } from '@/modules/chat/hooks/useSessionStore';
+import { SESSION_MESSAGES_PAGE_SIZE } from '@/modules/chat/utils/sessionMessagePagination';
 import {
   useProcessingSessions,
   useSessionProtectionActions,
@@ -31,6 +34,10 @@ import ChatComposer from '@/modules/chat/composer/ChatComposer';
 import CommandResultModal from '@/modules/chat/modals/CommandResultModal';
 
 type ChatInterfaceProps = {
+  /** Workspace-owned history survives keyed chat/composer remounts. */
+  historyStore?: ReturnType<typeof useSessionStore>;
+  /** Invalidates React.memo when the workspace-owned cache is updated. */
+  historyRevision?: number;
   isActive: boolean;
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
@@ -56,6 +63,7 @@ type ChatInterfaceProps = {
  * composer state that ChatMessagesPane and ChatComposer render.
  */
 function ChatInterface({
+  historyStore,
   isActive,
   selectedProject,
   selectedSession,
@@ -85,7 +93,8 @@ function ChatInterface({
     getSessionActivity,
   } = useSessionProtectionActions();
 
-  const sessionStore = useSessionStore();
+  const localSessionStore = useSessionStore();
+  const sessionStore = historyStore ?? localSessionStore;
   const streamTimerRef = useRef<number | null>(null);
   const accumulatedStreamRef = useRef('');
   // When each session's `chat.subscribe` was last sent; idle acks older than
@@ -150,6 +159,8 @@ function ChatInterface({
     currentSessionId,
     setCurrentSessionId,
     isLoadingSessionMessages,
+    sessionHistoryStatus,
+    sessionHistoryErrorCode,
     isLoadingMoreMessages,
     hasMoreMessages,
     totalMessages,
@@ -171,7 +182,7 @@ function ChatInterface({
     scrollContainerRef,
     scrollToBottom,
     scrollToBottomAndReset,
-    handleScroll,
+    handleScrollIntent,
     requestLatestMessages,
   } = useChatSessionState({
     isActive,
@@ -188,6 +199,15 @@ function ChatInterface({
     lastSeqRef,
     sessionStore,
   });
+
+  const retrySessionHistory = useCallback(() => {
+    if (!selectedSession) return;
+    void sessionStore.fetchFromServer(selectedSession.id, {
+      limit: SESSION_MESSAGES_PAGE_SIZE,
+      offset: 0,
+      canRequest: () => isActive,
+    });
+  }, [isActive, selectedSession, sessionStore]);
 
   // Brand-new conversation: the composer allocated a stable session id via
   // the session gateway before the first send. Record it locally and put it
@@ -232,6 +252,7 @@ function ChatInterface({
     deleteQueuedDraft,
     reorderQueuedDraft,
     steerQueuedDraft,
+    answerQuestion,
     handleVoiceTranscript,
     handleInputChange,
     handleKeyDown,
@@ -358,7 +379,7 @@ function ChatInterface({
    * then opens it. The session being viewed is left exactly as it was.
    */
   const handleForkFromMessage = useCallback(async (message: ChatMessage) => {
-    const anchorId = message.transcriptAnchorId;
+    const anchorId = message.forkAnchorId;
     const sourceSessionId = selectedSession?.id;
     if (!anchorId || !sourceSessionId) return;
 
@@ -438,6 +459,7 @@ function ChatInterface({
 
 
   return (
+    <QuestionAnswerContext.Provider value={answerQuestion}>
     <PermissionContext.Provider value={permissionContextValue}>
       <div className="flex h-full min-h-0 flex-col">
         <MarkdownWorkspaceContext.Provider value={markdownWorkspaceValue}>
@@ -449,9 +471,12 @@ function ChatInterface({
               // hidden while more pages exist — so a short transcript is often not
               // scrollable at all and never emits `scroll`. Wheel and touch are
               // then the only way to reach the top pager or the "load all" overlay.
-              onWheel={handleScroll}
-              onTouchMove={handleScroll}
+              onWheel={handleScrollIntent}
+              onTouchMove={handleScrollIntent}
               isLoadingSessionMessages={isLoadingSessionMessages}
+              sessionHistoryStatus={sessionHistoryStatus}
+              sessionHistoryErrorCode={sessionHistoryErrorCode}
+              onRetrySessionHistory={retrySessionHistory}
               activity={hasActivityIndicator ? sessionActivity : null}
               chatMessages={chatMessages}
               selectedSession={selectedSession}
@@ -599,6 +624,7 @@ function ChatInterface({
         onSelectProviderModel={selectProviderModel}
       />
     </PermissionContext.Provider>
+    </QuestionAnswerContext.Provider>
   );
 }
 

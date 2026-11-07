@@ -4,7 +4,7 @@ import type { AuthenticatedWebSocketRequest } from '@/shared/types.js';
 
 type WebSocketAuthDependencies = {
   isPlatform: boolean;
-  authenticateWebSocket: (token: string | null) => {
+  authenticateWebSocket: (token: string | null, hubAssertion?: string | null) => {
     id?: string | number;
     userId?: string | number;
     username?: string;
@@ -47,7 +47,11 @@ export function verifyWebSocketClient(
     request.headers.authorization?.split(' ')[1] ??
     null;
 
-  const user = dependencies.authenticateWebSocket(token);
+  const hubAssertion = request.headers['x-cloudcli-hub-identity'];
+  const user = dependencies.authenticateWebSocket(
+    token,
+    typeof hubAssertion === 'string' ? hubAssertion : null,
+  );
   if (!user) {
     console.log('[WARN] WebSocket authentication failed');
     return false;

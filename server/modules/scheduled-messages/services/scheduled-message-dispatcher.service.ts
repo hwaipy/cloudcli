@@ -13,9 +13,12 @@ import { readQueuedChatMessage } from '@/shared/utils.js';
  * would buy precision nobody asked for.
  */
 const POLL_INTERVAL_MS = 30_000;
+const QUEUED_MESSAGE_POLL_INTERVAL_MS = 1_000;
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let queuedMessagePollTimer: ReturnType<typeof setInterval> | null = null;
 let dispatchInFlight = false;
+let unsubscribeFromRunCompletion: (() => void) | null = null;
 
 function readOptions(raw: string): Record<string, unknown> {
   try {
@@ -45,13 +48,14 @@ async function sendClaimedQueuedMessage(
       content: message.content,
       options: { ...message.options, attachments: message.attachments },
       alreadyRecordedUserSend: true,
+      queuedMessageId: message.id,
     },
     { runtime },
   );
 
   // The registry check and run reservation are separate operations. If a run
   // wins that tiny race, put the turn back so the next poll tries again.
-  if (!result.started && result.error === 'A run was already in progress for this session.') {
+  if (!result.started && (result.code === 'RUN_IN_PROGRESS' || result.error === 'A run was already in progress for this session.')) {
     sessionDraftsDb.restoreQueuedMessage(candidate);
     return false;
   }
@@ -73,8 +77,9 @@ function isSessionBusy(sessionId: string, runtime: ProviderRuntimeGateway): bool
 }
 
 /** Sends every persisted queued turn whose session is currently idle. */
-export async function dispatchQueuedMessages(runtime: ProviderRuntimeGateway): Promise<number> {
-  const candidates = sessionDraftsDb.listQueuedMessages();
+export async function dispatchQueuedMessages(runtime: ProviderRuntimeGateway, sessionId?: string): Promise<number> {
+  const candidates = sessionDraftsDb.listQueuedMessages()
+    .filter((candidate) => !sessionId || candidate.sessionId === sessionId);
   let claimed = 0;
 
   await Promise.all(candidates.map(async (initial) => {
@@ -173,11 +178,11 @@ export async function dispatchDueScheduledMessages(
  * poll after it comes back, rather than being skipped.
  */
 export function initializeScheduledMessageDispatcher(runtime: ProviderRuntimeGateway): void {
-  if (pollTimer) {
+  if (pollTimer || queuedMessagePollTimer) {
     return;
   }
 
-  const poll = () => {
+  const pollScheduled = () => {
     // A pass that overruns the interval must not be started again underneath
     // itself; the claim is transactional but the runs are not.
     if (dispatchInFlight) {
@@ -185,7 +190,6 @@ export function initializeScheduledMessageDispatcher(runtime: ProviderRuntimeGat
     }
     dispatchInFlight = true;
     void dispatchDueScheduledMessages(runtime)
-      .then(() => dispatchQueuedMessages(runtime))
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error('[ScheduledMessages] Dispatch pass failed', { error: message });
@@ -195,12 +199,35 @@ export function initializeScheduledMessageDispatcher(runtime: ProviderRuntimeGat
       });
   };
 
-  pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+  const pollQueued = () => {
+    void dispatchQueuedMessages(runtime)
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[QueuedMessages] Dispatch pass failed', { error: message });
+      });
+  };
+
+  // A completed foreground turn is the usual point where a queue becomes
+  // runnable. Trigger that session immediately; the short poll also recovers
+  // queues after background work ends or another dispatcher pass races it.
+  unsubscribeFromRunCompletion = chatRunRegistry.onRunCompleted((sessionId) => {
+    void dispatchQueuedMessages(runtime, sessionId)
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[QueuedMessages] Completion-triggered dispatch failed', { sessionId, error: message });
+      });
+  });
+
+  pollTimer = setInterval(pollScheduled, POLL_INTERVAL_MS);
   // Never keep the process alive just to poll for scheduled messages.
   pollTimer.unref?.();
+  queuedMessagePollTimer = setInterval(pollQueued, QUEUED_MESSAGE_POLL_INTERVAL_MS);
+  // Never keep the process alive just to recover queued messages.
+  queuedMessagePollTimer.unref?.();
 
   // Catch up on anything that came due while the server was not running.
-  poll();
+  pollScheduled();
+  pollQueued();
 }
 
 export function closeScheduledMessageDispatcher(): void {
@@ -208,4 +235,10 @@ export function closeScheduledMessageDispatcher(): void {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+  if (queuedMessagePollTimer) {
+    clearInterval(queuedMessagePollTimer);
+    queuedMessagePollTimer = null;
+  }
+  unsubscribeFromRunCompletion?.();
+  unsubscribeFromRunCompletion = null;
 }

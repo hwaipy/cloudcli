@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import test from 'node:test';
+import { createZstdCompress } from 'node:zlib';
 
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import { CodexSessionSynchronizer } from '@/modules/providers/list/codex/codex-session-synchronizer.provider.js';
@@ -80,6 +83,13 @@ const writeCodexTranscript = async (
   return filePath;
 };
 
+async function compressTranscript(filePath: string): Promise<string> {
+  const compressedPath = `${filePath}.zst`;
+  await pipeline(createReadStream(filePath), createZstdCompress(), createWriteStream(compressedPath));
+  await rm(filePath);
+  return compressedPath;
+}
+
 test('Codex synchronizer preserves the title assigned when CloudCLI creates a session', { concurrency: false }, async () => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'codex-session-sync-app-'));
   const workspacePath = path.join(tempRoot, 'workspace');
@@ -139,6 +149,48 @@ test('Codex synchronizer skips sub-agent rollout files', { concurrency: false },
       assert.equal(processed, 1);
       assert.ok(sessionsDb.getSessionById('codex-parent-1'));
       assert.equal(sessionsDb.getSessionById('codex-subagent-1'), null);
+    });
+  } finally {
+    restoreHomeDir();
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('Codex synchronizer imports compressed active and archived rollouts and refreshes appended titles', { concurrency: false }, async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'codex-session-sync-zstd-'));
+  const workspacePath = path.join(tempRoot, 'workspace');
+  await mkdir(workspacePath, { recursive: true });
+  const restoreHomeDir = patchHomeDir(tempRoot);
+
+  try {
+    const activePath = await writeCodexTranscript(tempRoot, 'codex-zstd-active', workspacePath);
+    await compressTranscript(activePath);
+    const archivedDirectory = path.join(tempRoot, '.codex', 'archived_sessions');
+    await mkdir(archivedDirectory, { recursive: true });
+    const archivedPath = path.join(archivedDirectory, 'rollout-codex-zstd-archived.jsonl');
+    await writeFile(archivedPath, `${JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'codex-zstd-archived', cwd: workspacePath },
+    })}\n`);
+    await compressTranscript(archivedPath);
+    await writeFile(path.join(tempRoot, '.codex', 'session_index.jsonl'), [
+      JSON.stringify({ id: 'codex-zstd-active', thread_name: 'Old provider title' }),
+      JSON.stringify({ id: 'codex-zstd-active', thread_name: 'VQCC' }),
+    ].join('\n'));
+
+    await withIsolatedDatabase(async () => {
+      sessionsDb.createSession(
+        'codex-zstd-active', 'codex', workspacePath, 'Old provider title',
+        '2026-07-07T00:00:00.000Z', '2026-07-07T00:00:00.000Z', `${activePath}.zst`,
+      );
+      const processed = await new CodexSessionSynchronizer().synchronize();
+      assert.equal(processed, 2);
+      assert.equal(sessionsDb.getSessionById('codex-zstd-active')?.jsonl_path, `${activePath}.zst`);
+      assert.equal(sessionsDb.getSessionById('codex-zstd-active')?.custom_name, 'VQCC');
+      assert.equal(Boolean(sessionsDb.getSessionById('codex-zstd-active')?.isArchived), false);
+      const archivedSession = sessionsDb.getSessionById('codex-zstd-archived');
+      assert.ok(archivedSession);
+      assert.equal(Boolean(archivedSession.isArchived), true);
     });
   } finally {
     restoreHomeDir();
@@ -655,4 +707,48 @@ test('Codex history reports current context, not cumulative thread tokens', { co
     restoreHomeDir();
     await rm(tempRoot, { recursive: true, force: true });
   }
+});
+
+
+test('incremental scan keeps the newest same-thread continuation indexed', async () => {
+  await withIsolatedDatabase(async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'codex-segment-index-'));
+    const restore = patchHomeDir(home);
+    try {
+      const id = '01a0a38e-00c7-7913-a4d4-9df1c65d6882';
+      const base = await writeCodexTranscript(home, id, home, 'before');
+      const segment = path.join(path.dirname(base), `rollout-${id}_01a0d0d6-800b-7bb3-a976-1ba90825ee2f.jsonl`);
+      await writeFile(segment, JSON.stringify({ type: 'session_meta', payload: { id, cwd: home } }) + '\n');
+      await writeFile(path.join(home, '.codex', 'session_index.jsonl'), JSON.stringify({ id, thread_name: 'Segment' }) + '\n');
+      sessionsDb.createSession(id, 'codex', home, 'Segment', undefined, undefined, segment);
+      await new CodexSessionSynchronizer().synchronize(new Date(Date.now() + 60000));
+      assert.equal(sessionsDb.getSessionByProviderSessionId(id)?.jsonl_path, segment);
+    } finally {
+      restore();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+test('async AgentMessage questions survive native history parsing and live normalization', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-async-questions-'));
+  const restore = patchHomeDir(root);
+  const file = path.join(root, '.codex/sessions/2026/11/04/rollout-async-question.jsonl');
+  const questions = [{ title: 'Can you answer?', options: ['Yes', 'No'] }];
+  const text = 'Can you answer?\n- Yes\n- No';
+  try {
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, [
+      { type: 'session_meta', payload: { id: 'async-question', cwd: root } },
+      { type: 'event_msg', payload: { type: 'item_completed', item: { type: 'AgentMessage', id: 'call-async', content: [{ type: 'Text', text }], delivery: 'async', questions } } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }], phase: 'final_answer' } },
+    ].map((row) => JSON.stringify(row)).join('\n') + '\n');
+    await withIsolatedDatabase(async () => {
+      sessionsDb.createSession('async-app', 'codex', root, 'Test', new Date().toISOString(), new Date().toISOString(), file);
+      const provider = new CodexSessionsProvider();
+      const history = await provider.fetchHistory('async-app');
+      assert.deepEqual(history.messages.find((message) => message.content === text)?.codexQuestions, questions);
+      assert.deepEqual(provider.normalizeMessage({ type: 'item', itemType: 'agent_message', itemId: 'call-async', message: { role: 'assistant', content: text }, codexQuestions: questions }, 'async-app')[0].codexQuestions, questions);
+    });
+  } finally { restore(); await rm(root, { recursive: true, force: true }); }
 });

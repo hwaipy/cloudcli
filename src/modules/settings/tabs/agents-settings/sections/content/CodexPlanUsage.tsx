@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { api, readApiJson } from '@/shared/api';
+import { formatDateTime24 } from '@/shared/utils';
 
 type UsageWindow = {
   usedPercent: number;
@@ -58,7 +59,7 @@ export function CodexPlanUsage() {
 
   const displayDate = (seconds: number | null) => seconds === null
     ? '—'
-    : new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }).format(seconds * 1000);
+    : formatDateTime24(seconds * 1000, { dateStyle: 'medium', timeStyle: 'short' }, i18n.language);
   const displayDuration = (minutes: number | null) => {
     if (minutes === null) return null;
     if (minutes % 1440 === 0) return `${minutes / 1440} ${t('usage.days', { defaultValue: 'days' })}`;
@@ -93,7 +94,7 @@ export function CodexPlanUsage() {
           {t('usage.resetCredits', { count: usage.resetCreditsAvailable, defaultValue: 'Available resets: {{count}}' })}
         </div>
       )}
-      {usage && <div className="mt-2 text-xs text-muted-foreground">{t('usage.checkedAt', { defaultValue: 'Checked' })}: {new Intl.DateTimeFormat(i18n.language, { timeStyle: 'short' }).format(new Date(usage.fetchedAt))}{error ? ` · ${t('usage.refreshFailed', { defaultValue: 'Refresh failed' })}` : ''}</div>}
+      {usage && <div className="mt-2 text-xs text-muted-foreground">{t('usage.checkedAt', { defaultValue: 'Checked' })}: {formatDateTime24(usage.fetchedAt, { timeStyle: 'short' }, i18n.language)}{error ? ` · ${t('usage.refreshFailed', { defaultValue: 'Refresh failed' })}` : ''}</div>}
     </section>
   );
 }

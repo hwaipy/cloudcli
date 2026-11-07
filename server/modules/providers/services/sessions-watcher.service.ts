@@ -4,6 +4,7 @@ import { promises as fsPromises } from 'node:fs';
 
 import chokidar, { type FSWatcher } from 'chokidar';
 
+import { isolationStateRoot } from '@/modules/project-isolation/index.js';
 import { sessionSynchronizerService } from '@/modules/providers/services/session-synchronizer.service.js';
 import { broadcastSessionUpsertedBatch } from '@/modules/websocket/index.js';
 import type { LLMProvider } from '@/shared/types.js';
@@ -11,6 +12,7 @@ import type { LLMProvider } from '@/shared/types.js';
 type WatcherEventType = 'add' | 'change';
 
 const PROVIDER_WATCH_PATHS: Array<{ provider: LLMProvider; rootPath: string }> = [
+  { provider: 'codex', rootPath: isolationStateRoot() },
   {
     provider: 'claude',
     rootPath: path.join(os.homedir(), '.claude', 'projects'),
@@ -22,6 +24,10 @@ const PROVIDER_WATCH_PATHS: Array<{ provider: LLMProvider; rootPath: string }> =
   {
     provider: 'codex',
     rootPath: path.join(os.homedir(), '.codex', 'sessions'),
+  },
+  {
+    provider: 'codex',
+    rootPath: path.join(os.homedir(), '.codex', 'archived_sessions'),
   },
   {
     provider: 'opencode',
@@ -110,7 +116,7 @@ function isWatcherTargetFile(provider: LLMProvider, filePath: string): boolean {
     return path.basename(filePath) === 'opencode.db';
   }
 
-  return filePath.endsWith('.jsonl');
+  return filePath.endsWith('.jsonl') || (provider === 'codex' && filePath.endsWith('.jsonl.zst'));
 }
 
 function clearPendingWatcherFlushTimer(): void {

@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import test from 'node:test';
+import { createZstdCompress } from 'node:zlib';
 
 import { closeConnection, initializeDatabase, sessionsDb } from '@/modules/database/index.js';
 import { CodexSessionsProvider } from '@/modules/providers/list/codex/codex-sessions.provider.js';
@@ -57,12 +60,22 @@ async function reference(id: string, file: string): Promise<Row> {
   } };
 }
 
+async function compressRollout(source: string): Promise<string> {
+  const compressed = `${source}.zst`;
+  await pipeline(createReadStream(source), createZstdCompress(), createWriteStream(compressed));
+  return compressed;
+}
+
 test('metadata-only Codex forks show frozen inherited prompts, replies and edit anchors', async () => {
   await withRollouts(async (root) => {
     const source = await rollout(root, 'source', turn('turn-a', '한글 원본'));
-    await rollout(root, 'fork', [], await reference('source', source));
-    // A fork remains a snapshot while the source keeps receiving turns.
+    const snapshot = await reference('source', source);
+    // Append before compression so the source remains a complete transcript.
+    // The frozen byte boundary must still exclude these later turns.
     await appendFile(source, encode(turn('turn-later', 'must stay on the source')));
+    await compressRollout(source);
+    await rm(source);
+    await rollout(root, 'fork', [], snapshot);
     const provider = new CodexSessionsProvider();
     const history = await provider.fetchHistory('fork');
     assert.deepEqual(history.messages.map((message) => message.content), ['한글 원본', 'answer: 한글 원본']);
@@ -122,7 +135,10 @@ test('unindexed and archived history sources are resolved from native storage', 
     await rollout(root, 'fork', [], await reference('source', source));
     const archived = path.join(root, '.codex', 'archived_sessions');
     await mkdir(archived);
-    await writeFile(path.join(archived, 'rollout-source.jsonl'), await readFile(source));
+    const archivedSource = path.join(archived, 'rollout-source.jsonl');
+    await writeFile(archivedSource, await readFile(source));
+    await compressRollout(archivedSource);
+    await rm(archivedSource);
     await rm(source);
     const history = await new CodexSessionsProvider().fetchHistory('fork');
     assert.equal(history.messages[0].content, 'still available');
@@ -151,5 +167,26 @@ test('missing and invalid inherited history fail visibly instead of returning an
     const cyclic = await rollout(root, 'cycle', [], { history_base: { thread_id: 'cycle', end_byte_offset: 1 } });
     assert.ok(cyclic);
     await assert.rejects(provider.fetchHistory('cycle'), { code: 'CODEX_HISTORY_SOURCE_INVALID' });
+  });
+});
+
+
+test('same-thread paginated continuation resolves its compressed predecessor', async () => {
+  await withRollouts(async (root) => {
+    const source = await rollout(root, 'same-thread', turn('turn-before', 'before'));
+    const snapshot = await reference('same-thread', source);
+    await compressRollout(source);
+    await rm(source);
+    const continuation = path.join(path.dirname(source), 'rollout-same-thread_segment.jsonl');
+    await writeFile(continuation, encode([
+      { type: 'session_meta', payload: { id: 'same-thread', cwd: root, ...snapshot } },
+      ...turn('turn-after', 'after'),
+    ]));
+    const compressed = await compressRollout(continuation);
+    await rm(continuation);
+    sessionsDb.createSession('same-thread', 'codex', root, 'same-thread', undefined, undefined, compressed);
+    const history = await new CodexSessionsProvider().fetchHistory('same-thread');
+    assert.deepEqual(history.messages.map((message) => message.content),
+      ['before', 'answer: before', 'after', 'answer: after']);
   });
 });

@@ -1251,7 +1251,7 @@ export class ClaudeSessionsProvider implements IProviderSessions {
     const anchorId = typeof raw?.uuid === 'string' && raw.uuid ? raw.uuid : null;
     if (anchorId) {
       for (const message of messages) {
-        if (message.role === 'user') {
+        if (message.role === 'user' || (message.role === 'assistant' && message.kind === 'text')) {
           message.transcriptAnchorId = anchorId;
         }
       }

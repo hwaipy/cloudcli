@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
@@ -39,11 +40,14 @@ type SidebarProjectSessionsProps = {
   t: TFunction;
 };
 
+// The half-visible row and its trigger derive from the same preview size.
+const PREVIEW_SESSION_COUNT = 3;
+
 function SessionListSkeleton() {
   return (
     <>
       {Array.from({ length: 3 }).map((_, index) => (
-        <div key={index} className="flex h-9 items-center gap-2 rounded-lg px-2">
+        <div key={index} className="flex h-[1.8rem] items-center gap-2 rounded-lg px-2">
           <div className="h-3 w-3 animate-pulse rounded-full bg-muted" />
           <div className="h-3 animate-pulse rounded bg-muted" style={{ width: `${60 + index * 15}%` }} />
         </div>
@@ -83,10 +87,26 @@ export default function SidebarProjectSessions({
   t,
 }: SidebarProjectSessionsProps) {
   const isCompact = useCompactSidebar();
+  // A large project's first opening is a preview; only an explicit click reveals all rows.
+  const [fullyExpanded, setFullyExpanded] = useState(false);
+  // Attempt each page once automatically, avoiding a retry loop on a failed page.
+  const lastAutoLoadCount = useRef<number | null>(null);
+  const hasPreview = sessions.length > PREVIEW_SESSION_COUNT || (sessions.length > 0 && hasMoreSessions);
+  const isPreview = hasPreview && !fullyExpanded && selectedSessionIds === null;
+  useEffect(() => {
+    if (!isExpanded || !initialSessionsLoaded || !hasMoreSessions || isLoadingMoreSessions || sessions.length === 0) return;
+    if (!fullyExpanded && sessions.length >= PREVIEW_SESSION_COUNT + 1) return;
+    if (lastAutoLoadCount.current === sessions.length) return;
+    lastAutoLoadCount.current = sessions.length;
+    onLoadMoreSessions(project.projectId);
+  }, [isExpanded, initialSessionsLoaded, hasMoreSessions, isLoadingMoreSessions, fullyExpanded, sessions.length, onLoadMoreSessions, project.projectId]);
 
-  if (!isExpanded) {
-    return null;
-  }
+  useEffect(() => {
+    if (isExpanded) return;
+    // Reset the preview after the closing transition, without shrinking its contents mid-animation.
+    const timer = window.setTimeout(() => setFullyExpanded(false), 300);
+    return () => window.clearTimeout(timer);
+  }, [isExpanded]);
 
   const hasSessions = sessions.length > 0;
   const isSelecting = selectedSessionIds !== null;
@@ -114,7 +134,11 @@ export default function SidebarProjectSessions({
       : t('sessions.selectAll');
 
   return (
-    <div className="ml-3 space-y-0.5 border-l border-border/60 pl-2">
+    <div data-project-session-transition aria-hidden={!isExpanded} {...(!isExpanded ? { inert: '' } : {})}
+      className="grid transition-[grid-template-rows,opacity] duration-300 ease-in-out motion-reduce:transition-none"
+      style={{ gridTemplateRows: isExpanded ? '1fr' : '0fr', opacity: isExpanded ? 1 : 0 }}>
+    <div className="min-h-0 overflow-hidden">
+    <div className="group/project-sessions relative ml-3 space-y-0.5 border-l border-border/60 pl-2">
       {isSelecting && (
         <div className={cn('space-y-1', isCompact && 'px-3')}>
           {/* Wraps rather than clips: at the narrowest sidebar width a long
@@ -166,7 +190,12 @@ export default function SidebarProjectSessions({
         </div>
       ) : (
         <>
-          {sessions.map((session) => (
+          <div data-session-expansion={isPreview ? 'preview' : 'full'}
+            className="-ml-2 grid min-w-0 grid-cols-1 auto-rows-[2rem] gap-[0.1rem] overflow-hidden pl-2 transition-[max-height] duration-300 ease-in-out motion-reduce:transition-none"
+            style={isPreview ? { maxHeight: `calc(${PREVIEW_SESSION_COUNT + 0.5} * 2.1rem)`, maskImage: 'linear-gradient(to bottom, black calc(100% - 1.6rem), transparent 100%)' } : { maxHeight: `${sessions.length * 2.1}rem` }}>
+          {(isPreview ? sessions.slice(0, PREVIEW_SESSION_COUNT + 1) : sessions).map((session, index) => (
+            <div key={session.id} className="min-w-0" {...(isPreview && index === PREVIEW_SESSION_COUNT ? { inert: '' } : {})}>
+
             <SidebarSessionItem
               key={session.id}
               project={project}
@@ -190,9 +219,16 @@ export default function SidebarProjectSessions({
               onToggleSessionSelected={onToggleSessionSelected}
               t={t}
             />
+            </div>
           ))}
+          </div>
+          {isPreview && !isSelecting && <button type="button" data-preview-expand-zone
+            aria-label="展开全部会话" aria-expanded={false}
+            onClick={() => setFullyExpanded(true)}
+            className="absolute bottom-0 left-3 right-1 z-20 h-[1.05rem] rounded-lg bg-transparent transition-colors duration-150 hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />}
 
-          {hasMoreSessions && (
+          {hasMoreSessions && !isPreview && (
             <Button
               variant="ghost"
               size="sm"
@@ -205,6 +241,8 @@ export default function SidebarProjectSessions({
           )}
         </>
       )}
+    </div>
+    </div>
     </div>
   );
 }

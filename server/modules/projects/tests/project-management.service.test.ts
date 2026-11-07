@@ -115,3 +115,21 @@ test('createProject returns archived reuse outcome when archived row is reused',
   assert.equal(result.outcome, 'reactivated_archived');
   assert.equal(result.project.isArchived, true);
 });
+
+test('strict container failure rolls back a newly registered project without falling back to host execution', async () => {
+  const operations: string[] = [];
+  await assert.rejects(createProject({ projectPath: '/workspace/my-project', strictFileIsolation: true }, {
+    validatePath: async () => ({ valid: true, resolvedPath: '/workspace/my-project' }),
+    ensureWorkspaceDirectory: async () => undefined,
+    preflightIsolation: async () => { operations.push('preflight'); },
+    persistProjectPath: (_path, _name, _owner, strict) => {
+      assert.equal(strict, true); operations.push('persist');
+      return { outcome: 'created', project: { ...projectRow, strict_file_isolation: 1 } };
+    },
+    getProjectByPath: () => projectRow,
+    prepareContainer: async () => { operations.push('container'); throw new Error('Docker unavailable'); },
+    removeIsolation: async () => { operations.push('cleanup'); },
+    deleteCreatedProject: () => { operations.push('rollback'); },
+  }), /Docker unavailable/);
+  assert.deepEqual(operations, ['preflight', 'persist', 'container', 'cleanup', 'rollback']);
+});

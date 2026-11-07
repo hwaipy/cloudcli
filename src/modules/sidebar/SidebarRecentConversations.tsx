@@ -2,9 +2,10 @@ import { Loader2, MessageSquare } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import type { TFunction } from 'i18next';
 
-import { Button, LLMProviderLogo, Tooltip } from '@/shared/ui';
-import { cn } from '@/shared/utils';
+import { Button, LLMProviderLogo, Tooltip, useAppContextMenu } from '@/shared/ui';
+import { cn, copyTextToClipboard, getSessionPageUrl } from '@/shared/utils';
 import type { ProjectSession, RecentConversationListItem, SessionRowActions } from '@/shared/types';
+import { useSessionForkingProviders } from '@/shared/hooks/useProviderCapabilities';
 import { formatCompactAge } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import SessionOptions from '@/modules/sidebar/SessionOptions';
 
@@ -64,6 +65,8 @@ export default function SidebarRecentConversations({
   onRetry,
   t,
 }: SidebarRecentConversationsProps) {
+  const openContextMenu = useAppContextMenu();
+  const forkableProviders = useSessionForkingProviders();
   if (isLoading && conversations.length === 0) {
     return <RecentConversationSkeleton />;
   }
@@ -129,13 +132,20 @@ export default function SidebarRecentConversations({
           };
 
           return (
-            <div key={conversation.sessionId} className="group relative">
+            <div key={conversation.sessionId} className="group relative" onContextMenu={(event) => openContextMenu(event, [
+              { key: 'open', label: '打开会话', onSelect: () => onConversationSelect(conversation.projectId, conversation.sessionId, conversation.provider) },
+              ...(conversation.projectId ? [{ key: 'rename', label: '重命名会话', onSelect: () => sessionActions.onStartEditingSession(conversation.projectId!, conversation.sessionId, conversation.sessionTitle) }] : []),
+              { key: 'copy-title', label: '复制会话名称', onSelect: async () => { if (!await copyTextToClipboard(conversation.sessionTitle)) throw new Error('复制失败'); } },
+              { key: 'copy-link', label: '复制会话链接', onSelect: async () => { if (!await copyTextToClipboard(getSessionPageUrl(conversation.sessionId))) throw new Error('复制失败'); } },
+              ...(sessionActions.onForkSession && forkableProviders.has(conversation.provider) ? [{ key: 'fork', label: '分叉会话', disabled: isProcessing, onSelect: () => sessionActions.onForkSession?.({ id: conversation.sessionId, __provider: conversation.provider, projectId: conversation.projectId ?? undefined }) }] : []),
+              { key: 'delete', label: '归档或删除会话…', disabled: isProcessing, isDanger: true, showDividerBefore: true, onSelect: () => sessionActions.onDeleteSession(conversation.sessionId, conversation.sessionTitle) },
+            ])}>
               <a
-                href={`/session/${conversation.sessionId}`}
+                href={getSessionPageUrl(conversation.sessionId)}
                 onClick={handleClick}
                 data-testid="recent-conversation-row"
                 className={cn(
-                  'flex h-9 min-w-0 items-center gap-2 rounded-lg bg-transparent px-2 py-1 pr-11 text-left transition-colors',
+                  'flex h-[1.8rem] min-w-0 items-center gap-2 rounded-lg bg-transparent px-2 py-1 pr-11 text-left transition-colors',
                   isSelected
                     ? 'bg-accent/80 text-foreground'
                     : 'text-foreground hover:bg-accent/60',

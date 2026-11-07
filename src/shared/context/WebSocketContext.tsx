@@ -1,7 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
+import { receiveSessionInputEvent, scopeSessionInputStatus } from '@/shared/context/SessionInputStatus';
+
 import { useAuth } from '@/modules/auth';
-import { IS_PLATFORM, withHubBackendUrl } from '@/shared/utils';
+import { IS_PLATFORM, getHubBackendId, getHubRequestBackend, isHubRuntime, registerHubResourceBackend, withHubBackendUrl } from '@/shared/utils';
 import { expireAuthSession, isAuthTokenExpired } from '@/shared/authToken';
 import type { ServerEvent } from '@/shared/types';
 
@@ -63,6 +65,8 @@ const buildWebSocketUrl = (token: string | null) => {
 
 const useWebSocketProviderState = (): WebSocketContextType => {
   const wsRef = useRef<WebSocket | null>(null);
+  const backendSocketsRef = useRef(new Map<string, WebSocket>());
+  const defaultBackendRef = useRef<string | null>(getHubBackendId());
   const unmountedRef = useRef(false); // Track if component is unmounted
   const hasConnectedRef = useRef(false); // Track if we've ever connected (to detect reconnects)
   /**
@@ -78,7 +82,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { isLoading: isAuthLoading, token, user } = useAuth();
 
+  useEffect(() => { scopeSessionInputStatus(user ? String(user.id ?? user.username) : ""); }, [user]);
+
   const dispatch = useCallback((event: ServerEvent) => {
+    receiveSessionInputEvent(event as unknown as Record<string, unknown>);
     for (const listener of listenersRef.current) {
       try {
         listener(event);
@@ -88,9 +95,71 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     }
   }, []);
 
+  // Keep backend transports alive independently; selecting projects never
+  // tears down another backend's streaming turn or the workspace itself.
+  useEffect(() => {
+    if (!isHubRuntime() || isAuthLoading || !user || !token) return;
+    let disposed = false;
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    const connectBackend = (backendId: string) => {
+      if (disposed || backendSocketsRef.current.has(backendId)) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(withHubBackendUrl(
+        `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`, backendId,
+      ));
+      backendSocketsRef.current.set(backendId, socket);
+      socket.onopen = () => {
+        if (!wsRef.current || backendId === defaultBackendRef.current) wsRef.current = socket;
+        setConnectionStatus('connected');
+        dispatch({ kind: 'websocket_reconnected', timestamp: Date.now() });
+      };
+      socket.onmessage = (frame) => {
+        try {
+          const event = JSON.parse(frame.data) as ServerEvent;
+          if (typeof event.sessionId === 'string') registerHubResourceBackend('session', event.sessionId, backendId);
+          dispatch({ ...event, __hubBackendId: backendId } as ServerEvent);
+        } catch (error) { console.error('Backend WebSocket event failed:', error); }
+      };
+      socket.onclose = () => {
+        backendSocketsRef.current.delete(backendId);
+        if (wsRef.current === socket) wsRef.current = [...backendSocketsRef.current.values()].find((other) => other.readyState === WebSocket.OPEN) ?? null;
+        setConnectionStatus([...backendSocketsRef.current.values()].some((other) => other.readyState === WebSocket.OPEN) ? 'connected' : 'disconnected');
+        if (disposed) return;
+        const timer = setTimeout(() => { timers.delete(timer); connectBackend(backendId); }, 3000);
+        timers.add(timer);
+      };
+      socket.onerror = () => { /* onclose owns reconnect and retry timing. */ };
+    };
+    const discover = async () => {
+      try {
+        const response = await fetch('/hub/backends', { cache: 'no-store' });
+        if (!response.ok || disposed) return;
+        const payload = await response.json() as { defaultBackendId?: string; selectedBackendId?: string; backends?: Array<{ id: string; online?: boolean }> };
+        if (disposed) return;
+        defaultBackendRef.current ??= payload.defaultBackendId ?? payload.selectedBackendId ?? null;
+        for (const backend of payload.backends ?? []) {
+          if (backend.online !== false) connectBackend(backend.id);
+        }
+      } catch (error) { console.warn('Hub backend connection discovery failed:', error); }
+    };
+    void discover();
+    const interval = setInterval(() => { void discover(); }, 30000);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+      for (const timer of timers) clearTimeout(timer);
+      for (const socket of backendSocketsRef.current.values()) {
+        socket.onclose = null; socket.onmessage = null; socket.onopen = null; socket.onerror = null;
+        socket.close();
+      }
+      backendSocketsRef.current.clear();
+    };
+  }, [dispatch, isAuthLoading, token, user]);
+
   // Named function expression so the reconnect timer below can call itself
   // without reading the `connect` binding while it is still initializing.
   const connect = useCallback(function connect() {
+    if (isHubRuntime()) return; // Every Hub socket is explicitly owned by a backend.
     if (unmountedRef.current) return; // Prevent connection if unmounted
     if (!IS_PLATFORM && (isAuthLoading || !user)) return;
     try {
@@ -116,7 +185,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       websocket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data) as ServerEvent;
-          dispatch(data);
+          dispatch({ ...data, __hubBackendId: defaultBackendRef.current ?? undefined } as ServerEvent);
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
         }
@@ -187,7 +256,27 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   }, [connect, isAuthLoading, user]); // reconnect after authentication or token refresh
 
   const sendMessage = useCallback((message: unknown) => {
-    const socket = wsRef.current;
+    const frame = message as { type?: string; sessions?: Array<{ sessionId?: string }> };
+    if (isHubRuntime() && frame.type === 'chat.subscribe' && Array.isArray(frame.sessions)) {
+      const groups = new Map<string, Array<{ sessionId?: string }>>();
+      for (const session of frame.sessions) {
+        const owner = getHubRequestBackend('/ws', JSON.stringify({ sessionId: session.sessionId }));
+        if (!owner) return false;
+        groups.set(owner, [...(groups.get(owner) ?? []), session]);
+      }
+      for (const owner of groups.keys()) {
+        if (backendSocketsRef.current.get(owner)?.readyState !== WebSocket.OPEN) return false;
+      }
+      try {
+        for (const [owner, sessions] of groups) backendSocketsRef.current.get(owner)!.send(JSON.stringify({ ...frame, sessions }));
+        return groups.size > 0;
+      } catch { return false; }
+    }
+
+    const backendId = getHubRequestBackend('/ws', JSON.stringify(message));
+    const socket = isHubRuntime()
+      ? (backendId ? backendSocketsRef.current.get(backendId) : undefined)
+      : wsRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
       try {
         socket.send(JSON.stringify(message));

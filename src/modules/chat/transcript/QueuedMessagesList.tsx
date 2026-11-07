@@ -23,7 +23,7 @@ export default function QueuedMessagesList({ queuedDrafts, canSteer, onEdit, onD
   if (queuedDrafts.length === 0) return null;
 
   return (
-    <div aria-label={t('input.queue.list', { defaultValue: 'Queued messages' })} className="overflow-hidden rounded-lg border border-border/70 bg-muted/20">
+    <div aria-label={t('input.queue.list', { defaultValue: 'Queued messages' })} className="flex w-full flex-col gap-2">
       {queuedDrafts.map((queuedDraft, index) => {
         const id = queuedDraft.id ?? 'legacy';
         return (

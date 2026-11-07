@@ -79,6 +79,23 @@ it('rejects control frames and heals a legacy invalid realtime cache on history 
   }
 });
 
+it('preserves cached transcript rows and exposes the API error code after a failed reload', async () => {
+  const { result } = await loadedStore();
+  sessionMessages.mockResolvedValueOnce({
+    ok: false,
+    status: 502,
+    json: async () => ({ error: { code: 'CODEX_HISTORY_SOURCE_UNAVAILABLE' } }),
+  });
+
+  await act(async () => {
+    await result.current.fetchFromServer('session-1', { limit: 20, offset: 0 });
+  });
+
+  assert.deepEqual(result.current.getMessages('session-1').map((message) => message.id), ['1', '2', '3', '4']);
+  assert.equal(result.current.getSessionSlot('session-1')?.status, 'error');
+  assert.equal(result.current.getSessionSlot('session-1')?.historyErrorCode, 'CODEX_HISTORY_SOURCE_UNAVAILABLE');
+});
+
 afterEach(() => {
   vi.resetModules();
 });
@@ -269,4 +286,23 @@ describe('truncateAt', () => {
       ['first prompt', 'first answer'],
     );
   });
+});
+
+it('keeps accepted input across stale history refresh and a long streaming turn', async () => {
+  const { result } = await loadedStore();
+  const input: NormalizedMessage = {
+    id: 'local_request', sessionId: 'session-1', provider: 'codex', kind: 'text', role: 'user',
+    content: 'accepted question', transcriptAnchorId: 'native-turn', timestamp: '2026-11-05T00:00:00Z',
+  };
+  act(() => {
+    result.current.appendRealtime('session-1', input);
+    for (let index = 0; index < 505; index++) result.current.appendRealtime('session-1', {
+      ...input, id: `progress-${index}`, role: 'assistant', content: 'fixture progress', transcriptAnchorId: undefined,
+    });
+  });
+  await act(async () => { await result.current.fetchFromServer('session-1'); });
+  assert.equal(result.current.getMessages('session-1').filter(message => message.id === input.id).length, 1);
+  sessionMessages.mockResolvedValueOnce({ ok: true, json: async () => ({ data: { messages: [...HISTORY, { ...input, id: 'persisted-input' }], total: 5, hasMore: false } }) });
+  await act(async () => { await result.current.fetchFromServer('session-1'); });
+  assert.equal(result.current.getMessages('session-1').filter(message => message.role === 'user' && message.content === input.content).length, 1);
 });

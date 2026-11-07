@@ -1,12 +1,16 @@
+import { copyTextToClipboard, formatDateTime24 } from '@/shared/utils';
+import { AsyncQuestions } from '@/modules/chat/transcript/AsyncQuestions';
 import { memo, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRightIcon, GitBranchIcon, PencilIcon } from 'lucide-react';
+
+import { useMessageSendAnimation } from '@/modules/chat/context/MessageSendAnimationContext';
 
 import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult, LLMProvider,DiffLine,Project } from '@/shared/types';
 import { formatUsageLimitText, stripProposedPlanEnvelope } from '@/modules/chat/utils/chatFormatting';
 import { formatTaskDuration } from '@/modules/chat/utils/backgroundTasks';
 import { ToolRenderer, ToolErrorDisplay, SubagentPanel, WorkflowPanel, shouldHideToolResult } from '@/modules/chat/tools';
-import { AccountAvatar, LLMProviderLogo } from '@/shared/ui';
+import { AccountAvatar, LLMProviderLogo, useAppContextMenu } from '@/shared/ui';
 import { useOptionalAuth } from '@/modules/auth';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/modules/chat/transcript/Reasoning';
 import ChatMessageImages from '@/modules/chat/transcript/ChatMessageImages';
@@ -51,6 +55,7 @@ const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
  * transcript entry — user turn, assistant turn, or a tool call and its result.
  */
 const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, provider, onEditMessage, onForkFromMessage }: MessageComponentProps) => {
+  const openContextMenu = useAppContextMenu();
   const { t } = useTranslation('chat');
   const account = useOptionalAuth()?.user;
   const accountName = account?.username || t('message.you', 'You');
@@ -81,6 +86,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
   // also pull in browser-only voice state that a document render has no
   // provider for.
   const isExporting = useIsExportingTranscript();
+  const sendAnimationRef = useMessageSendAnimation(userCopyContent, message.type === 'user' && !isExporting, message.timestamp);
   // Keep completed Codex work mounted so its full height can animate in both directions.
   const [isCodexWorkExpanded, setIsCodexWorkExpanded] = useState(false);
   const codexWorkId = useId();
@@ -93,7 +99,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
     !message.isThinking;
 
 
-  const formattedTime = useMemo(() => new Date(message.timestamp).toLocaleTimeString(), [message.timestamp]);
+  const formattedTime = useMemo(() => formatDateTime24(new Date(message.timestamp), { hour: '2-digit', minute: '2-digit', second: '2-digit' }), [message.timestamp]);
   const shouldHideThinkingMessage = Boolean(message.isThinking && !showThinking);
 
   if (shouldHideThinkingMessage) {
@@ -103,6 +109,12 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
   return (
     <div
       ref={messageRef}
+      onContextMenu={isExporting ? undefined : (event) => openContextMenu(event, [
+        { key: 'copy-message', label: message.isToolUse ? '复制工具内容' : '复制消息', onSelect: async () => { if (!await copyTextToClipboard(message.type === 'user' ? userCopyContent : assistantCopyContent)) throw new Error('复制失败'); } },
+        ...(message.type === 'user' && onEditMessage && message.transcriptAnchorId ? [{ key: 'edit', label: '编辑并重新发送…', onSelect: () => onEditMessage(message) }] : []),
+        ...(shouldShowAssistantCopyControl && onForkFromMessage && message.forkAnchorId ? [{ key: 'fork', label: '分叉至本轮结束…', onSelect: () => onForkFromMessage(message) }] : []),
+        ...(message.codexUpdates ? [{ key: 'updates', label: showCodexWork ? '收起更新内容' : '展开更新内容', onSelect: () => setIsCodexWorkExpanded(!showCodexWork) }] : []),
+      ])}
       data-message-timestamp={message.timestamp || undefined}
       className={`chat-message ${message.type} ${isGrouped ? 'grouped' : ''} ${message.type === 'user' ? 'flex justify-end px-3 sm:px-0' : 'px-3 sm:px-0'}`}
     >
@@ -156,7 +168,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
       ) : message.type === 'user' ? (
         /* User turn on the right: claude.ai-style attachment cards above the bubble */
         <div className="flex w-full items-start gap-2 sm:w-auto sm:max-w-[85%] md:max-w-md lg:max-w-lg xl:max-w-xl">
-          <div className="flex min-w-0 flex-1 flex-col items-end gap-2 sm:flex-initial">
+          <div ref={sendAnimationRef} className="flex min-w-0 flex-1 flex-col items-end gap-2 sm:flex-initial">
             {message.images && message.images.length > 0 && (
               <ChatMessageImages
                 images={message.images}
@@ -164,7 +176,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               />
             )}
             {message.files && message.files.length > 0 && (
-              <ChatMessageFiles files={message.files} />
+              <ChatMessageFiles files={message.files} projectId={selectedProject?.projectId} />
             )}
             {userCopyContent.trim().length > 0 || (!message.images?.length && !message.files?.length) ? (
               <div className="group max-w-full rounded-2xl rounded-br-md border border-border/60 bg-muted/60 px-3 py-2 text-foreground shadow-sm dark:bg-gray-800/60 sm:px-4">
@@ -181,17 +193,6 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                       <PencilIcon className="h-3.5 w-3.5" />
                     </button>
                   )}
-                  {onForkFromMessage && message.transcriptAnchorId && (
-                    <button
-                      type="button"
-                      onClick={() => onForkFromMessage(message)}
-                      title={t('message.forkFromHere')}
-                      aria-label={t('message.forkFromHere')}
-                      className="rounded p-1 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
-                    >
-                      <GitBranchIcon className="h-3.5 w-3.5" />
-                    </button>
-                  )}
                   {shouldShowUserCopyControl && (
                     <MessageCopyControl content={userCopyContent} messageType="user" />
                   )}
@@ -205,7 +206,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
               </div>
             )}
           </div>
-          <div className="flex max-w-20 shrink-0 flex-col items-center gap-1 pt-0.5">
+          <div data-message-send-identity className="flex max-w-20 shrink-0 flex-col items-center gap-1 pt-0.5">
             <AccountAvatar username={accountName} avatar={account?.avatar} className="h-8 w-8 text-sm" />
             <span className="max-w-20 truncate text-center text-[11px] text-muted-foreground" title={accountName}>{accountName}</span>
           </div>
@@ -435,7 +436,9 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   // Normal rendering for non-JSON content
                   // One component for both states on purpose: swapping element
                   // types here remounted the whole reply the instant it finished.
-                  return message.type === 'assistant' ? (
+                  return message.type === 'assistant' && Array.isArray(message.codexQuestions) && message.codexQuestions.length > 0 ? (
+                    <AsyncQuestions questions={message.codexQuestions} />
+                  ) : message.type === 'assistant' ? (
                     <StreamingMarkdown
                       content={content}
                       isStreaming={Boolean(message.isStreaming)}
@@ -463,6 +466,17 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                 )}
                 {shouldShowAssistantCopyControl && (
                   <MessageSpeakControl content={assistantCopyContent} />
+                )}
+                {shouldShowAssistantCopyControl && onForkFromMessage && message.forkAnchorId && (
+                  <button
+                    type="button"
+                    onClick={() => onForkFromMessage(message)}
+                    title={t('message.forkFromHere')}
+                    aria-label={t('message.forkFromHere')}
+                    className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <GitBranchIcon className="h-3.5 w-3.5" />
+                  </button>
                 )}
                 {/* Which model actually answered, as the provider recorded it
                     on this row. Provenance rather than an affordance, so unlike

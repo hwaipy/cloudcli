@@ -53,6 +53,7 @@ async function submitSetup(username: string, password: string) {
 
 describe('auth screens surface server errors as text', () => {
   beforeEach(() => {
+    window.history.replaceState({}, '', '/cloudcli/');
     localStorage.clear();
   });
 
@@ -62,8 +63,8 @@ describe('auth screens surface server errors as text', () => {
 
   it('shows the message of the structured envelope when the password is wrong, and keeps the form', async () => {
     stubAuthApi({
-      '/api/auth/status': { status: 200, body: { needsSetup: false, isAuthenticated: false } },
-      '/api/auth/login': {
+      '/hub/auth/status': { status: 200, body: { needsSetup: false, isAuthenticated: false } },
+      '/hub/auth/login': {
         status: 401,
         body: envelope('AUTH_INVALID_CREDENTIALS', 'Invalid username or password'),
       },
@@ -77,8 +78,8 @@ describe('auth screens surface server errors as text', () => {
 
   it('shows the message of the structured envelope when registration is rejected', async () => {
     stubAuthApi({
-      '/api/auth/status': { status: 200, body: { needsSetup: true, isAuthenticated: false } },
-      '/api/auth/register': {
+      '/hub/auth/status': { status: 200, body: { needsSetup: true, isAuthenticated: false } },
+      '/hub/auth/register': {
         status: 403,
         body: envelope('AUTH_USER_ALREADY_CONFIGURED', 'User already exists. This is a single-user system.'),
       },
@@ -95,8 +96,8 @@ describe('auth screens surface server errors as text', () => {
 
   it('still shows the bare string error the auth middleware sends', async () => {
     stubAuthApi({
-      '/api/auth/status': { status: 200, body: { needsSetup: false, isAuthenticated: false } },
-      '/api/auth/login': { status: 401, body: { error: 'Invalid API key' } },
+      '/hub/auth/status': { status: 200, body: { needsSetup: false, isAuthenticated: false } },
+      '/hub/auth/login': { status: 401, body: { error: 'Invalid API key' } },
     });
 
     await submitLogin('triage', 'triage-pass-123');
@@ -106,8 +107,8 @@ describe('auth screens surface server errors as text', () => {
 
   it('falls back to the localized message when the envelope carries no usable message', async () => {
     stubAuthApi({
-      '/api/auth/status': { status: 200, body: { needsSetup: false, isAuthenticated: false } },
-      '/api/auth/login': { status: 500, body: { success: false, error: { code: 'INTERNAL_ERROR', message: '  ' } } },
+      '/hub/auth/status': { status: 200, body: { needsSetup: false, isAuthenticated: false } },
+      '/hub/auth/login': { status: 500, body: { success: false, error: { code: 'INTERNAL_ERROR', message: '  ' } } },
     });
 
     await submitLogin('triage', 'triage-pass-123');
@@ -117,8 +118,8 @@ describe('auth screens surface server errors as text', () => {
 
   it('falls back to the localized message when the body is not JSON', async () => {
     stubAuthApi({
-      '/api/auth/status': { status: 200, body: { needsSetup: false, isAuthenticated: false } },
-      '/api/auth/login': { status: 502, body: '<html>Bad Gateway</html>' },
+      '/hub/auth/status': { status: 200, body: { needsSetup: false, isAuthenticated: false } },
+      '/hub/auth/login': { status: 502, body: '<html>Bad Gateway</html>' },
     });
 
     await submitLogin('triage', 'triage-pass-123');

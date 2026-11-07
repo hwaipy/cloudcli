@@ -31,7 +31,7 @@ const toProviderEffortOptions = (
 const FALLBACK_DEFAULT_MODEL: Record<LLMProvider, string> = {
   claude: 'default',
   cursor: 'gpt-5.3-codex',
-  codex: 'gpt-5.6-sol',
+  codex: 'gpt-6-luna',
   opencode: 'anthropic/claude-sonnet-4-5',
 };
 
@@ -39,6 +39,15 @@ const PROVIDERS: LLMProvider[] = ['claude', 'cursor', 'codex', 'opencode'];
 
 /** localStorage key holding the user's default model for one provider. */
 const providerModelStorageKey = (provider: LLMProvider): string => `${provider}-model`;
+
+// Move existing browser defaults once; later model choices remain user-controlled.
+const CODEX_LUNA_DEFAULT_MIGRATION_KEY = 'codex-model-default-gpt-6-luna';
+
+const migrateCodexDefaultModel = (): void => {
+  if (localStorage.getItem(CODEX_LUNA_DEFAULT_MIGRATION_KEY) === '1') return;
+  localStorage.setItem(providerModelStorageKey('codex'), 'gpt-6-luna');
+  localStorage.setItem(CODEX_LUNA_DEFAULT_MIGRATION_KEY, '1');
+};
 
 /**
  * Fallback permission-mode matrix used only until the backend capability
@@ -125,17 +134,25 @@ const getSessionSelectionKey = (provider: LLMProvider, sessionId: string): strin
   `${provider}:${sessionId}`
 );
 
-export function useChatProviderState({ selectedSession, selectedProject: _selectedProject }: UseChatProviderStateArgs) {
+export function useChatProviderState({ selectedSession, selectedProject }: UseChatProviderStateArgs) {
+  const backendId = selectedProject?.__hubBackendId;
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
   // The provider the composer sends under. Held here rather than read from
   // storage per render because switching it has to reset the model menu, the
   // permission mode and the session in one commit.
-  const [provider, setProvider] = useState<LLMProvider>(readSelectedProvider);
+  const [provider, setProviderState] = useState<LLMProvider>(() => selectedProject?.strictFileIsolation ? 'codex' : readSelectedProvider());
+  const setProvider = useCallback<typeof setProviderState>((next) => {
+    setProviderState(selectedProject?.strictFileIsolation ? 'codex' : next);
+  }, [selectedProject?.strictFileIsolation]);
+  useEffect(() => {
+    if (selectedProject?.strictFileIsolation) setProviderState('codex');
+  }, [selectedProject?.strictFileIsolation]);
   // Every provider's chosen model, not just the active one: switching provider
   // must restore the model that provider was last used with, and the catalogue
   // that validates them arrives asynchronously per provider.
   const [providerModels, setProviderModels] = useState<Record<LLMProvider, string>>(() => {
+    migrateCodexDefaultModel();
     return PROVIDERS.reduce<Record<LLMProvider, string>>((acc, targetProvider) => {
       acc[targetProvider] = localStorage.getItem(providerModelStorageKey(targetProvider))
         || FALLBACK_DEFAULT_MODEL[targetProvider];
@@ -169,6 +186,10 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
   const sessionSelectionLoadRequestIdRef = useRef(0);
   const sessionModelMutationIdRef = useRef(0);
   const sessionEffortMutationIdRef = useRef(0);
+  // Remember confirmed or explicitly selected modes during navigation and refetches.
+  const knownPermissionModesRef = useRef(new Map<string, PermissionMode>());
+  // Capability discovery must not reinitialize an already-open session's mode.
+  const initializedPermissionScopeRef = useRef<string | null>(null);
   const permissionSelectionMutationIdRef = useRef(0);
   const permissionSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   // Returning to a browser tab refreshes permission choices made elsewhere.
@@ -209,7 +230,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
       await Promise.all(
         PROVIDERS.map(async (p) => {
           try {
-            const response = await api.providers.models(p);
+            const response = backendId ? await api.providers.models(p, backendId) : await api.providers.models(p);
             const body = (await response.json()) as ProviderModelsApiResponse;
             const models = body.success ? body.data?.models : undefined;
             if (!models || providerModelsRequestIdRef.current !== requestId) {
@@ -227,7 +248,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
         setProviderModelsLoading(false);
       }
     }
-  }, []);
+  }, [backendId]);
 
   useEffect(() => {
     void loadProviderModels();
@@ -238,7 +259,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
     const loadCapabilities = async () => {
       try {
-        const response = await api.providers.capabilities();
+        const response = backendId ? await api.providers.capabilities(backendId) : await api.providers.capabilities();
         const body = (await response.json()) as ProviderCapabilitiesApiResponse;
         if (cancelled || !body.success || !Array.isArray(body.data?.providers)) {
           return;
@@ -258,7 +279,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [backendId]);
 
   const getPermissionModesForProvider = useCallback((targetProvider: LLMProvider): PermissionMode[] => {
     const capabilityModes = providerCapabilities?.[targetProvider]?.permissionModes;
@@ -407,17 +428,20 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
 
   useEffect(() => {
     const validModes = getPermissionModesForProvider(provider);
-    // An existing session uses the backend's recorded choice. Until its GET
-    // completes, show the provider default rather than another browser's
-    // unrelated last choice. New chats still remember the local last choice.
+    // Reinitialize only on navigation. Capability responses can arrive after
+    // the session GET, and must never erase its confirmed permission.
+    const scope = `${backendId ?? ''}:${provider}:${selectedSession?.id ?? 'new'}`;
     if (selectedSession?.id) {
-      setPermissionMode(getDefaultPermissionModeForProvider(provider));
+      if (initializedPermissionScopeRef.current === scope) return;
+      initializedPermissionScopeRef.current = scope;
+      setPermissionMode(knownPermissionModesRef.current.get(scope) ?? getDefaultPermissionModeForProvider(provider));
       return;
     }
+    initializedPermissionScopeRef.current = scope;
     const providerSavedMode = localStorage.getItem(`permissionMode-last-${provider}`) as PermissionMode | null;
     setPermissionMode(providerSavedMode && validModes.includes(providerSavedMode)
       ? providerSavedMode : getDefaultPermissionModeForProvider(provider));
-  }, [selectedSession?.id, provider, getDefaultPermissionModeForProvider, getPermissionModesForProvider]);
+  }, [backendId, selectedSession?.id, provider, getDefaultPermissionModeForProvider, getPermissionModesForProvider]);
 
   useEffect(() => {
     if (!selectedSession?.__provider || selectedSession.__provider === provider) {
@@ -442,6 +466,8 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     localStorage.setItem(`permissionMode-last-${provider}`, nextMode);
     const sessionId = selectedSession?.id;
     if (!sessionId) return;
+    const permissionScope = `${backendId ?? ''}:${provider}:${sessionId}`;
+    knownPermissionModesRef.current.set(permissionScope, nextMode);
 
     // A pending session GET describes the state before this click.
     const mutationId = ++permissionSelectionMutationIdRef.current;
@@ -456,11 +482,12 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
         console.error('Error saving the session permission mode:', error);
         if (permissionSelectionMutationIdRef.current === mutationId
           && selectedSessionKeyRef.current === sessionKey) {
+          knownPermissionModesRef.current.set(permissionScope, previousMode);
           setPermissionMode(previousMode);
         }
       }
     });
-  }, [permissionMode, provider, selectedSession?.id]);
+  }, [backendId, permissionMode, provider, selectedSession?.id]);
 
   const availablePermissionModes = useMemo(
     () => getPermissionModesForProvider(provider),
@@ -575,15 +602,21 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
       .then((body) => {
         if (cancelled || selectedSessionKeyRef.current !== targetKey
           || permissionSelectionMutationIdRef.current !== mutationId) return;
-        const savedMode = body.success ? body.data?.permissionMode : null;
-        setPermissionMode(resolvePermissionModeForProvider(targetProvider, savedMode || 'default'));
+        if (!body.success) throw new Error('Permission response was not successful.');
+        const savedMode = body.data?.permissionMode;
+        if (savedMode && !getPermissionModesForProvider(targetProvider).includes(savedMode as PermissionMode)) {
+          throw new Error('Permission response contained an unsupported mode.');
+        }
+        const resolvedMode = resolvePermissionModeForProvider(targetProvider, savedMode || 'default');
+        knownPermissionModesRef.current.set(`${backendId ?? ''}:${targetProvider}:${selectedSessionId}`, resolvedMode);
+        setPermissionMode(resolvedMode);
       })
       .catch((error) => {
         if (!cancelled) console.error('Error loading the session permission mode:', error);
       });
 
     return () => { cancelled = true; };
-  }, [selectedSessionId, selectedSessionProvider, permissionRefreshCount, resolvePermissionModeForProvider]);
+  }, [backendId, selectedSessionId, selectedSessionProvider, permissionRefreshCount, getPermissionModesForProvider, resolvePermissionModeForProvider]);
 
   /**
    * Applies a model choice.
@@ -764,10 +797,10 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     targetProvider: LLMProvider,
     input: CustomProviderModelInput,
   ) => {
-    const response = await api.providers.createModel(targetProvider, input);
+    const response = backendId ? await api.providers.createModel(targetProvider, input, backendId) : await api.providers.createModel(targetProvider, input);
     const result = await readModelMutationResponse(response);
     applyProviderCatalog(targetProvider, result.models);
-  }, [applyProviderCatalog, readModelMutationResponse]);
+  }, [backendId, applyProviderCatalog, readModelMutationResponse]);
 
   const updateCustomModel = useCallback(async (
     targetProvider: LLMProvider,
@@ -778,7 +811,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
       throw new Error('This model cannot be edited.');
     }
 
-    const response = await api.providers.updateModel(targetProvider, existing.recordId, input);
+    const response = backendId ? await api.providers.updateModel(targetProvider, existing.recordId, input, backendId) : await api.providers.updateModel(targetProvider, existing.recordId, input);
     const result = await readModelMutationResponse(response);
     applyProviderCatalog(targetProvider, result.models);
 
@@ -791,7 +824,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
         model: result.model.value,
       } : current);
     }
-  }, [
+  }, [backendId,
     applyProviderCatalog,
     provider,
     providerModels,
@@ -808,7 +841,7 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
       throw new Error('This model cannot be deleted.');
     }
 
-    const response = await api.providers.deleteModel(targetProvider, existing.recordId);
+    const response = backendId ? await api.providers.deleteModel(targetProvider, existing.recordId, backendId) : await api.providers.deleteModel(targetProvider, existing.recordId);
     const result = await readModelMutationResponse(response);
     applyProviderCatalog(targetProvider, result.models);
 
@@ -839,14 +872,14 @@ export function useChatProviderState({ selectedSession, selectedProject: _select
     targetProvider: LLMProvider,
     enabled: boolean,
   ) => {
-    const response = await api.providers.setCustomModelsOnly(targetProvider, enabled);
+    const response = backendId ? await api.providers.setCustomModelsOnly(targetProvider, enabled, backendId) : await api.providers.setCustomModelsOnly(targetProvider, enabled);
     const body = (await response.json()) as ProviderModelMutationApiResponse;
     if (!response.ok || !body.success || !body.data?.models) {
       throw new Error(body.error?.message || 'Unable to change this setting.');
     }
 
     applyProviderCatalog(targetProvider, body.data.models);
-  }, [applyProviderCatalog]);
+  }, [backendId, applyProviderCatalog]);
 
   const providerModelActions = useMemo<ProviderModelActions>(() => ({
     create: createCustomModel,

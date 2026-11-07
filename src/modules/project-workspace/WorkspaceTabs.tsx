@@ -1,4 +1,4 @@
-import { MessageSquare, Terminal, Folder, GitBranch, ClipboardCheck, MonitorPlay, ChevronDown, type LucideIcon } from 'lucide-react';
+import { MessageSquare, Folder, GitBranch, ClipboardCheck, MonitorPlay, ChevronDown, type LucideIcon } from 'lucide-react';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { Dispatch, KeyboardEvent, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +10,7 @@ import { usePlugins,PluginIcon } from '@/modules/plugins';
 type WorkspaceTabsProps = {
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
+  containerOnly?: boolean;
   shouldShowTasksTab: boolean;
   shouldShowBrowserTab: boolean;
 };
@@ -33,7 +34,6 @@ type TabDefinition = BuiltInTab | PluginTab;
 
 const BASE_TABS: BuiltInTab[] = [
   { kind: 'builtin', id: 'chat',  labelKey: 'tabs.chat',  icon: MessageSquare },
-  { kind: 'builtin', id: 'shell', labelKey: 'tabs.shell', icon: Terminal },
   { kind: 'builtin', id: 'files', labelKey: 'tabs.files', icon: Folder },
   { kind: 'builtin', id: 'git',   labelKey: 'tabs.git',   icon: GitBranch },
 ];
@@ -55,6 +55,7 @@ const TASKS_TAB: BuiltInTab = {
 /** Rendered by WorkspaceHeader to show the built-in workspace tabs plus any enabled plugin tabs. */
 export default function WorkspaceTabs({
   activeTab,
+  containerOnly = false,
   setActiveTab,
   shouldShowTasksTab,
   shouldShowBrowserTab,
@@ -69,13 +70,13 @@ export default function WorkspaceTabs({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const builtInTabs: BuiltInTab[] = [
-    ...BASE_TABS,
-    ...(shouldShowBrowserTab ? [BROWSER_TAB] : []),
-    ...(shouldShowTasksTab ? [TASKS_TAB] : []),
+    ...BASE_TABS.filter((tab) => !containerOnly || tab.id !== 'git'),
+    ...(!containerOnly && shouldShowBrowserTab ? [BROWSER_TAB] : []),
+    ...(!containerOnly && shouldShowTasksTab ? [TASKS_TAB] : []),
   ];
 
   const pluginTabs: PluginTab[] = plugins
-    .filter((p) => p.enabled)
+    .filter((p) => p.enabled && !containerOnly)
     .map((p) => ({
       kind: 'plugin',
       id: `plugin:${p.name}` as AppTab,

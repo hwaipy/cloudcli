@@ -22,6 +22,8 @@ let serverDrafts: unknown[] = [];
 let draftsRequestFailed = false;
 // Lets a test hold the drafts response, to land it after a later queue change.
 let draftsResponseGate: Promise<void> | null = null;
+// Lets a test hold a text save while a stale hydrate response arrives.
+let saveDraftGate: Promise<void> | null = null;
 // What the server answers to an append; by default it queues the message alone.
 let appendResponse: ((queuedMessage: unknown) => Response) | null = null;
 // Lets a test hold an append's answer, to make a queue change while it is in flight.
@@ -48,6 +50,11 @@ vi.mock('@/shared/api', async (importOriginal) => ({
       },
       saveDraft: async (scope: string, draft: { text: string; queuedMessage?: unknown }) => {
         savedDrafts.push({ scope, ...draft });
+        await saveDraftGate;
+        serverDrafts = [
+          ...serverDrafts.filter((saved) => (saved as SavedDraft).scope !== scope),
+          { scope, ...draft, queuedMessage: null },
+        ];
         return new Response('{}', { status: 200 });
       },
       appendQueuedMessage: async (scope: string, queuedMessage: unknown) => {
@@ -78,6 +85,7 @@ beforeEach(() => {
   serverDrafts = [];
   draftsRequestFailed = false;
   draftsResponseGate = null;
+  saveDraftGate = null;
   appendResponse = null;
   appendResponseGate = null;
   clearStatus = 200;
@@ -173,6 +181,54 @@ test('hydrate does not overwrite a scope the user is typing into right now', asy
   await store.hydrateChatDrafts();
 
   assert.equal(store.readDraftText('session-a'), 'what I am writing');
+});
+
+test('a draft typed while hydration is in flight wins over its older snapshot', async () => {
+  serverDrafts = [{ scope: 'session-a', text: 'old server text', queuedMessage: null }];
+  let releaseDrafts!: () => void;
+  draftsResponseGate = new Promise((resolve) => { releaseDrafts = resolve; });
+  const store = await loadStore();
+  const hydrating = store.hydrateChatDrafts();
+
+  store.writeDraftText('session-a', 'new text typed during the request');
+  releaseDrafts();
+  await hydrating;
+
+  assert.equal(store.readDraftText('session-a'), 'new text typed during the request');
+});
+
+test('a stale hydrate cannot replace text while its save is still in flight', async () => {
+  const store = await loadStore();
+  store.writeDraftText('session-a', 'latest local text');
+  let releaseSave!: () => void;
+  saveDraftGate = new Promise((resolve) => { releaseSave = resolve; });
+  await vi.advanceTimersByTimeAsync(1_000);
+  assert.deepEqual(savedDrafts, [{ scope: 'session-a', text: 'latest local text' }]);
+
+  serverDrafts = [{ scope: 'session-a', text: 'older server text', queuedMessage: null }];
+  await store.hydrateChatDrafts();
+
+  assert.equal(store.readDraftText('session-a'), 'latest local text');
+  releaseSave();
+  await Promise.resolve();
+});
+
+test('slow draft writes are serialized so an older value cannot finish last', async () => {
+  const store = await loadStore();
+  let releaseFirstSave!: () => void;
+  saveDraftGate = new Promise((resolve) => { releaseFirstSave = resolve; });
+
+  store.writeDraftText('session-a', 'first value');
+  await vi.advanceTimersByTimeAsync(1_000);
+  store.writeDraftText('session-a', 'newest value');
+  await vi.advanceTimersByTimeAsync(1_000);
+  assert.deepEqual(savedDrafts.map(({ text }) => text), ['first value'], 'the newer save waits for the earlier request');
+
+  releaseFirstSave();
+  await vi.advanceTimersByTimeAsync(0);
+
+  assert.deepEqual(savedDrafts.map(({ text }) => text), ['first value', 'newest value']);
+  assert.equal((serverDrafts[0] as SavedDraft).text, 'newest value');
 });
 
 test('a failed hydrate keeps the mirrored draft rather than blanking the composer', async () => {

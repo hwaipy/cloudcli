@@ -63,6 +63,7 @@ const fileTreeFileSystem: FileTreeFileSystem = {
  * only the narrow project-path lookup contract.
  */
 const fileTreeProjects: FileTreeProjectGateway = {
+  isStrictProject: (projectId) => Boolean(projectsDb.getProjectById(projectId)?.strict_file_isolation),
   getProjectPathById: (projectId) => projectsDb.getProjectPathById(projectId),
 };
 

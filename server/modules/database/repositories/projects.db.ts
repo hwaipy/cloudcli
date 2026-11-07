@@ -22,20 +22,20 @@ function resolveProjectOwner(db: ReturnType<typeof getConnection>, ownerUserId?:
 }
 
 export const projectsDb = {
-    createProjectPath(projectPath: string, customProjectName: string | null = null, ownerUserId?: number): CreateProjectPathResult {
+    createProjectPath(projectPath: string, customProjectName: string | null = null, ownerUserId?: number, strictFileIsolation = false): CreateProjectPathResult {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
         const normalizedProjectName = normalizeProjectDisplayName(normalizedProjectPath, customProjectName);
         const attemptedId = randomUUID();
         const ownerId = resolveProjectOwner(db, ownerUserId);
         const row = db.prepare(`
-        INSERT INTO projects (project_id, project_path, custom_project_name, owner_user_id, isArchived)
-            VALUES (?, ?, ?, ?, 0)
+        INSERT INTO projects (project_id, project_path, custom_project_name, owner_user_id, isArchived, strict_file_isolation)
+            VALUES (?, ?, ?, ?, 0, ?)
             ON CONFLICT(project_path) DO UPDATE SET
             isArchived = 0
-            WHERE projects.isArchived = 1 AND projects.owner_user_id IS excluded.owner_user_id
-            RETURNING project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
-        `).get(attemptedId, normalizedProjectPath, normalizedProjectName, ownerId) as ProjectRepositoryRow | undefined;
+            WHERE projects.isArchived = 1 AND projects.owner_user_id IS excluded.owner_user_id AND projects.strict_file_isolation = excluded.strict_file_isolation
+            RETURNING project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived, strict_file_isolation
+        `).get(attemptedId, normalizedProjectPath, normalizedProjectName, ownerId, strictFileIsolation ? 1 : 0) as ProjectRepositoryRow | undefined;
 
         if (row) {
             return {
@@ -55,7 +55,7 @@ export const projectsDb = {
         const db = getConnection();
         const normalizedProjectPath = normalizeProjectPath(projectPath);
         const row = db.prepare(`
-            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
+            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived, strict_file_isolation
             FROM projects
             WHERE project_path = ?
         `).get(normalizedProjectPath) as ProjectRepositoryRow | undefined;
@@ -66,7 +66,7 @@ export const projectsDb = {
     getProjectById(projectId: string, ownerUserId?: number): ProjectRepositoryRow | null {
         const db = getConnection();
         const row = db.prepare(`
-            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
+            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived, strict_file_isolation
             FROM projects
             WHERE project_id = ? AND (? IS NULL OR owner_user_id = ?)
         `).get(projectId, ownerUserId ?? null, ownerUserId ?? null) as ProjectRepositoryRow | undefined;
@@ -96,7 +96,7 @@ export const projectsDb = {
     getProjectPaths(ownerUserId?: number): ProjectRepositoryRow[] {
         const db = getConnection();
         return db.prepare(`
-            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
+            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived, strict_file_isolation
             FROM projects
             WHERE isArchived = 0 AND (? IS NULL OR owner_user_id = ?)
         `).all(ownerUserId ?? null, ownerUserId ?? null) as ProjectRepositoryRow[];
@@ -109,7 +109,7 @@ export const projectsDb = {
     getArchivedProjectPaths(ownerUserId?: number): ProjectRepositoryRow[] {
         const db = getConnection();
         return db.prepare(`
-            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived
+            SELECT project_id, project_path, owner_user_id, custom_project_name, isStarred, isArchived, strict_file_isolation
             FROM projects
             WHERE isArchived = 1 AND (? IS NULL OR owner_user_id = ?)
         `).all(ownerUserId ?? null, ownerUserId ?? null) as ProjectRepositoryRow[];

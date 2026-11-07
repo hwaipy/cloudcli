@@ -650,7 +650,8 @@ export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
         const answers = input?.answers || {};
         if (questions.length === 1) {
           const header = questions[0]?.header || 'Question';
-          const answer = answers[questions[0]?.question];
+          const rawAnswer = answers[questions[0]?.id] ?? answers[questions[0]?.question];
+          const answer = questions[0]?.isSecret && rawAnswer ? '••••••••' : rawAnswer;
           return answer ? `${header} — ${answer}` : header;
         }
 

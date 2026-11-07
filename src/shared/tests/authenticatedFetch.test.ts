@@ -55,6 +55,7 @@ const respondWith = (headers: Record<string, string> = {}, status = 200) => {
 const sentHeaders = () => (lastInit?.headers ?? {}) as Record<string, string>;
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/');
   localStorage.clear();
   lastInit = undefined;
 });
@@ -75,18 +76,33 @@ test('a live token is sent as a bearer credential', async () => {
   assert.equal(sentHeaders().Authorization, `Bearer ${token}`);
 });
 
-test('a Hub tab pins both its bearer token and API route to its backend', async () => {
+test('a Hub tab uses its shared Hub account token and pins the API route to its backend', async () => {
   (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__ = 'office';
   const token = liveToken();
-  localStorage.setItem('auth-token:office', token);
-  localStorage.setItem('auth-token:lab', liveToken());
+  localStorage.setItem('auth-token:hub', token);
   const request = respondWith();
 
-  await (await loadFetch(false))('/api/projects?limit=10');
+  await (await loadFetch(false))('/api/projects?limit=10', { hubBackendId: 'office' });
 
   assert.equal(request.mock.calls[0][0], '/api/projects?limit=10&hub_backend=office');
   assert.equal(sentHeaders().Authorization, `Bearer ${token}`);
   assert.equal(sentHeaders()['X-CloudCLI-Backend'], 'office');
+});
+
+test('a project request uses the Hub account token when routed to its owning backend', async () => {
+  (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__ = 'office';
+  const hubToken = liveToken();
+  localStorage.setItem('auth-token:hub', hubToken);
+  const request = respondWith();
+  const authenticatedFetch = await loadFetch(false);
+  const { registerHubResourceBackend } = await import('@/shared/utils');
+  registerHubResourceBackend('project', 'project-lab-1', 'lab');
+
+  await authenticatedFetch('/api/projects/project-lab-1/rename', { method: 'PUT', body: '{"displayName":"Lab"}' });
+
+  assert.equal(request.mock.calls[0][0], '/api/projects/project-lab-1/rename?hub_backend=lab');
+  assert.equal(sentHeaders().Authorization, `Bearer ${hubToken}`);
+  assert.equal(sentHeaders()['X-CloudCLI-Backend'], 'lab');
 });
 
 test('platform builds send no bearer token, because the session is a cookie', async () => {

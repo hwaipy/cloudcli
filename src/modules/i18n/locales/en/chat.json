@@ -225,6 +225,11 @@
       "olderMessages": "Loading older messages...",
       "sessionMessages": "Loading session messages..."
     },
+    "history": {
+      "loadFailed": "Could not load this conversation's history. Check the connection and try again.",
+      "sourceUnavailable": "A source transcript referenced by this Codex conversation cannot be read. This is not an empty conversation.",
+      "retry": "Retry"
+    },
     "messages": {
       "showingOf": "Showing {{shown}} of {{total}} messages",
       "scrollToLoad": "Scroll up to load more",
@@ -320,7 +325,7 @@
     "expandContent": "Show more",
     "collapseContent": "Show less",
     "editAndResend": "Edit and resend",
-    "forkFromHere": "Fork from here",
+    "forkFromHere": "Fork through this completed round",
     "answeredBy": "Answered by {{model}}"
   },
   "export": {

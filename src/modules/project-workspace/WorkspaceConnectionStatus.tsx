@@ -12,7 +12,7 @@ export default function WorkspaceConnectionStatus() {
   const { t } = useTranslation();
   const { connectionStatus } = useWebSocket();
   const isDisconnected = connectionStatus === 'disconnected';
-  // Names the chat connection, since the Shell tab shows its own socket's state.
+  // Names the connection used for chat progress and session updates.
   const description = t('status.chatConnectionLost');
 
   return (

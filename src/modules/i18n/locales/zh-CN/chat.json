@@ -188,6 +188,11 @@
       "olderMessages": "正在加载更早的消息...",
       "sessionMessages": "正在加载会话消息..."
     },
+    "history": {
+      "loadFailed": "会话历史加载失败。请检查连接后重试。",
+      "sourceUnavailable": "此 Codex 会话引用的源历史暂不可读；页面不会把它当成空会话。",
+      "retry": "重试"
+    },
     "messages": {
       "showingOf": "显示 {{shown}} / {{total}} 条消息",
       "scrollToLoad": "向上滚动以加载更多",
@@ -269,7 +274,7 @@
     "expandContent": "展开内容",
     "collapseContent": "收起内容",
     "editAndResend": "编辑并重新发送",
-    "forkFromHere": "从此处派生",
+    "forkFromHere": "分叉至本轮结束",
     "answeredBy": "由 {{model}} 回答"
   },
   "composer": {

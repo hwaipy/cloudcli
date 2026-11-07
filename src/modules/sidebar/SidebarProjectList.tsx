@@ -62,8 +62,11 @@ export default function SidebarProjectList({
   );
 
   useEffect(() => {
-    document.title = pageTitle;
-  }, [pageTitle]);
+    const updateTitle = () => { document.title = getPageTitle(selectedProject, selectedSession); };
+    updateTitle();
+    window.addEventListener('cloudcli-desktop-ready', updateTitle);
+    return () => window.removeEventListener('cloudcli-desktop-ready', updateTitle);
+  }, [pageTitle, selectedProject, selectedSession]);
 
   const showProjects = !isLoading && projects.length > 0 && filteredProjects.length > 0;
 

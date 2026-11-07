@@ -1,6 +1,7 @@
 // @ts-nocheck -- JWT request augmentation is narrowed by Auth route contracts.
 import jwt from 'jsonwebtoken';
 
+import { verifyHubIdentityAssertion } from '@/shared/index.js';
 import { IS_PLATFORM } from '@/shared/utils.js';
 
 import { userDb, appConfigDb } from '../database/index.js';
@@ -8,8 +9,19 @@ import { userDb, appConfigDb } from '../database/index.js';
 // Use env var if set, otherwise auto-generate a unique secret per installation
 const JWT_SECRET = process.env.JWT_SECRET || appConfigDb.getOrCreateJwtSecret();
 
+const resolveHubIdentity = (assertion: unknown) => {
+  const backendId = process.env.CLOUDCLI_BACKEND_ID;
+  const registrationKey = process.env.CLOUDCLI_HUB_REGISTRATION_KEY;
+  if (!backendId || !registrationKey) return null;
+  const identity = verifyHubIdentityAssertion(assertion, backendId, registrationKey);
+  if (!identity) return null;
+  const user = userDb.getOrCreateHubUser(identity.hubUserId, identity.username);
+  return { ...user, username: identity.username, isAdmin: identity.isAdmin, hubUserId: identity.hubUserId };
+};
+
 // Optional API key middleware
 const validateApiKey = (req, res, next) => {
+  if (resolveHubIdentity(req.headers['x-cloudcli-hub-identity'])) return next();
   // Skip API key validation if not configured
   if (!process.env.API_KEY) {
     return next();
@@ -24,6 +36,12 @@ const validateApiKey = (req, res, next) => {
 
 // JWT authentication middleware
 const authenticateToken = async (req, res, next) => {
+  const hubIdentity = resolveHubIdentity(req.headers['x-cloudcli-hub-identity']);
+  if (hubIdentity) {
+    req.user = hubIdentity;
+    return next();
+  }
+
   // Platform mode:  use single database user
   if (IS_PLATFORM) {
     try {
@@ -115,7 +133,10 @@ const generateToken = (user) => {
 };
 
 // WebSocket authentication function
-const authenticateWebSocket = (token) => {
+const authenticateWebSocket = (token, hubAssertion: string | null = null) => {
+  const hubIdentity = resolveHubIdentity(hubAssertion);
+  if (hubIdentity) return hubIdentity;
+
   // Platform mode: bypass token validation, return first user
   if (IS_PLATFORM) {
     try {

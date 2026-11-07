@@ -146,6 +146,30 @@ test('a sent turn records its permission mode for the next browser to read', asy
   });
 });
 
+test('chat.send confirms admission and replays the receipt without starting a duplicate run', async () => {
+  await withGateway('claude', async ({ socket, runs }) => {
+    const request = {
+      type: 'chat.send', sessionId: SESSION_ID, content: 'deliver exactly once',
+      clientMessageId: `receipt-${Date.now()}`,
+    };
+    holdTheNextRun();
+    socket.emit('message', JSON.stringify(request));
+    await settle();
+
+    assert.equal(runs.length, 1);
+    assert.ok(socket.frames.some((frame) => frame.kind === 'chat_send_accepted' && frame.clientMessageId === request.clientMessageId));
+
+    // The receipt survives closing and reopening the DB connection, which is
+    // the durable part needed when an ACK is replayed after reconnection.
+    closeConnection();
+    await initializeDatabase();
+    socket.emit('message', JSON.stringify(request));
+    await settle();
+    assert.equal(runs.length, 1, 'a retry with the same client id must not dispatch twice');
+    assert.equal(socket.frames.filter((frame) => frame.kind === 'chat_send_accepted' && frame.clientMessageId === request.clientMessageId).length, 2);
+  });
+});
+
 test('an invalid permission mode is refused before a run is registered', async () => {
   await withGateway('claude', async ({ socket, runs }) => {
     socket.emit('message', JSON.stringify({
@@ -333,5 +357,38 @@ test('a provider that has to branch to rewind is rewound before the run, not dur
     // replaced message on screen for about a second.
     assert.ok(socket.frames.some((frame) => frame.kind === 'history_truncated'));
     assert.equal(truncatedBeforeRewind, true);
+  }, CODEX_TRANSCRIPT_ROWS);
+});
+
+
+test('a stale browser message cannot overwrite or run below the saved session permission', async () => {
+  await withGateway('codex', async ({ socket, runs }) => {
+    sessionsDb.setSessionPermissionMode(SESSION_ID, 'bypassPermissions');
+    socket.emit('message', JSON.stringify({ type: 'chat.send', sessionId: SESSION_ID, content: 'stale browser', options: { permissionMode: 'default' } }));
+    await settle();
+    assert.equal(runs.length, 1);
+    assert.equal(sessionsDb.getSessionById(SESSION_ID)?.permission_mode, 'bypassPermissions');
+    assert.equal(runs[0].options.permissionMode, 'bypassPermissions');
+  }, CODEX_TRANSCRIPT_ROWS);
+});
+
+test('saved default cannot inherit another browser unrestricted mode', async () => {
+  await withGateway('codex', async ({ socket, runs }) => {
+    sessionsDb.setSessionPermissionMode(SESSION_ID, 'default');
+    socket.emit('message', JSON.stringify({ type: 'chat.send', sessionId: SESSION_ID, content: 'stale browser', options: { permissionMode: 'bypassPermissions' } }));
+    await settle();
+    assert.equal(sessionsDb.getSessionById(SESSION_ID)?.permission_mode, 'default');
+    assert.equal(runs[0].options.permissionMode, 'default');
+  }, CODEX_TRANSCRIPT_ROWS);
+});
+
+
+test('messages without permission options still run with the saved session permission', async () => {
+  await withGateway('codex', async ({ socket, runs }) => {
+    sessionsDb.setSessionPermissionMode(SESSION_ID, 'bypassPermissions');
+    socket.emit('message', JSON.stringify({ type: 'chat.send', sessionId: SESSION_ID, content: 'no permission field' }));
+    await settle();
+    assert.equal(runs[0].options.permissionMode, 'bypassPermissions');
+    assert.equal(sessionsDb.getSessionById(SESSION_ID)?.permission_mode, 'bypassPermissions');
   }, CODEX_TRANSCRIPT_ROWS);
 });

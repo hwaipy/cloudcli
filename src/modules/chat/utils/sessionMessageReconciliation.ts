@@ -72,12 +72,20 @@ function findServerEchoForLocalUser(
     const serverMessage = serverMessages[index];
     if (
       claimedServerIds.has(serverMessage.id)
+      || serverMessage.kind !== 'text'
+      || serverMessage.role !== 'user'
       || serverMessage.sessionId !== localMessage.sessionId
       || serverMessage.provider !== localMessage.provider
     ) {
       continue;
     }
 
+    // Codex's first input has a native turn anchor: exact identity wins over
+    // text/time heuristics, including repeated identical prompts and long setup.
+    if (localMessage.transcriptAnchorId && serverMessage.transcriptAnchorId) {
+      if (localMessage.transcriptAnchorId === serverMessage.transcriptAnchorId) return serverMessage;
+      continue;
+    }
     const serverFingerprint = userTurnFingerprint(serverMessage);
     if (!serverFingerprint || !userTurnFingerprintsMatch(localFingerprint, serverFingerprint)) {
       continue;

@@ -14,6 +14,7 @@
 import { Codex } from '@openai/codex-sdk';
 import type { ModelReasoningEffort, Thread, ThreadOptions } from '@openai/codex-sdk';
 
+import { resolveIsolatedProject } from '@/modules/project-isolation/index.js';
 import {
   appendFilesInputTag,
   buildCodexInputItems,
@@ -497,16 +498,17 @@ function abortCodexSession(sessionId: string) {
 export const codexRuntime = {
   // Default remains the existing SDK/exec path until explicitly opted in.
   run: (command: string, options: AnyRecord, writer: ProviderRuntimeWriter, context: ProviderRuntimeContext) =>
-    process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server'
+    (resolveIsolatedProject(options) || process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server')
       ? codexAppServerRuntime.run(command, options, writer, context)
       : queryCodex(command, options, writer, context),
-  abort: (sessionId: string) => process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server'
+  abort: (sessionId: string) => (resolveIsolatedProject({ sessionId }) || process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server')
     ? codexAppServerRuntime.abort(sessionId)
     : abortCodexSession(sessionId),
-  steer: (sessionId: string, text: string) => process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server'
+  steer: (sessionId: string, text: string) => (resolveIsolatedProject({ sessionId }) || process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server')
     ? codexAppServerRuntime.steer(sessionId, text)
     : Promise.resolve(false),
   shutdown: () => codexAppServerRuntime.shutdownAll(),
+  permissions: codexAppServerRuntime.permissions,
 };
 
 /**

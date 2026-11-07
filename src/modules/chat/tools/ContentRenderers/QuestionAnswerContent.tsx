@@ -40,7 +40,8 @@ export const QuestionAnswerContent: React.FC<QuestionAnswerContentProps> = ({
           return null;
         }
         const q = rawQuestion;
-        const answer = answers?.[q.question];
+        const rawAnswer = (q.id ? answers?.[q.id] : undefined) ?? answers?.[q.question];
+        const answer = q.isSecret && rawAnswer ? '••••••••' : rawAnswer;
         // `options` is typed as an array but comes from untrusted runtime data;
         // keep only valid entries so `.some`/`.map` below never throw.
         const options = Array.isArray(q.options)

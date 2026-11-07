@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { PermissionPanelProps,Question } from '@/shared/types';
@@ -17,7 +17,10 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
 }) => {
   const { t } = useTranslation();
   const input = request.input as { questions?: Question[] } | undefined;
-  const questions: Question[] = input?.questions ?? NO_QUESTIONS;
+  const questions: Question[] = useMemo(() => Array.isArray(input?.questions)
+    ? input.questions.filter((q) => q && typeof q.question === 'string').map((q) => ({ ...q,
+      options: Array.isArray(q.options) ? q.options.filter((option) => option && typeof option.label === 'string') : [],
+    })) : NO_QUESTIONS, [input?.questions]);
 
   const [currentStep, setCurrentStep] = useState(0);
   const [selections, setSelections] = useState<Map<number, Set<string>>>(() => new Map());
@@ -79,13 +82,13 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   }, []);
 
   const buildAnswers = useCallback(() => {
-    const answers: Record<string, string> = {};
+    const answers: Record<string, string> = Object.create(null);
     questions.forEach((q, idx) => {
       const selected = Array.from(selections.get(idx) || []);
-      const isOther = otherActive.get(idx) || false;
+      const isOther = otherActive.get(idx) || q.options.length === 0;
       const otherText = (otherTexts.get(idx) || '').trim();
       if (isOther && otherText) selected.push(otherText);
-      if (selected.length > 0) answers[q.question] = selected.join(', ');
+      if (selected.length > 0) answers[q.id || q.question] = selected.join(', ');
     });
     return answers;
   }, [questions, selections, otherActive, otherTexts]);
@@ -147,7 +150,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
   const q = questions[currentStep];
   const multi = q.multiSelect || false;
   const selected = selections.get(currentStep) || new Set<string>();
-  const isOtherOn = otherActive.get(currentStep) || false;
+  const isOtherOn = otherActive.get(currentStep) || q.options.length === 0;
   const isLast = currentStep === total - 1;
   const isFirst = currentStep === 0;
   const hasCurrentSelection = selected.size > 0 || (isOtherOn && (otherTexts.get(currentStep) || '').trim().length > 0);
@@ -317,7 +320,7 @@ export const AskUserQuestionPanel: React.FC<PermissionPanelProps> = ({
                 <div className="relative">
                   <input
                     ref={otherInputRef}
-                    type="text"
+                    type={q.isSecret ? 'password' : 'text'}
                     value={otherTexts.get(currentStep) || ''}
                     onChange={(e) => setOtherText(currentStep, e.target.value)}
                     onKeyDown={(e) => {

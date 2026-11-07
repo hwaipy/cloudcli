@@ -77,6 +77,7 @@ const open: WorktreeServices['open'] = (input) => openWorktreeAsProject(input, {
  */
 const worktreeServices: WorktreeServices = {
   resolveProjectPath(projectId) {
+    if (projectsDb.getProjectById(projectId)?.strict_file_isolation) throw new AppError('External Git worktrees are not supported for strict projects.', { code: 'ISOLATED_WORKTREE_UNSUPPORTED', statusCode: 409 });
     const projectPath = worktreeProjects.getProjectPathById(projectId);
     if (!projectPath) {
       throw new AppError(`Unable to resolve project path for "${projectId}"`, {
