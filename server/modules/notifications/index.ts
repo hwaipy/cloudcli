@@ -22,3 +22,6 @@ export { handleDesktopNotificationsConnection } from '@/modules/notifications/we
 export { getPublicKey } from './vapid-keys.service.js';
 // configureWebPush: used by the server entrypoint during notification startup.
 export { configureWebPush } from './vapid-keys.service.js';
+
+// Codex runtime uses native turn identity rather than a session-wide cooldown.
+export { notifyRunOutcome } from '@/modules/notifications/services/run-outcome-notification.service.js';

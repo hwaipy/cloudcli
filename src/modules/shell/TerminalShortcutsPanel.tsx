@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import type { Terminal } from '@xterm/xterm';
 
 import { sendSocketMessage } from '@/modules/shell/utils/socket';
+import { useDeviceSettings } from '@/shared/hooks/useDeviceSettings';
 
 type Shortcut =
   | { type: 'key'; id: string; label: string; sequence: string }
@@ -53,7 +54,7 @@ const KEY_BTN_ACTIVE =
 const ICON_BTN =
   'shrink-0 rounded-md border border-border bg-muted p-1.5 text-foreground transition-colors select-none active:bg-blue-600 active:text-white active:border-blue-600 disabled:cursor-not-allowed disabled:opacity-40';
 
-/** Rendered by Shell's full and minimal views to send keys a mobile keyboard cannot produce, such as Esc, Tab, Ctrl and the arrows. */
+/** Rendered by Shell's full and minimal views to provide terminal keys on narrow layouts and touch devices, including wide iPads. */
 export default function TerminalShortcutsPanel({
   wsRef,
   terminalRef,
@@ -61,7 +62,10 @@ export default function TerminalShortcutsPanel({
   bottomOffset = 'bottom-0',
 }: TerminalShortcutsPanelProps) {
   const { t } = useTranslation('settings');
+  const { isMobile, hasTouchInput } = useDeviceSettings({ trackPWA: false, trackTouch: true });
+  // Retain the one-shot Ctrl modifier while the user chooses the next shortcut.
   const [ctrlActive, setCtrlActive] = useState(false);
+  // Retain the one-shot Alt modifier while the user chooses the next shortcut.
   const [altActive, setAltActive] = useState(false);
 
   const sendInput = useCallback(
@@ -109,8 +113,12 @@ export default function TerminalShortcutsPanel({
     [ctrlActive, altActive, sendInput],
   );
 
+  if (!isMobile && !hasTouchInput) {
+    return null;
+  }
+
   return (
-    <div className={`pointer-events-none fixed inset-x-0 ${bottomOffset} z-20 px-2 md:hidden`}>
+    <div className={`pointer-events-none fixed inset-x-0 ${bottomOffset} z-20 px-2`}>
       <div className="pointer-events-auto flex items-center gap-1 overflow-x-auto rounded-lg border border-border bg-card/95 px-1.5 py-1.5 shadow-lg backdrop-blur-sm [-webkit-overflow-scrolling:touch] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           type="button"

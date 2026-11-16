@@ -106,7 +106,7 @@ export function formatToolDisplayName(toolName: string): string {
   return `${mcpMatch[2]} (${mcpMatch[1]})`;
 }
 
-export const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
+const TOOL_CONFIGS: Record<string, ToolDisplayConfig> = {
   // ============================================================================
   // COMMAND TOOLS
   // ============================================================================

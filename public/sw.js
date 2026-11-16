@@ -3,7 +3,7 @@
 // so a rebuild + refresh always picks up the latest assets.
 const CACHE_NAME = 'claude-ui-v2';
 const urlsToCache = [
-  '/manifest.json'
+  new URL('manifest.json', self.location.href).href
 ];
 
 // Install event
@@ -82,11 +82,13 @@ self.addEventListener('push', event => {
     payload = { title: 'CloudCLI', body: event.data.text() };
   }
 
+  const workerBase = new URL('.', self.location.href);
+  const backendId = /\/push\/([^/]+)\/$/.exec(self.registration.scope)?.[1];
   const options = {
     body: payload.body || '',
-    icon: '/logo-256.png',
-    badge: '/logo-128.png',
-    data: payload.data || {},
+    icon: new URL('logo-256.png', workerBase).href,
+    badge: new URL('logo-128.png', workerBase).href,
+    data: { ...payload.data, ...(backendId ? { backendId: decodeURIComponent(backendId) } : {}) },
     tag: payload.data?.tag || `${payload.data?.sessionId || 'global'}:${payload.data?.code || 'default'}`,
     renotify: true
   };
@@ -102,17 +104,22 @@ self.addEventListener('notificationclick', event => {
 
   const sessionId = event.notification.data?.sessionId;
   const provider = event.notification.data?.provider || null;
-  const urlPath = sessionId ? `/session/${sessionId}` : '/';
+  const base = new URL('.', self.location.href);
+  const target = new URL(sessionId ? `session/${encodeURIComponent(sessionId)}` : '.', base);
+  const backendId = event.notification.data?.backendId;
+  if (backendId) target.searchParams.set('hub_backend', backendId);
+  const urlPath = target.pathname + target.search;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async clientList => {
       for (const client of clientList) {
-        if (client.url.includes(self.location.origin)) {
+        if (client.url.startsWith(base.href)) {
           await client.focus();
           client.postMessage({
             type: 'notification:navigate',
             sessionId: sessionId || null,
             provider,
+            backendId,
             urlPath
           });
           return;

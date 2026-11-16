@@ -9,7 +9,7 @@ import {
   createNormalizedMessage,
   normalizeImageDescriptors,
 } from '@/shared/index.js';
-import { notifyRunFailed, notifyRunStopped } from '@/modules/notifications/index.js';
+import { notifyRunOutcome } from '@/modules/notifications/index.js';
 import { CodexAppServerConnection } from '@/modules/providers/list/codex/codex-app-server-connection.provider.js';
 import type { AnyRecord, ProviderRuntimeContext, ProviderRuntimeWriter, ProviderPermissionDecision } from '@/shared/index.js';
 
@@ -393,13 +393,13 @@ return {
       if (status === 'failed') throw active.connectionError ?? new Error('Codex App Server turn failed.');
       if (status === 'interrupted' || active.aborted) return;
       send(writer, createCompleteMessage({ provider: 'codex', sessionId: appSessionId, actualSessionId: live.threadId, exitCode: 0 }));
-      notifyRunStopped({ userId: writer.userId || null, provider: 'codex', sessionId: options.sessionId, stopReason: 'completed' });
+      notifyRunOutcome({ userId: writer.userId || null, provider: 'codex', sessionId: options.sessionId, runId: active.id, outcome: 'completed' });
     } catch (error) {
       failure = error instanceof Error ? error : new Error(String(error));
       if (!active.aborted) {
         if (!active.errorShown) send(writer, createNormalizedMessage({ kind: 'error', provider: 'codex', sessionId: appSessionId, content: failure.message }));
         send(writer, createCompleteMessage({ provider: 'codex', sessionId: appSessionId, exitCode: 1 }));
-        notifyRunFailed({ userId: writer.userId || null, provider: 'codex', sessionId: options.sessionId, error: failure });
+        notifyRunOutcome({ userId: writer.userId || null, provider: 'codex', sessionId: options.sessionId, runId: active.id, outcome: 'failed', error: failure });
       }
     } finally {
       if (active.turnTimer) clearTimeout(active.turnTimer);

@@ -2,7 +2,7 @@ import { Loader2, MessageSquare } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import type { TFunction } from 'i18next';
 
-import { Button, LLMProviderLogo, Tooltip, useAppContextMenu } from '@/shared/ui';
+import { Button, Tooltip, useAppContextMenu } from '@/shared/ui';
 import { cn, copyTextToClipboard, getSessionPageUrl } from '@/shared/utils';
 import type { ProjectSession, RecentConversationListItem, SessionRowActions } from '@/shared/types';
 import { useSessionForkingProviders } from '@/shared/hooks/useProviderCapabilities';
@@ -151,9 +151,6 @@ export default function SidebarRecentConversations({
                     : 'text-foreground hover:bg-accent/60',
                 )}
               >
-                <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
-                  <LLMProviderLogo provider={conversation.provider} className="h-3 w-3" />
-                </span>
 
                 <span className="flex min-w-0 flex-1 items-center gap-2">
                   <span className="min-w-0 flex-1 truncate text-[13px] font-normal" title={`${conversation.sessionTitle} · ${conversation.projectDisplayName}`}>

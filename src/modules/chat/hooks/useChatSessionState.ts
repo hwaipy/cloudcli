@@ -141,7 +141,7 @@ function chatMessageToNormalized(
   sessionId: string,
   provider: LLMProvider,
 ): NormalizedMessage | null {
-  const id = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = msg.realtimeMessageId || `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const ts = msg.timestamp instanceof Date
     ? msg.timestamp.toISOString()
     : typeof msg.timestamp === 'number'
@@ -242,6 +242,8 @@ export function useChatSessionState({
   // starts a new gesture. This is separate from scroll position state because
   // async history requests can finish after the gesture has already moved on.
   const userScrollVersionRef = useRef(0);
+  // Native momentum keeps moving after touchmove stops; track observations separately from render snapshots.
+  const lastObservedScrollTopRef = useRef<number | null>(null);
   const isLoadingMoreRef = useRef(false);
   const allMessagesLoadedRef = useRef(false);
   const topLoadLockRef = useRef(false);
@@ -447,6 +449,9 @@ export function useChatSessionState({
       setPendingUserMessage(msg);
       return;
     }
+    // A delayed legacy ACK must not replace an already received gateway row
+    // (which may contain its native turn anchor and attachment metadata).
+    if (msg.realtimeMessageId && sessionStore.getMessages(targetSessionId).some(row => row.id === msg.realtimeMessageId)) return;
     const prov = readSelectedProvider();
     const normalized = chatMessageToNormalized(msg, targetSessionId, prov);
     if (normalized) {
@@ -550,6 +555,12 @@ export function useChatSessionState({
     if (!container) return;
 
     const nearBottom = isNearBottom();
+    if (!nearBottom && lastObservedScrollTopRef.current !== container.scrollTop) {
+      userScrollVersionRef.current += 1;
+    }
+    lastObservedScrollTopRef.current = container.scrollTop;
+    // Timer callbacks may run before React commits a native scroll event.
+    isUserScrolledUpRef.current = !nearBottom;
     setIsUserScrolledUp(!nearBottom);
     scrollPositionRef.current = {
       height: container.scrollHeight,
@@ -645,6 +656,7 @@ export function useChatSessionState({
     setSearchTarget(null);
 
     pendingInitialScrollRef.current = true;
+    lastObservedScrollTopRef.current = null;
     setVisibleMessageCount(INITIAL_VISIBLE_MESSAGES);
     topLoadLockRef.current = false;
     pendingScrollRestoreRef.current = null;

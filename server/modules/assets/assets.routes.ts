@@ -19,12 +19,12 @@ router.use((req, _res, next) => {
 // Multer writes uploads straight into the global assets folder; the service
 // owns the folder location and the response record shape.
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
+  destination: (_req, _file, cb) => {
     ensureImageAssetsDir()
       .then((assetsDir) => cb(null, assetsDir))
       .catch((error) => cb(error as Error, ''));
   },
-  filename: (req, file, cb) => {
+  filename: (_req, file, cb) => {
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
     cb(null, `${uniqueSuffix}-${sanitizedName}`);
@@ -33,7 +33,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  fileFilter: (req, file, cb) => {
+  fileFilter: (_req, file, cb) => {
     if (isAllowedImageMimeType(file.mimetype)) {
       cb(null, true);
     } else {

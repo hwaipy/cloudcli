@@ -1,12 +1,34 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import test from 'node:test';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import test, { before, after } from 'node:test';
 
 import { Codex } from '@openai/codex-sdk';
 import type { Thread, ThreadOptions } from '@openai/codex-sdk';
 
 import { codexRuntime } from '@/modules/providers/list/codex/codex-runtime.provider.js';
 import type { ProviderRuntimeContext } from '@/shared/index.js';
+
+// Runtime isolation lookup touches the session repository even when SDK calls
+// are mocked. Never let these tests depend on a developer's real auth database.
+let testDirectory: string;
+const previousDatabasePath = process.env.DATABASE_PATH;
+before(async () => {
+  testDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'cloudcli-codex-runtime-'));
+  const { closeConnection, initializeDatabase } = await import('@/modules/database/index.js');
+  closeConnection();
+  process.env.DATABASE_PATH = path.join(testDirectory, 'auth.db');
+  await fs.writeFile(process.env.DATABASE_PATH, '');
+  await initializeDatabase();
+});
+after(async () => {
+  const { closeConnection } = await import('@/modules/database/index.js');
+  closeConnection();
+  if (previousDatabasePath === undefined) delete process.env.DATABASE_PATH;
+  else process.env.DATABASE_PATH = previousDatabasePath;
+  await fs.rm(testDirectory, { recursive: true, force: true });
+});
 
 test('Codex forwards growing assistant text before the item completes', async (t) => {
   const events = [

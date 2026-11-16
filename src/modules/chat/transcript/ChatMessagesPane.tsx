@@ -85,8 +85,6 @@ type ChatMessagesPaneProps = {
   showLoadAllOverlay: boolean;
   createDiff: any;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
-  onShowSettings?: () => void;
-  onGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject: Project;
@@ -163,8 +161,6 @@ function ChatMessagesPane({
   onForkFromMessage,
   onLoadFullTranscript,
   onFileOpen,
-  onShowSettings,
-  onGrantToolPermission,
   showRawParameters,
   showThinking,
   selectedProject,
@@ -362,8 +358,6 @@ function ChatMessagesPane({
                       createDiff={createDiff}
                       getMessageKey={getGroupedMessageKey}
                       onFileOpen={onFileOpen}
-                      onShowSettings={onShowSettings}
-                      onGrantToolPermission={onGrantToolPermission}
                       showRawParameters={showRawParameters}
                       showThinking={showThinking}
                       selectedProject={selectedProject}
@@ -388,8 +382,6 @@ function ChatMessagesPane({
                     prevMessage={messagePrevMessage}
                     createDiff={createDiff}
                     onFileOpen={onFileOpen}
-                    onShowSettings={onShowSettings}
-                    onGrantToolPermission={onGrantToolPermission}
                     showRawParameters={showRawParameters}
                     showThinking={showThinking}
                     selectedProject={selectedProject}

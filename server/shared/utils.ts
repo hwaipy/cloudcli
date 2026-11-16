@@ -1,3 +1,4 @@
+import type { ClaudeLocalCommandPayload } from '@/shared/types.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import {
@@ -1508,4 +1509,29 @@ export function findApplicationRoot(startDirectory: string): string {
   return path.basename(parentDirectory) === 'dist-server'
     ? path.dirname(parentDirectory)
     : parentDirectory;
+}
+
+//----------------- CLAUDE LOCAL COMMAND TRANSCRIPTS ------------
+
+/** History and search read only Claude's small tag surface, never arbitrary XML or executable markup. */
+export function extractClaudeTaggedContent(content: string, tagName: string): string | null {
+  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`<${escapedTagName}>([\\s\\S]*?)<\\/${escapedTagName}>`).exec(content);
+  return match ? match[1] : null;
+}
+
+/** Used by Claude history and search to recognize hidden local-command wrappers with identical fallback semantics. */
+export function parseClaudeLocalCommand(content: string): ClaudeLocalCommandPayload | null {
+  const commandName = extractClaudeTaggedContent(content, 'command-name');
+  const commandMessage = extractClaudeTaggedContent(content, 'command-message');
+  const commandArgs = extractClaudeTaggedContent(content, 'command-args');
+  if (commandName === null && commandMessage === null && commandArgs === null) return null;
+  return { commandName: commandName ?? '', commandMessage: commandMessage ?? '', commandArgs: commandArgs ?? '' };
+}
+
+/** Used by history and search so snippets display exactly the same slash-command text as the transcript. */
+export function formatClaudeLocalCommand(payload: ClaudeLocalCommandPayload): string {
+  const command = payload.commandName.trim() || payload.commandMessage.trim();
+  const args = payload.commandArgs.trim();
+  return command ? (args ? `${command} ${args}` : command) : '';
 }

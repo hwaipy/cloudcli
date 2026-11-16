@@ -601,6 +601,21 @@
     contain-intrinsic-size: auto 96px;
   }
 
+}
+
+/* These are global device rules, not class utilities. Keeping universal and
+   attribute selectors in @layer utilities makes Tailwind clone their entire
+   media blocks for important variants, emitting empty/invalid selectors. */
+  /* Skipped message rows use estimated heights. WebKit replaces those estimates
+     during a swipe, moving already-visible content by hundreds of pixels. Keep
+     mobile transcript geometry real; desktop retains offscreen render skipping. */
+  @media (max-width: 768px), (hover: none) and (pointer: coarse) {
+    .chat-message {
+      content-visibility: visible;
+      contain-intrinsic-size: none;
+    }
+  }
+
   /* Mobile touch optimization and safe areas */
   @media (max-width: 768px) {
     * {
@@ -769,6 +784,7 @@
     }
   }
 
+@layer utilities {
   /* Text wrapping improvements */
   .chat-message {
     word-wrap: break-word;

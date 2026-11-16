@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import '@/modules/i18n';

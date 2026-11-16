@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 
 import { fireEvent, render, screen } from '@testing-library/react';
-import React from 'react';
 import { test } from 'vitest';
 
 import '@/modules/i18n';
@@ -98,4 +97,25 @@ test('Codex work duration uses the user prompt rather than the first progress no
   ];
   const folded = foldCodexUpdates(messages, 'codex');
   assert.equal(folded[1].codexWorkDurationMs, 206_000);
+});
+
+test('completed Codex updates group mixed calls and reveal only the selected call details', () => {
+  const calls: ChatMessage[] = [
+    { type: 'tool', content: '', isToolUse: true, toolName: 'Bash', toolId: 'nested-bash', toolInput: { command: 'echo one' }, toolResult: { content: 'unique-command-output' }, timestamp: 1 },
+    { type: 'tool', content: '', isToolUse: true, toolName: 'Write', toolId: 'nested-write', toolInput: { file_path: '/sample.txt', content: 'unique-file-content' }, timestamp: 2 },
+  ];
+  render(<UiPreferencesProvider><MessageComponent message={{ type: 'assistant', content: '', timestamp: 3, codexUpdates: calls }} prevMessage={null} createDiff={() => []} provider="codex" /></UiPreferencesProvider>);
+  const workToggle = screen.getByRole('button', { name: /Worked for/ });
+  fireEvent.click(workToggle);
+  const group = screen.getByRole('button', { name: /工具调用/ });
+  assert.equal(group.getAttribute('aria-expanded'), 'false');
+  assert.equal(screen.queryByText('unique-command-output'), null);
+  fireEvent.click(group);
+  const command = screen.getByRole('button', { name: /echo one/, expanded: false });
+  assert.equal(command.getAttribute('aria-expanded'), 'false');
+  assert.equal(screen.queryByText('unique-command-output'), null);
+  assert.equal(screen.queryByText('unique-file-content'), null);
+  fireEvent.click(command);
+  assert.ok(screen.getByText('unique-command-output'));
+  assert.equal(screen.queryByText('unique-file-content'), null);
 });

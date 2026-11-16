@@ -229,7 +229,7 @@ Yes. CloudCLI provides the environment, not the AI. You bring your own Claude, C
 <details>
 <summary>Can I use CloudCLI UI on my phone?</summary>
 
-Yes. For self-hosted, run the server on your machine and open `[yourip]:port` in any browser on your network. For CloudCLI Cloud, open it from any device — no VPN, no port forwarding, no setup. A native app is also in the works.
+Yes. For self-hosted, run the server on your machine and open `[yourip]:port` in any browser on your network. For CloudCLI Cloud, open it from any device — no VPN, no port forwarding, no setup.
 
 </details>
 

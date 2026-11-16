@@ -91,18 +91,3 @@ export const languages: Language[] = [
     nativeName: 'Português (Brasil)',
   },
 ];
-
-/** Get language object by value, or undefined when it is not supported. */
-export const getLanguage = (value: string): Language | undefined => {
-  return languages.find(lang => lang.value === value);
-};
-
-/** Get all supported language codes. */
-export const getLanguageValues = (): string[] => {
-  return languages.map(lang => lang.value);
-};
-
-/** Check whether a language code is supported. */
-export const isLanguageSupported = (value: string): boolean => {
-  return languages.some(lang => lang.value === value);
-};

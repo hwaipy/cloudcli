@@ -41,14 +41,11 @@ export default function ProjectCreationWizard({ onClose, onProjectCreated }: Pro
   // Error text is shown in the current wizard step without discarding entered values.
   const [error, setError] = useState<string | null>(null);
 
-  // This choice is persisted on the project; changing servers resets it until capabilities are known.
-  const [strictFileIsolation, setStrictFileIsolation] = useState(false);
   // Capability results prevent offering strict mode on unsupported or unreachable backends.
   const [isolationCapability, setIsolationCapability] = useState<{ available: boolean; reason?: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setStrictFileIsolation(false);
     setIsolationCapability(null);
     if (backendId) void api.projectIsolationCapabilities(backendId).then(async (response) => {
       if (!response.ok) throw new Error('Backend isolation capability check failed');
@@ -89,6 +86,10 @@ export default function ProjectCreationWizard({ onClose, onProjectCreated }: Pro
     return () => { cancelled = true; };
   }, [injectedBackendId, t]);
 
+  // Ubuntu projects always use isolation; capable future Linux backends follow the same policy.
+  const strictFileIsolation = /^ubuntu(?:-|$)/i.test(backendId || '') || isolationCapability?.available === true;
+  const isolationReady = isolationCapability !== null && (!strictFileIsolation || isolationCapability.available);
+
   const selectedBackendName = backends.find((backend) => backend.id === backendId)?.name;
 
   const handleNext = useCallback(() => {
@@ -116,6 +117,7 @@ export default function ProjectCreationWizard({ onClose, onProjectCreated }: Pro
   }, [firstStep]);
 
   const handleCreate = useCallback(async () => {
+    if (!isolationReady) return;
     setIsCreating(true);
     setError(null);
     try {
@@ -127,7 +129,7 @@ export default function ProjectCreationWizard({ onClose, onProjectCreated }: Pro
     } finally {
       setIsCreating(false);
     }
-  }, [backendId, onClose, onProjectCreated, strictFileIsolation, t, workspacePath]);
+  }, [backendId, isolationReady, onClose, onProjectCreated, strictFileIsolation, t, workspacePath]);
 
   return (
     <div className="fixed bottom-0 left-0 right-0 top-0 z-[60] flex items-center justify-center bg-black/50 p-0 backdrop-blur-sm sm:p-4">
@@ -167,7 +169,6 @@ export default function ProjectCreationWizard({ onClose, onProjectCreated }: Pro
               workspacePath={workspacePath}
               backendId={backendId}
               strictFileIsolation={strictFileIsolation}
-              onStrictFileIsolationChange={setStrictFileIsolation}
               isolationAvailable={isolationCapability?.available === true}
               isolationReason={isolationCapability?.reason}
               isCreating={isCreating}
@@ -184,7 +185,7 @@ export default function ProjectCreationWizard({ onClose, onProjectCreated }: Pro
           step={step}
           firstStep={firstStep}
           isCreating={isCreating}
-          nextDisabled={step === 1 && (loadingBackends || !backendId || Boolean(backendLoadError))}
+          nextDisabled={(step === 1 && (loadingBackends || !backendId || Boolean(backendLoadError))) || (step === 3 && !isolationReady)}
           onClose={onClose}
           onBack={handleBack}
           onNext={handleNext}

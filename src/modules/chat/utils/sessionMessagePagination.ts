@@ -47,7 +47,7 @@ function serializedValue(value: unknown): string {
  * and deliberately excludes enrichment such as toolResult, which may change
  * when the provider finishes writing a turn.
  */
-export function messagesRepresentSamePersistedRow(
+function messagesRepresentSamePersistedRow(
   first: NormalizedMessage,
   second: NormalizedMessage,
 ): boolean {

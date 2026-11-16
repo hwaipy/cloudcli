@@ -1696,3 +1696,12 @@ export type CodexProcessLaunch = {
   /** Exports validated transcript snapshots from a private container volume. */
   syncState?: () => Promise<string[] | void>;
 };
+
+//----------------- CLAUDE LOCAL COMMAND TRANSCRIPTS ------------
+
+/** Hidden local-command tag values shared by history rendering and conversation search. Preserve raw values here; formatting trims only the displayed command. */
+export type ClaudeLocalCommandPayload = {
+  commandName: string;
+  commandMessage: string;
+  commandArgs: string;
+};

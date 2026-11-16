@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 
 import { render, screen } from '@testing-library/react';
-import React from 'react';
 import { test } from 'vitest';
 
 import '@/modules/i18n';

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export const SIDEBAR_WIDTH_STORAGE_KEY = 'sidebar-width';
+const SIDEBAR_WIDTH_STORAGE_KEY = 'sidebar-width';
 export const SIDEBAR_WIDTH_DEFAULT = 288; // the previous fixed md:w-72
 export const SIDEBAR_WIDTH_MIN = 220;
 export const SIDEBAR_WIDTH_MAX = 640;

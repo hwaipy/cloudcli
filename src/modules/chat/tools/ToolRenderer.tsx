@@ -19,6 +19,7 @@ import { DiffStatsBadge } from '@/modules/chat/tools/DiffStatsBadge';
 import { parseToolPayload, summarizeDiff } from '@/modules/chat/utils/messageTransforms';
 
 type ToolRendererProps = {
+  defaultOpenOverride?: boolean;
   toolName: string;
   toolInput: any;
   toolResult?: any;
@@ -77,6 +78,7 @@ function deriveToolStatus(toolResult: any, reportedStatus?: string): ToolStatus 
  * the transcript; it is the single entry point for tool presentation.
  */
 export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
+  defaultOpenOverride,
   toolName,
   toolInput,
   toolResult,
@@ -146,7 +148,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
           status={toolStatus !== 'completed' ? toolStatus : undefined}
           // Commands stay collapsed by default — including failures; the status
           // badge marks errors and the output expands via the chevron.
-          defaultOpen={false}
+          defaultOpen={defaultOpenOverride ?? false}
         />
         <BashEditDiff
           toolUseResult={toolResult?.toolUseResult}
@@ -198,7 +200,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
       <PlanDisplay
         title={title}
         content={contentProps.content || ''}
-        defaultOpen={displayConfig.defaultOpen ?? false}
+        defaultOpen={defaultOpenOverride ?? displayConfig.defaultOpen ?? false}
         isStreaming={isStreaming}
         showRawParameters={mode === 'input' && showRawParameters}
         rawContent={rawToolInput}
@@ -213,9 +215,7 @@ export const ToolRenderer: React.FC<ToolRendererProps> = memo(({
       ? displayConfig.title(parsedData)
       : displayConfig.title || 'Details';
 
-    const defaultOpen = displayConfig.defaultOpen !== undefined
-      ? displayConfig.defaultOpen
-      : false;
+    const defaultOpen = defaultOpenOverride ?? displayConfig.defaultOpen ?? false;
 
     const contentProps = displayConfig.getContentProps?.(parsedData, {
       selectedProject,

@@ -61,11 +61,29 @@ function call(method, params = {}) {
   });
 }
 const evaluate = async (expression) => (await call('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })).result.value;
+// CDP exposes a page before navigation has produced its body, especially after
+// app.relaunch(). Wait for the document, then assert the actual fixture version.
+async function waitForDocument() {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (await evaluate('document.readyState === "complete" && Boolean(document.body)')) return;
+    await delay(100);
+  }
+  throw new Error('Desktop document did not finish loading');
+}
 try {
   socket = await attach();
+  await waitForDocument();
   for (let i = 0; i < 40 && !await evaluate('Boolean(window.cloudcliDesktopUpdates)'); i++) await delay(100);
   assert.equal(await evaluate('Boolean(window.cloudcliDesktopUpdates)'), true);
   assert.equal(await evaluate('typeof require'), 'undefined');
+  // The native notification bridge is available only inside the trusted page.
+  assert.equal(await evaluate('typeof window.cloudcliDesktopNotifications?.receive'), 'function');
+  const notificationState = await evaluate('window.cloudcliDesktopNotifications.scope("fixture-account")');
+  assert.equal(notificationState.desktopNotifications.enabled, false);
+  assert.equal(notificationState.desktopNotifications.unreadCount, 0);
+  assert.equal(await evaluate('window.cloudcliDesktopNotifications.receive({})'), false);
+  await evaluate('window.cloudcliDesktopNotifications.scope("")');
+  console.log('NATIVE_NOTIFICATION_BRIDGE_ACCOUNT_SCOPE_OK');
   assert.equal(await evaluate('document.body.dataset.fixture'), 'one');
   await publish('two');
   const state = await evaluate('window.cloudcliDesktopUpdates.check()');
@@ -75,6 +93,7 @@ try {
   // Applying must actually restart Electron, not just change a renderer label.
   await evaluate('window.cloudcliDesktopUpdates.apply()').catch(() => {});
   socket.close(); await delay(1000); socket = await attach();
+  await waitForDocument();
   assert.equal(await evaluate('document.body.dataset.fixture'), 'two');
   console.log('NATIVE_RESTART_AND_APPLY_OK');
   await call('Browser.close').catch(() => {}); socket.close();

@@ -264,6 +264,50 @@ describe('older-message scroll restoration', () => {
   });
 });
 
+describe('mobile momentum during older-history loading', () => {
+  it('cancels a pending bottom correction before React commits a momentum scroll', async () => {
+    const messages = new Map<string, NormalizedMessage[]>([[SESSION_A, [buildMessage(0, '2026-01-01T00:00:00Z')]]]);
+    const store = createStore(messages);
+    const { result, rerender } = await renderChatSessionState({ session: { id: SESSION_A } as ProjectSession, store });
+    const container = createContainer(5000, 500);
+    (result.current.scrollContainerRef as { current: HTMLDivElement | null }).current = container.element;
+    messages.set(SESSION_A, [...messages.get(SESSION_A)!, buildMessage(1, '2026-01-01T00:00:01Z')]);
+    act(() => rerender({ session: { id: SESSION_A } as ProjectSession }));
+    act(() => {
+      container.element.scrollTop = 2500;
+      container.writes.length = 0;
+      void result.current.handleScroll();
+      vi.advanceTimersByTime(100);
+    });
+    expect(container.writes).toEqual([]);
+    expect(container.element.scrollTop).toBe(2500);
+  });
+
+  it('does not restore the touch-start position after native momentum scroll events', async () => {
+    const messages = new Map<string, NormalizedMessage[]>([[SESSION_A, [buildMessage(0, '2026-01-01T00:00:00Z')]]]);
+    const store = createStore(messages);
+    const slot = { ...store.getSessionSlot(SESSION_A), hasMore: true, total: 2 };
+    store.getSessionSlot.mockReturnValue(slot);
+    store.fetchFromServer.mockResolvedValue(slot);
+    let finish!: (result: { slot: typeof slot; prependedCount: number }) => void;
+    store.fetchMore.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const { result } = await renderChatSessionState({ session: { id: SESSION_A } as ProjectSession, store });
+    await act(async () => {});
+    const container = createContainer(5000, 500);
+    container.element.scrollTop = 0;
+    (result.current.scrollContainerRef as { current: HTMLDivElement | null }).current = container.element;
+    act(() => result.current.handleScrollIntent());
+    expect(store.fetchMore).toHaveBeenCalledTimes(1);
+    // After the finger is released iOS emits scroll events, with no wheel/touchmove.
+    act(() => { container.element.scrollTop = 240; void result.current.handleScroll(); });
+    container.writes.length = 0;
+    messages.set(SESSION_A, [buildMessage(2, '2025-12-31T23:59:59Z'), ...messages.get(SESSION_A)!]);
+    await act(async () => { finish({ slot: { ...slot, hasMore: false }, prependedCount: 1 }); });
+    expect(container.writes).toEqual([]);
+    expect(container.element.scrollTop).toBe(240);
+  });
+});
+
 describe('search jump ownership', () => {
   it('does not follow the user into the next session', { timeout: 20_000 }, async () => {
     const messages = new Map<string, NormalizedMessage[]>([

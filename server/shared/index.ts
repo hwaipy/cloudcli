@@ -3,3 +3,5 @@ export { createCodexRolloutReadStream, createCompleteMessage, createNormalizedMe
 export type { AnyRecord, ProviderRuntimeContext, ProviderRuntimeWriter, ProviderPermissionDecision } from './types.js';
 export type { HubIdentityClaim } from './types.js';
 export { createHubIdentityAssertion, verifyHubIdentityAssertion } from './hub-identity.js';
+
+export { extractClaudeTaggedContent, parseClaudeLocalCommand, formatClaudeLocalCommand } from './utils.js';

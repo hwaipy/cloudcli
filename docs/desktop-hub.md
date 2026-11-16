@@ -165,3 +165,23 @@ still user initiated. Manual checks remain in the native application menu.
 The displayed application name is `CloudCLI` starting with 0.1.3. The bundle ID, updater cache identity, download filename prefix and existing `CloudCLI Hub` profile directory remain unchanged for update and login continuity.
 
 On macOS, Cmd+W and the window close button hide the existing window rather than destroying its renderer. Dock activation or reopening the app restores the same view, retaining in-memory session caches, unsent drafts and scroll position. Cmd+Q exits normally; explicit native update installation also bypasses close-to-hide. Hidden renderer timers remain enabled. Run `node_modules/electron/dist/Electron.app/Contents/MacOS/Electron electron/hub/tests/fixtures/window-lifecycle.mjs` to verify real close/reopen and quit behavior.
+
+### System notifications and unread badge (0.1.5)
+
+Browser Web Push and desktop native notifications are separate device channels. Enable each client in Settings → Notifications and grant the relevant OS/browser permission. Browser subscriptions use one service-worker scope per backend so each backend may retain its own VAPID key. Notification clicks preserve the `/cloudcli/` application path and backend/session identity.
+
+The Hub desktop shell opens authenticated notification sockets for every online backend, with reconnect and discovery independent of the selected chat. Registration uses the current Hub account; authentication tokens remain in the renderer transport and are never stored in the native badge file. Native notification settings and unread identities are scoped per account. Viewing a session in the focused visible window clears that session's count. Notifications for the current focused session are suppressed. Dock counts represent distinct backend/session pairs rather than the number of events. Closing with Cmd+W retains reception; explicit quit stops it. macOS must permit notifications for Dock badges to appear. On logout or account change the badge clears and previous-account notifications cannot navigate.
+
+Codex question RPCs additionally emit the existing `permission.required` notification without including the question body or answer. This requires deploying and manually restarting the conversation backends; existing completion/error notification events do not require that backend patch.
+
+Verification: `npm run test:desktop`, frontend notification hooks, Web Push multi-backend scope tests, `node --test scripts/tests/notification-worker.test.mjs`, and provider question notification regressions. Actual banner presentation and Dock badge visibility depend on the user's macOS notification authorization and Focus settings.
+
+Fast consecutive Codex turns: completion/error notification deduplication now includes the native turn ID and user identity. A second turn in the same session must not be swallowed by the prior session-wide 20-second cooldown. Desktop wire events have unique IDs; the reusable session/code tag remains only for notification grouping. Existing Electron 0.1.5 clients are compatible. This backend-only correction takes effect after a manual backend restart. The real macOS focus probe confirmed a visible window loses both application and document focus when switching to another app; regression coverage also checks a quick second completion after the first was read.
+
+### 通知未读计数（0.1.6）
+
+Dock badge 按当前 Hub 账户下不同的 `backendId + sessionId` 计数，同一会话重复通知不会累加。
+打开会话且窗口可见并获得焦点、点击对应系统通知、在客户端归档或删除对应会话都会清除该会话的未读记录。
+“设置 → 通知”显示本机未读会话数，并提供“全部标为已读”；该操作不会关闭后续通知。
+关闭桌面通知也会清空遗留 badge。未读清理能力需要 Electron 壳 0.1.6，旧壳不会显示不支持的清除按钮。
+此记录目前是每个客户端独立保存的；在另一台设备或网页阅读不会同步标记本客户端已读。

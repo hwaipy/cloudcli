@@ -124,3 +124,13 @@ New `v2-ssh1-<CLI version>` images preinstall `openssh-client` and `util-linux`;
 Both project startup and the standalone broker use a container-local `flock` across the second tool check, proxy readiness and installation. Existing SSH tools skip the network probe. Missing tools require a bounded local-listener check and an HTTPS software-source probe through the existing proxy; apt update treats partial-index failures as errors. Initialization failures expose `ISOLATION_PROXY_NOT_READY`, `ISOLATION_PROXY_UPSTREAM_UNAVAILABLE`, `ISOLATION_SSH_LOCK_UNAVAILABLE`, or `ISOLATION_SSH_INSTALL_FAILED`, and do not submit Codex input. Retry within the existing session after recovery; never automatically replay a business request.
 
 The opt-in `ssh-initialization.integration.test.ts` creates a disposable credential-free container with `network=none`. Set `CLOUDCLI_ISOLATION_TEST_EGRESS_DIR` to an existing egress directory and `CLOUDCLI_ISOLATION_TEST_LEGACY_IMAGE` to the approved old image lacking SSH tools. It tests bounded failure, delayed readiness, recovery, concurrent initialization and single installation. Without these explicit settings it skips.
+
+### 按项目放行内网 SSH
+
+独立 SSH broker 支持操作员维护的 `${CLOUDCLI_ISOLATION_STATE_DIR}/ssh-allowlist.json`（默认 `~/.cloudcli/isolated-projects/ssh-allowlist.json`）。该文件必须保持宿主用户所有、权限 `0600`，不得放入项目或版本库。
+
+JSON 顶层按项目 UUID 索引，每条规则包含随机 32 字节十六进制 `token` 和 `destinations` 数组；每个目标必须是精确的数字 IP `address` 和整数 `port`。broker 依据 Docker 的项目归属标签，把该项目自己的 token 写入其私有容器系统层，不向其他项目提供凭据。
+
+仅 SSH CONNECT 可以使用此例外，且必须同时匹配凭据、IP 和端口；HTTP 出口及没有凭据的项目继续禁止内网访问。允许的私有 SSH 目标直接从 Ubuntu 建连，不绕经公网 Clash。目的端 SSH 身份验证仍然必须通过，白名单不会添加目标端 authorized_keys。
+
+2026-11-13 已为 HwaipyMe（`c8498eb9-5fda-48fa-9d90-9d737e9315d3`）配置 `192.168.10.248:2222`，该端口经 Lima 和 Docker 转发到 `me-hwaipy-app:22`。规则变更在每次 CONNECT 时读取，可直接撤销；新增项目凭据需重启独立 `cloudcli-isolation-ssh.service` 以重新配置客户端，聊天后端不需要重启。broker 自有的 `00-cloudcli-ssh-broker.conf` 和脚本兼容仍在运行的旧后端重写其旧 SSH 文件。

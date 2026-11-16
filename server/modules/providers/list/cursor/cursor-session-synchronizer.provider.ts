@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -18,19 +17,6 @@ type ParsedSession = {
   projectPath: string;
   sessionName?: string;
 };
-
-/**
- * Returns directory entries or an empty list when the folder is missing.
- */
-async function listDirectoryEntriesSafe(
-  directoryPath: string
-): Promise<import('node:fs').Dirent[]> {
-  try {
-    return await fsp.readdir(directoryPath, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-}
 
 /**
  * Session indexer for Cursor transcript artifacts.

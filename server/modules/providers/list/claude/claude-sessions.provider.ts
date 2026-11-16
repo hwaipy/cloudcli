@@ -1,3 +1,4 @@
+import { extractClaudeTaggedContent as extractTaggedContent, parseClaudeLocalCommand as parseLocalCommandPayload, formatClaudeLocalCommand as buildLocalCommandDisplayText } from '@/shared/index.js';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -987,65 +988,6 @@ function unwrapPastedContent(text: string): string {
 
 function isInternalContent(content: string): boolean {
   return INTERNAL_CONTENT_PREFIXES.some((prefix) => content.startsWith(prefix));
-}
-
-/**
- * Claude wraps local slash-command metadata in lightweight XML-like tags inside
- * a plain string payload. We intentionally parse only the small tag surface we
- * care about instead of introducing a generic XML parser for untrusted history.
- */
-function extractTaggedContent(content: string, tagName: string): string | null {
-  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = new RegExp(`<${escapedTagName}>([\\s\\S]*?)<\\/${escapedTagName}>`).exec(content);
-  return match ? match[1] : null;
-}
-
-type ClaudeLocalCommandPayload = {
-  commandName: string;
-  commandMessage: string;
-  commandArgs: string;
-};
-
-/**
- * Converts Claude's hidden local command wrapper into structured metadata.
- *
- * The three tags often coexist in one string payload. Returning `null` lets the
- * normal text path continue untouched for unrelated messages.
- */
-function parseLocalCommandPayload(content: string): ClaudeLocalCommandPayload | null {
-  const commandName = extractTaggedContent(content, 'command-name');
-  const commandMessage = extractTaggedContent(content, 'command-message');
-  const commandArgs = extractTaggedContent(content, 'command-args');
-
-  if (commandName === null && commandMessage === null && commandArgs === null) {
-    return null;
-  }
-
-  return {
-    commandName: commandName ?? '',
-    commandMessage: commandMessage ?? '',
-    commandArgs: commandArgs ?? '',
-  };
-}
-
-/**
- * Produces the short user-visible command string that should appear in chat.
- *
- * We prefer the slash-prefixed command name because that most closely matches
- * what the user actually typed, and only fall back to the message body when the
- * command name is unavailable in older transcript variants.
- */
-function buildLocalCommandDisplayText(payload: ClaudeLocalCommandPayload): string {
-  const commandName = payload.commandName.trim();
-  const commandMessage = payload.commandMessage.trim();
-  const commandArgs = payload.commandArgs.trim();
-  const baseCommand = commandName || commandMessage;
-
-  if (!baseCommand) {
-    return '';
-  }
-
-  return commandArgs ? `${baseCommand} ${commandArgs}` : baseCommand;
 }
 
 /** The `task_status` fields of a normalized message, minus the envelope. */

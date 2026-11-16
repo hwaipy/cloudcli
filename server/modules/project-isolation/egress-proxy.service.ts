@@ -64,6 +64,20 @@ async function publicAddress(hostname: string): Promise<string> {
   return (answers.find(({ family }) => family === 4) ?? answers[0]).address;
 }
 
+// Operator-only policy lives outside every container mount. A project receives only
+// its own random credential; claiming another project ID cannot grant access.
+async function allowedPrivateSsh(socketPath: string, authorization: string | string[] | undefined, host: string, port: number): Promise<boolean> {
+  if (typeof authorization !== 'string' || !/^Bearer [a-f0-9]{64}$/.test(authorization) || !net.isIP(host)) return false;
+  try {
+    const rules = JSON.parse(await fs.readFile(path.join(path.dirname(socketPath), '..', 'ssh-allowlist.json'), 'utf8'));
+    return Object.values(rules).some((value) => {
+      const rule = value as { token?: unknown; destinations?: Array<{ address?: unknown; port?: unknown }> };
+      return rule?.token === authorization.slice(7) && Array.isArray(rule.destinations)
+        && rule.destinations.some(target => target.address === host && target.port === port);
+    });
+  } catch { return false; }
+}
+
 // Only operator configuration selects this upstream. Container input still passes publicAddress first.
 function configuredUpstreamProxy(): URL | undefined {
   const value = process.env.CLOUDCLI_ISOLATION_UPSTREAM_PROXY;
@@ -145,11 +159,12 @@ export async function startIsolationEgress(socketPath: string, options: { allowS
       const port = Number(url.port || 443);
       if (url.username || url.password || url.pathname !== '/' || url.search || url.hash || !Number.isInteger(port) || port < 1 || port > 65535 || (!options.allowSsh && port !== 443)) throw new Error('Invalid CONNECT destination');
       trace(url.hostname, 'CONNECT request');
-      const address = await publicAddress(url.hostname);
+      const privateSsh = options.allowSsh === true && await allowedPrivateSsh(socketPath, request.headers['proxy-authorization'], url.hostname, port);
+      const address = privateSsh ? url.hostname : await publicAddress(url.hostname);
       trace(url.hostname, `resolved ${address}`);
       if (client.destroyed) return;
       const endpoint = port === 443 && !upstreamProxy ? await tlsEndpoint(url.hostname, address) : address;
-      const upstream = await openEgressConnection(endpoint, port, upstreamProxy);
+      const upstream = await openEgressConnection(endpoint, port, privateSsh ? undefined : upstreamProxy);
       if (client.destroyed) { upstream.destroy(); return; }
       trace(url.hostname, 'connected');
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n');

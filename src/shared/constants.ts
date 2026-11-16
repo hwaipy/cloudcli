@@ -95,7 +95,7 @@ export const DEFAULT_EFFORT_VALUE = 'default';
 //----------------- FILE UPLOAD LIMITS ------------
 
 /** Largest single file the upload endpoint accepts, in megabytes. Source of truth for the two derived limits below. */
-export const MAX_FILE_UPLOAD_SIZE_MB = 200;
+const MAX_FILE_UPLOAD_SIZE_MB = 200;
 
 /** `MAX_FILE_UPLOAD_SIZE_MB` in bytes, for comparing against `File.size` before uploading. */
 export const MAX_FILE_UPLOAD_SIZE_BYTES = MAX_FILE_UPLOAD_SIZE_MB * 1024 * 1024;
@@ -162,17 +162,6 @@ export const MCP_SUPPORTS_WORKING_DIRECTORY: Record<McpProvider, boolean> = {
   codex: true,
   opencode: false,
 };
-
-// ---------------------------
-
-//----------------- QUICK SETTINGS PANEL ROWS ------------
-
-/**
- * Class list for one row in the quick settings panel. Shared so plain rows and the clickable
- * toggle row (which appends `cursor-pointer`) stay visually identical.
- */
-export const SETTING_ROW_CLASS =
-  'flex items-center justify-between p-3 rounded-lg bg-muted/60 hover:bg-accent transition-colors border border-transparent hover:border-border';
 
 // ---------------------------
 

@@ -21,8 +21,26 @@ function createFakeSocket() {
   };
   socket.readyState = 1;
   socket.frames = [];
-  socket.send = (data: string) => socket.frames.push(JSON.parse(data) as Record<string, unknown>);
+  socket.send = (data: string) => {
+    const frame = JSON.parse(data) as Record<string, unknown>;
+    socket.frames.push(frame);
+    socket.emit('frame', frame);
+  };
   return socket;
+}
+
+/** Wait for the protocol outcome, not an arbitrary delay or the last unrelated status frame. */
+function waitForFrame(socket: ReturnType<typeof createFakeSocket>, code: string): Promise<Record<string, unknown>> {
+  const existing = socket.frames.find(frame => frame.code === code);
+  if (existing) return Promise.resolve(existing);
+  return new Promise((resolve, reject) => {
+    const onFrame = (frame: Record<string, unknown>) => {
+      if (frame.code !== code) return;
+      clearTimeout(timer); socket.off('frame', onFrame); resolve(frame);
+    };
+    const timer = setTimeout(() => { socket.off('frame', onFrame); reject(new Error(`No protocol outcome: ${code}`)); }, 2000);
+    socket.on('frame', onFrame);
+  });
 }
 
 /** Two turns and an edit of the second, which is the transcript the gateway reads. */
@@ -307,14 +325,14 @@ test('a refused send never rewinds the conversation', async () => {
         anchorId: 'turn-b',
         content: 'an edit that arrives too late',
       }));
-      await settle();
+      await waitForFrame(socket, 'RUN_IN_PROGRESS');
     } finally {
       sessionsService.rewindSessionForEdit = realRewind;
     }
 
     assert.equal(rewound, false);
     assert.equal(runs.length, 1);
-    assert.equal(socket.frames.at(-1)?.code, 'RUN_IN_PROGRESS');
+    assert.ok(socket.frames.some(frame => frame.code === 'RUN_IN_PROGRESS'));
   }, CODEX_TRANSCRIPT_ROWS);
 });
 

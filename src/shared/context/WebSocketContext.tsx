@@ -44,6 +44,7 @@ type WebSocketContextType = {
 
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
 
+/** Used by chat, project-workspace and task-master to share live backend transports. */
 export const useWebSocket = () => {
   const context = useContext(WebSocketContext);
   if (!context) {
@@ -79,10 +80,42 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   // Three values rather than a boolean: a first handshake still in flight must
   // not read as a lost connection, or every page load would flash the indicator.
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
+  // Invalidates transport effects after suspension or a network change, when
+  // WebKit can still report OPEN for a connection that no longer reaches its server.
+  const [transportGeneration, setTransportGeneration] = useState(0);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { isLoading: isAuthLoading, token, user } = useAuth();
 
   useEffect(() => { scopeSessionInputStatus(user ? String(user.id ?? user.username) : ""); }, [user]);
+
+  useEffect(() => {
+    let wasHidden = document.visibilityState === 'hidden';
+    let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+    const resumeTransports = () => {
+      if (document.visibilityState === 'hidden' || resumeTimer !== null) return;
+      // Native resume, online and visibility events can arrive together. Replace
+      // sockets once, after auth's synchronous foreground handlers have run.
+      resumeTimer = setTimeout(() => {
+        resumeTimer = null;
+        setTransportGeneration((generation) => generation + 1);
+      }, 0);
+    };
+    const handleVisibilityChange = () => {
+      const isHidden = document.visibilityState === 'hidden';
+      if (wasHidden && !isHidden) resumeTransports();
+      wasHidden = isHidden;
+    };
+
+    window.addEventListener('cloudcli:resume', resumeTransports);
+    window.addEventListener('online', resumeTransports);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('cloudcli:resume', resumeTransports);
+      window.removeEventListener('online', resumeTransports);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (resumeTimer !== null) clearTimeout(resumeTimer);
+    };
+  }, []);
 
   const dispatch = useCallback((event: ServerEvent) => {
     receiveSessionInputEvent(event as unknown as Record<string, unknown>);
@@ -121,6 +154,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         } catch (error) { console.error('Backend WebSocket event failed:', error); }
       };
       socket.onclose = () => {
+        if (backendSocketsRef.current.get(backendId) !== socket) return;
         backendSocketsRef.current.delete(backendId);
         if (wsRef.current === socket) wsRef.current = [...backendSocketsRef.current.values()].find((other) => other.readyState === WebSocket.OPEN) ?? null;
         setConnectionStatus([...backendSocketsRef.current.values()].some((other) => other.readyState === WebSocket.OPEN) ? 'connected' : 'disconnected');
@@ -153,8 +187,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         socket.close();
       }
       backendSocketsRef.current.clear();
+      wsRef.current = null;
+      setConnectionStatus('connecting');
     };
-  }, [dispatch, isAuthLoading, token, user]);
+  }, [dispatch, isAuthLoading, token, transportGeneration, user]);
 
   // Named function expression so the reconnect timer below can call itself
   // without reading the `connect` binding while it is still initializing.
@@ -217,11 +253,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     }
   }, [dispatch, isAuthLoading, token, user]); // reconnect with current authentication state
 
-  // Declared after `connect` so the effect body does not reference it before
-  // initialization. `connect` is memoized on [dispatch, isAuthLoading, token,
-  // user] and `dispatch` is stable, so depending on it reconnects on exactly
-  // the same transitions as the previous [isAuthLoading, token, user] list.
+  // Authentication changes replace the callback; foreground recovery explicitly
+  // invalidates the transport even when WebKit still reports its socket as OPEN.
   useEffect(() => {
+    if (isHubRuntime()) return undefined;
     // The cleanup below sets unmountedRef = true. Without this reset, every
     // re-run of the effect (e.g. on token refresh) would short-circuit connect()
     // at its unmounted guard and leave the socket permanently disconnected.
@@ -253,7 +288,7 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       // before must not show as "Reconnecting" after the next sign-in.
       setConnectionStatus('connecting');
     };
-  }, [connect, isAuthLoading, user]); // reconnect after authentication or token refresh
+  }, [connect, isAuthLoading, transportGeneration, user]); // reconnect after authentication, token refresh or foreground recovery
 
   const sendMessage = useCallback((message: unknown) => {
     const frame = message as { type?: string; sessions?: Array<{ sessionId?: string }> };
@@ -318,5 +353,3 @@ export const WebSocketProvider = ({ children }: { children: React.ReactNode }) =
     </WebSocketContext.Provider>
   );
 };
-
-export default WebSocketContext;

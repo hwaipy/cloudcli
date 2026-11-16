@@ -67,3 +67,17 @@ Hub 默认从当前工作目录的 `dist/` 和 `public/` 读取前端资源；�
 - `scripts/migrate-hub-account-state.py` 默认只预检；在停止 Hub 后使用 `--apply` 应用。它核对项目、会话、草稿归属，将 OfficeMac 原偏好作为基线，其他后端只补缺失项。已完成的迁移再次执行不会覆盖之后修改的 Hub 偏好。
 
 管理员可在 **设置 → 后端** 修改每个后端的显示名称与颜色。颜色和名称持久保存在 Hub registry；侧栏项目使用所属后端颜色。改名不改变后端 ID 或注册 key，已有后端保持连接，并可继续用原环境变量中的名称重新注册。
+
+## 公网前端入口一致性验收
+
+2026-11-13 排查发现：标准 HTTPS 的 `/cloudcli/` 使用独立发布目录，但 `/` 经内部 TLS 代理跳转到 `:3001/cloudcli/`，后者由 Hub 的旧 `dist` 提供。手机因而可能一直加载旧前端，即使标准入口已经发布消息去重修复。不要把“某个入口资源校验成功”当作全部入口已更新。
+
+生产 Nginx 现将 `/` 明确跳转到 `https://ai.hwaipy.cn/cloudcli/`；旧 `:3001` 入口的 `/`、`/cloudcli`、`/cloudcli/` 和 `/cloudcli/session/...` 同样跳转到标准 HTTPS origin，保留会话路径及查询参数。API 和 WebSocket 继续经 Hub 路由，不能将全部旧端口请求一概跳转。
+
+发布后执行只读线上回归：
+
+```sh
+CLOUDCLI_TEST_PUBLIC_BASE=https://ai.hwaipy.cn node --test scripts/tests/frontend-entrypoints.test.mjs
+```
+
+该测试核对标准及旧端口的根地址、工作区及会话深链接，要求最终 origin 和加载的资源清单一致。修复前 4 项失败，修复后 6 项全部通过。前端另有 `mobileUserBubbleRendering.test.tsx`，通过真实 realtime handler、session store、session hook 和消息组件验证广播、兼容 ACK 回显、原生 anchor 更新、历史合并及回放后只渲染一个用户气泡；不同请求的同文消息仍渲染两个。

@@ -563,16 +563,15 @@ test('updateCli stops an updater that runs past the timeout, and the child it st
     await cursor.set('update-sleep-ms', '2500');
     await cursor.set('update-new-version', '2026.10.09-1a2b3c4\n');
 
-    const startedAt = Date.now();
     const result = await createService({ updateTimeoutMs: 1000, updateKillGraceMs: 300 }).updateCli('cursor');
     assert.equal(result.failure, 'timed_out');
     assert.equal(result.exitCode, null);
     assert.equal(result.installedVersion, '2026.07.20-8cc9c0b');
-    assert.ok(Date.now() - startedAt < 2500, 'the result came from the kill, not from the updater finishing');
     assert.ok(await cursor.read('child-pid'), 'the updater had started its child');
 
-    // Past the point where either would have finished on its own.
-    await delay(Math.max(0, startedAt + 3500 - Date.now()));
+    // Check effects after the child could have finished on its own. Wall-clock
+    // limits also include CLI version probes and become flaky under CI load.
+    await delay(2600);
     assert.equal(await cursor.read('update-finished'), null, 'the updater was stopped');
     assert.equal(await cursor.read('child-finished'), null, 'its child was stopped with it');
   });

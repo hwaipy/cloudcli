@@ -11,7 +11,7 @@ type DialogContextValue = {
 
 const DialogContext = React.createContext<DialogContextValue | null>(null);
 
-export function useDialog() {
+function useDialog() {
   const ctx = React.useContext(DialogContext);
   if (!ctx) throw new Error('Dialog components must be used within <Dialog>');
   return ctx;

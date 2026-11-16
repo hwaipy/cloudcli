@@ -1,9 +1,9 @@
-import { getHubResourceBackend } from '@/shared/utils';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 
+import { getHubResourceBackend } from '@/shared/utils';
 import type { Project, ProjectSession } from '@/shared/types';
 import { TERMINAL_INIT_DELAY_MS } from '@/shared/constants';
 import { getShellWebSocketUrl, parseShellMessage, sendSocketMessage } from '@/modules/shell/utils/socket';
@@ -40,6 +40,7 @@ type UseShellConnectionResult = {
   disconnectFromShell: (options?: { suppressAutoConnect?: boolean }) => void;
 };
 
+/** Used by useShellRuntime to connect terminal UI to a retained server-side PTY. */
 export function useShellConnection({
   wsRef,
   terminalRef,
@@ -57,7 +58,9 @@ export function useShellConnection({
   clearTerminalScreen,
   onOutputRef,
 }: UseShellConnectionOptions): UseShellConnectionResult {
+  // Drives the terminal's connected controls independently of a stale WebKit socket state.
   const [isConnected, setIsConnected] = useState(false);
+  // Disables duplicate connection attempts while the transport is handshaking.
   const [isConnecting, setIsConnecting] = useState(false);
   // The theme the server says the Claude CLI in this pty was launched for. Only
   // the server knows it: a reconnect can reattach to a CLI started in another
@@ -66,6 +69,9 @@ export function useShellConnection({
   const connectingRef = useRef(false);
   const forceRestartOnInitRef = useRef(false);
   const suppressAutoConnectRef = useRef(false);
+  const wantsConnectionRef = useRef(false);
+  const connectionGenerationRef = useRef(0);
+  const initTimerRef = useRef<number | null>(null);
 
   const handleProcessCompletion = useCallback(
     (output: string) => {
@@ -131,8 +137,9 @@ export function useShellConnection({
   );
 
   const connectWebSocket = useCallback(
-    (isConnectionLocked = false) => {
-      if ((connectingRef.current && !isConnectionLocked) || isConnecting || isConnected) {
+    () => {
+      const currentSocket = wsRef.current;
+      if (connectingRef.current || (currentSocket && (currentSocket.readyState === WebSocket.CONNECTING || currentSocket.readyState === WebSocket.OPEN))) {
         return;
       }
 
@@ -145,16 +152,20 @@ export function useShellConnection({
         }
 
         connectingRef.current = true;
+        const generation = ++connectionGenerationRef.current;
 
         const socket = new WebSocket(wsUrl);
         wsRef.current = socket;
 
         socket.onopen = () => {
+          if (connectionGenerationRef.current !== generation) return;
           setIsConnected(true);
           setIsConnecting(false);
           connectingRef.current = false;
 
-          window.setTimeout(() => {
+          initTimerRef.current = window.setTimeout(() => {
+            initTimerRef.current = null;
+            if (connectionGenerationRef.current !== generation || socket.readyState !== WebSocket.OPEN) return;
             const currentTerminal = terminalRef.current;
             const currentFitAddon = fitAddonRef.current;
             const currentProject = selectedProjectRef.current;
@@ -187,11 +198,15 @@ export function useShellConnection({
         };
 
         socket.onmessage = (event) => {
+          if (connectionGenerationRef.current !== generation) return;
           const rawPayload = typeof event.data === 'string' ? event.data : String(event.data ?? '');
           handleSocketMessage(rawPayload);
         };
 
         socket.onclose = () => {
+          if (connectionGenerationRef.current !== generation) return;
+          if (initTimerRef.current !== null) window.clearTimeout(initTimerRef.current);
+          initTimerRef.current = null;
           setIsConnected(false);
           setIsConnecting(false);
           setClaudeLaunchColorScheme(null);
@@ -200,6 +215,7 @@ export function useShellConnection({
         };
 
         socket.onerror = () => {
+          if (connectionGenerationRef.current !== generation) return;
           setIsConnected(false);
           setIsConnecting(false);
           connectingRef.current = false;
@@ -217,8 +233,6 @@ export function useShellConnection({
       fitAddonRef,
       handleSocketMessage,
       initialCommandRef,
-      isConnected,
-      isConnecting,
       isDarkModeRef,
       isPlainShellRef,
       selectedProjectRef,
@@ -235,12 +249,16 @@ export function useShellConnection({
 
     forceRestartOnInitRef.current = Boolean(options?.forceRestart);
     suppressAutoConnectRef.current = false;
-    connectingRef.current = true;
+    wantsConnectionRef.current = true;
     setIsConnecting(true);
-    connectWebSocket(true);
+    connectWebSocket();
   }, [connectWebSocket, isConnected, isConnecting, isInitialized]);
 
   const disconnectFromShell = useCallback((options?: { suppressAutoConnect?: boolean }) => {
+    wantsConnectionRef.current = false;
+    connectionGenerationRef.current += 1;
+    if (initTimerRef.current !== null) window.clearTimeout(initTimerRef.current);
+    initTimerRef.current = null;
     if (options?.suppressAutoConnect) {
       suppressAutoConnectRef.current = true;
     }
@@ -253,6 +271,52 @@ export function useShellConnection({
     connectingRef.current = false;
     forceRestartOnInitRef.current = false;
   }, [clearTerminalScreen, closeSocket]);
+
+  useEffect(() => {
+    let resumeTimer: number | null = null;
+    const handleResume = () => {
+      if (!isInitialized || !wantsConnectionRef.current || suppressAutoConnectRef.current || resumeTimer !== null) return;
+      // Login-command init deliberately restarts its process on the server.
+      // Leave these explicit authentication flows under the user's control.
+      const command = initialCommandRef.current ?? '';
+      if (command.includes('setup-token') || command.includes('cursor-agent login') || command.includes('auth login')) return;
+      resumeTimer = window.setTimeout(() => {
+        resumeTimer = null;
+        if (!wantsConnectionRef.current || suppressAutoConnectRef.current) return;
+        connectionGenerationRef.current += 1;
+        if (initTimerRef.current !== null) window.clearTimeout(initTimerRef.current);
+        initTimerRef.current = null;
+        const oldSocket = wsRef.current;
+        if (oldSocket) {
+          oldSocket.onopen = null;
+          oldSocket.onmessage = null;
+          oldSocket.onclose = null;
+          oldSocket.onerror = null;
+          oldSocket.close();
+          wsRef.current = null;
+        }
+        // The server replays the retained PTY buffer on init. Clear the old
+        // viewport first so reconnecting never appends a second copy of it.
+        clearTerminalScreen();
+        forceRestartOnInitRef.current = false;
+        connectingRef.current = false;
+        setIsConnected(false);
+        setIsConnecting(true);
+        setClaudeLaunchColorScheme(null);
+        connectWebSocket();
+      }, 0);
+    };
+    window.addEventListener('cloudcli:resume', handleResume);
+    return () => {
+      window.removeEventListener('cloudcli:resume', handleResume);
+      if (resumeTimer !== null) window.clearTimeout(resumeTimer);
+    };
+  }, [clearTerminalScreen, connectWebSocket, initialCommandRef, isInitialized, wsRef]);
+
+  useEffect(() => () => {
+    connectionGenerationRef.current += 1;
+    if (initTimerRef.current !== null) window.clearTimeout(initTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (

@@ -1,8 +1,8 @@
-import { writeDraftText } from '@/shared/chatDrafts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 
 import { api } from '@/shared/api';
+import { writeDraftText } from '@/shared/chatDrafts';
 import { isHubRuntime, getHubResourceBackend, registerHubResourceBackend } from '@/shared/utils';
 import type { ServerEvent,
   AppTab,
@@ -12,6 +12,9 @@ import type { ServerEvent,
   ProjectSession,IsSessionProcessing } from '@/shared/types';
 import { mergeProjectSelectionMetadata } from '@/modules/project-workspace/utils/projectSelectionMetadata';
 import { readSelectedProvider } from '@/shared/selectedProvider';
+
+/** Wait between completed sidebar scans; slow requests never accumulate timer work. */
+const PROJECT_LIST_REFRESH_INTERVAL = 10_000;
 
 type UseProjectsStateArgs = {
   sessionId?: string;
@@ -47,6 +50,8 @@ type SessionUpsertedEvent = ServerEvent & {
 
 type FetchProjectsOptions = {
   showLoadingState?: boolean;
+  /** Drop a polling response after its owning workspace unmounts. */
+  isCurrent?: () => boolean;
 };
 
 type RegisterOptimisticSessionArgs = {
@@ -160,10 +165,10 @@ const countLoadedProjectSessions = (project: Project): number => getProjectSessi
 async function fetchProjectsFromEveryHubBackend(previous: Project[] = []): Promise<Project[]> {
   if (!isHubRuntime()) {
     const response = await api.projects();
-    return await response.json() as Project[];
+    return await refreshExpandedSessionPages(previous, await response.json() as Project[]);
   }
 
-  const backendsResponse = await api.hub.backends();
+  const backendsResponse = await api.hub.backends({ signal: AbortSignal.timeout(15_000) });
   if (!backendsResponse.ok) throw new Error(`Hub backend list failed (${backendsResponse.status})`);
   const payload = await backendsResponse.json() as { backends?: Array<{ id?: unknown; name?: unknown; color?: unknown }> };
   const backends = (payload.backends ?? []).filter((backend): backend is { id: string; name: string; color?: unknown } =>
@@ -172,10 +177,10 @@ async function fetchProjectsFromEveryHubBackend(previous: Project[] = []): Promi
   const projectPages = await Promise.all(backends.map(async (backend) => {
     const color = typeof backend.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(backend.color) ? backend.color : undefined;
     try {
-      const response = await api.projects(backend.id);
+      const response = await api.projects(backend.id, { signal: AbortSignal.timeout(15_000) });
       if (!response.ok) throw new Error(`Project backend unavailable (${response.status})`);
       const projectsFromBackend = await response.json() as Project[];
-      return projectsFromBackend.map((project) => ({
+      return await refreshExpandedSessionPages(previous.filter((project) => project.__hubBackendId === backend.id), projectsFromBackend.map((project) => ({
         ...project,
         __hubBackendId: backend.id,
         __hubBackendName: backend.name,
@@ -184,7 +189,7 @@ async function fetchProjectsFromEveryHubBackend(previous: Project[] = []): Promi
           ...session,
           __hubBackendId: backend.id,
         })),
-      }));
+      })));
     } catch (error) {
       console.warn(`Could not load projects from Hub server ${backend.id}:`, error);
       return previous.filter((project) => project.__hubBackendId === backend.id).map((project) => ({ ...project, __hubBackendName: backend.name + ' · 离线', __hubBackendColor: color }));
@@ -218,39 +223,30 @@ const mergeSessionProviderLists = (baseSessions: ProjectSession[], additionalSes
   return merged;
 };
 
-const mergeExpandedSessionPages = (previousProjects: Project[], incomingProjects: Project[]): Project[] => {
-  if (previousProjects.length === 0) {
-    return incomingProjects;
-  }
-
-  const previousByProjectId = new Map(previousProjects.map((project) => [project.projectId, project]));
-
-  return incomingProjects.map((incomingProject) => {
-    const previousProject = previousByProjectId.get(incomingProject.projectId);
-    if (!previousProject) {
-      return incomingProject;
+// A refresh is authoritative: never append old rows missing from the server.
+// Re-fetch already expanded pages so pagination survives without reviving archives.
+const refreshExpandedSessionPages = async (previous: Project[], incoming: Project[]): Promise<Project[]> => {
+  const previousById = new Map(previous.map((project) => [project.projectId, project]));
+  return Promise.all(incoming.map(async (project) => {
+    const target = countLoadedProjectSessions(previousById.get(project.projectId) ?? project);
+    let refreshed = project;
+    while (refreshed.sessionMeta?.hasMore && countLoadedProjectSessions(refreshed) < target) {
+      const offset = countLoadedProjectSessions(refreshed);
+      const response = await api.projectSessions(project.projectId, { limit: Math.min(100, target - offset), offset }, {
+        hubBackendId: project.__hubBackendId,
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) throw new Error(`Project session refresh failed (${response.status})`);
+      const page = await response.json() as ProjectSessionPage;
+      const sessions = mergeSessionProviderLists(refreshed.sessions ?? [], (page.sessions ?? []).map((session) => ({
+        ...session,
+        ...(project.__hubBackendId ? { __hubBackendId: project.__hubBackendId } : {}),
+      })));
+      refreshed = { ...refreshed, sessions, sessionMeta: page.sessionMeta };
+      if (sessions.length <= offset) break;
     }
-
-    const previousLoadedCount = countLoadedProjectSessions(previousProject);
-    const incomingLoadedCount = countLoadedProjectSessions(incomingProject);
-    if (previousLoadedCount <= incomingLoadedCount) {
-      return incomingProject;
-    }
-
-    const mergedProject: Project = {
-      ...incomingProject,
-      sessions: mergeSessionProviderLists(incomingProject.sessions ?? [], previousProject.sessions ?? []),
-    };
-
-    const totalSessions = Number(incomingProject.sessionMeta?.total ?? previousLoadedCount);
-    mergedProject.sessionMeta = {
-      ...incomingProject.sessionMeta,
-      total: totalSessions,
-      hasMore: countLoadedProjectSessions(mergedProject) < totalSessions,
-    };
-
-    return mergedProject;
-  });
+    return refreshed;
+  }));
 };
 
 const mergeProjectSessionPage = (
@@ -514,16 +510,19 @@ export function useProjectsState({
    * same payload — the workspace header and document title.
    */
   const projectsRequestIdRef = useRef(0);
+  // Background ticks skip initial, explicit and websocket-triggered scans already in flight.
+  const projectsFetchInFlightRef = useRef(0);
 
   useEffect(() => {
     sessionLookupRef.current = null;
   }, [sessionId]);
 
-  const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
+  const fetchProjects = useCallback(async ({ showLoadingState = true, isCurrent }: FetchProjectsOptions = {}) => {
     // Claimed before the request starts and read again in `finally`, so the
     // loading flag is only ever cleared by the response that actually wrote
     // `projects`.
     const requestId = (projectsRequestIdRef.current += 1);
+    projectsFetchInFlightRef.current += 1;
 
     try {
       if (showLoadingState) {
@@ -531,13 +530,13 @@ export function useProjectsState({
       }
       const projectData = await fetchProjectsFromEveryHubBackend(projectsRef.current);
 
-      if (projectsRequestIdRef.current !== requestId) {
+      if (projectsRequestIdRef.current !== requestId || isCurrent?.() === false) {
         return;
       }
 
       setProjects((prevProjects) => {
         const projectsWithTaskMaster = mergeTaskMasterCache(projectData, prevProjects);
-        const mergedProjects = mergeExpandedSessionPages(prevProjects, projectsWithTaskMaster);
+        const mergedProjects = projectsWithTaskMaster;
 
         if (prevProjects.length === 0) {
           return mergedProjects;
@@ -568,8 +567,9 @@ export function useProjectsState({
           : previousProject;
       });
     } catch (error) {
-      console.error('Error fetching projects:', error);
+      if (isCurrent?.() !== false) console.error('Error fetching projects:', error);
     } finally {
+      projectsFetchInFlightRef.current -= 1;
       // Only the newest request clears the flag, and it clears it whether or not
       // it asked for the spinner, because by now it has written the list.
       //
@@ -580,7 +580,7 @@ export function useProjectsState({
       // — the websocket's reconnect re-sync, a command-palette refresh, React's
       // StrictMode double-mount — supersedes the initial fetch and used to
       // trigger exactly that flash.
-      if (projectsRequestIdRef.current === requestId) {
+      if (projectsRequestIdRef.current === requestId && isCurrent?.() !== false) {
         setIsLoadingProjects(false);
       }
     }
@@ -589,6 +589,40 @@ export function useProjectsState({
   const refreshProjectsSilently = useCallback(async () => {
     // Keep chat view stable while still syncing sidebar/session metadata in background.
     await fetchProjects({ showLoadingState: false });
+  }, [fetchProjects]);
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      if (!stopped) timer = setTimeout(() => { void poll(); }, PROJECT_LIST_REFRESH_INTERVAL);
+    };
+    const poll = async () => {
+      try {
+        if (document.visibilityState === 'hidden' || navigator.onLine === false || projectsFetchInFlightRef.current > 0) return;
+        await fetchProjects({ showLoadingState: false, isCurrent: () => !stopped });
+      } finally {
+        schedule();
+      }
+    };
+    // Browsers throttle hidden-tab timers; resume immediately instead of waiting
+    // for a delayed tick. Share the in-flight guard with periodic refreshes.
+    const resume = () => {
+      if (document.visibilityState === 'hidden' || navigator.onLine === false || projectsFetchInFlightRef.current > 0) return;
+      clearTimeout(timer);
+      void poll();
+    };
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('focus', resume);
+    window.addEventListener('online', resume);
+    schedule();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('focus', resume);
+      window.removeEventListener('online', resume);
+    };
   }, [fetchProjects]);
 
   const registerOptimisticSession = useCallback(({
@@ -1085,7 +1119,7 @@ export function useProjectsState({
     try {
       const freshProjects = await fetchProjectsFromEveryHubBackend(projectsRef.current);
       const projectsWithTaskMaster = mergeTaskMasterCache(freshProjects, projects);
-      const mergedProjects = mergeExpandedSessionPages(projects, projectsWithTaskMaster);
+      const mergedProjects = projectsWithTaskMaster;
 
       setProjects((prevProjects) =>
         projectsHaveChanges(prevProjects, mergedProjects) ? mergedProjects : prevProjects,

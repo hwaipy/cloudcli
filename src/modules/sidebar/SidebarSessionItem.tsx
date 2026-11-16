@@ -6,7 +6,7 @@ import type { TFunction } from 'i18next';
 import { useSessionForkingProviders } from '@/shared/hooks/useProviderCapabilities';
 import { useSessionNeedsInput } from '@/shared/context/SessionInputStatus';
 
-import { Dialog, DialogContent, DialogTitle, LLMProviderLogo, Tooltip, buttonVariants, useAppContextMenu } from '@/shared/ui';
+import { Dialog, DialogContent, DialogTitle, Tooltip, buttonVariants, useAppContextMenu } from '@/shared/ui';
 import { cn, copyTextToClipboard, getSessionPageUrl } from '@/shared/utils';
 import { useOptionalAuth } from '@/modules/auth';
 import type { LLMProvider, Project, ProjectSession, SessionWithProvider } from '@/shared/types';
@@ -227,9 +227,6 @@ function SidebarSessionItem({
         >
           <div className="flex w-full min-w-0 items-center gap-2">
             {selectionIcon}
-            <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
-              <LLMProviderLogo provider={session.__provider} className="h-3 w-3" />
-            </div>
 
             <div className="flex min-w-0 flex-1 items-center gap-2">
                 <div
@@ -279,9 +276,6 @@ function SidebarSessionItem({
             <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-muted-foreground/30" aria-hidden="true" />
 
             <div className="mb-4 flex items-center gap-3 px-1">
-              <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-muted">
-                <LLMProviderLogo provider={session.__provider} className="h-5 w-5" />
-              </div>
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-foreground" title={sessionView.sessionName}>
                   {sessionView.sessionName}
@@ -433,9 +427,6 @@ function SidebarSessionItem({
         >
           <div className="flex w-full min-w-0 items-center gap-2">
             {selectionIcon}
-            <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
-              <LLMProviderLogo provider={session.__provider} className="h-3 w-3" />
-            </div>
             <div className="flex min-w-0 flex-1 items-center gap-2">
                 <div
                   className="min-w-0 flex-1 truncate text-sm font-normal text-foreground"
@@ -447,7 +438,7 @@ function SidebarSessionItem({
                   <span
                     className={cn(
                       'ml-auto flex-shrink-0 transition-opacity duration-200',
-                      isEditing ? 'opacity-0' : !isSelecting && 'group-hover:opacity-0',
+                      isEditing && 'opacity-0',
                     )}
                   >
                     <Tooltip content={t('tooltips.processingSessionIndicator', 'Processing session')} position="top">
@@ -460,7 +451,7 @@ function SidebarSessionItem({
                   <span
                     className={cn(
                       'ml-auto flex-shrink-0 text-[11px] text-muted-foreground transition-opacity duration-200',
-                      isEditing ? 'opacity-0' : !isSelecting && 'group-hover:opacity-0',
+                      isEditing && 'opacity-0',
                     )}
                   >
                     {compactSessionAge}

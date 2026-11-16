@@ -5,14 +5,6 @@ import { test } from 'vitest';
 import { groupConsecutiveTools, isToolGroupItem } from '@/modules/chat/utils/toolGrouping';
 import type { ChatMessage } from '@/shared/types';
 
-/**
- * The collapsed group's summary line is built here rather than in
- * ToolGroupContainer because producing it JSON.parses tool inputs, which can be
- * whole file contents. The component's useMemo could never cache it — grouping
- * allocates a fresh messages array on every pass — so it ran on every render of
- * the transcript, including ten times a second while streaming.
- */
-
 const toolMessage = (toolName: string, toolInput: unknown): ChatMessage => ({
   type: 'tool',
   content: '',
@@ -44,7 +36,7 @@ test('a run of same-tool calls is grouped and carries a precomputed preview', ()
   assert.equal(items.length, 1);
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '/a.ts, /b.ts');
+  assert.equal(group.preview, '读取文件 2 次');
 });
 
 test('a group of more than two calls reports the remainder', () => {
@@ -57,7 +49,7 @@ test('a group of more than two calls reports the remainder', () => {
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '/a.ts, /b.ts, +2 more');
+  assert.equal(group.preview, '读取文件 4 次');
 });
 
 test('a single tool call is not grouped', () => {
@@ -67,14 +59,15 @@ test('a single tool call is not grouped', () => {
   assert.equal(isToolGroupItem(items[0]), false);
 });
 
-test('different tools are not grouped together', () => {
+test('different consecutive tools are grouped together', () => {
   const items = groupConsecutiveTools([
     toolMessage('Read', { file_path: '/a.ts' }),
     toolMessage('Write', { file_path: '/b.ts' }),
   ]);
 
-  assert.equal(items.length, 2);
-  assert.equal(items.every((item) => !isToolGroupItem(item)), true);
+  assert.equal(items.length, 1);
+  assert.ok(isToolGroupItem(items[0]));
+  assert.equal(items[0].messages.length, 2);
 });
 
 test('a text turn splits a run', () => {
@@ -96,18 +89,10 @@ test('an unparsable tool input does not throw while grouping', () => {
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  // Read's getValue reads .file_path off the parsed input; the unparsable input
-  // stays a string, so there is nothing to show. The group must still form, the
-  // raw JSON must not leak into the summary line, and both calls must be
-  // accounted for as unnamed.
-  assert.equal(group.preview, '+2 more');
+  assert.equal(group.preview, '读取文件 2 次');
 });
 
-test('a tool with no config is previewed by what it operated on', () => {
-  // Exercises the other half of getToolInputPreview: unknown tools resolve to
-  // the Default config, whose title summarizes the input. Previewing the
-  // config's own label instead made every unmapped provider tool collapse into
-  // an identical, meaningless "Parameters, Parameters" line.
+test('unmapped tools are counted without reading their inputs', () => {
   const items = groupConsecutiveTools([
     toolMessage('SomeUnknownTool', { command: 'npm test' }),
     toolMessage('SomeUnknownTool', { file_path: '/repo/a.ts' }),
@@ -115,7 +100,7 @@ test('a tool with no config is previewed by what it operated on', () => {
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, 'npm test, /repo/a.ts');
+  assert.equal(group.preview, '其他工具调用 2 次');
 });
 
 test('the group carries the run\u2019s first timestamp, which is what the search jump matches on', () => {
@@ -129,9 +114,7 @@ test('the group carries the run\u2019s first timestamp, which is what the search
   assert.equal(group.timestamp, '2024-01-01T10:00:00.000Z');
 });
 
-test('a call the line cannot name is counted in the remainder', () => {
-  // One of the two is named, so the other is "more" — the badge says x2 and the
-  // line accounts for two calls.
+test('calls without file paths are still counted', () => {
   const items = groupConsecutiveTools([
     toolMessage('Read', { file_path: '/a.ts' }),
     toolMessage('Read', {}),
@@ -139,13 +122,10 @@ test('a call the line cannot name is counted in the remainder', () => {
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '/a.ts, +1 more');
+  assert.equal(group.preview, '读取文件 2 次');
 });
 
-test('the named calls plus the remainder always add up to the group size', () => {
-  // The invariant that keeps the summary honest next to ToolGroupContainer's
-  // x{messages.length} badge. Subtracting the two preview slots instead of the
-  // previews that produced text renders "+1 more" for three hidden calls.
+test('all calls contribute to the category total', () => {
   const items = groupConsecutiveTools([
     toolMessage('Read', {}),
     toolMessage('Read', { file_path: '/b.ts' }),
@@ -154,7 +134,7 @@ test('the named calls plus the remainder always add up to the group size', () =>
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '/b.ts, +2 more');
+  assert.equal(group.preview, '读取文件 3 次');
 });
 
 test('a group that can name nothing still accounts for every call', () => {
@@ -168,7 +148,7 @@ test('a group that can name nothing still accounts for every call', () => {
 
   const [group] = items;
   assert.ok(isToolGroupItem(group));
-  assert.equal(group.preview, '+5 more');
+  assert.equal(group.preview, '读取文件 5 次');
 });
 
 test('hidden reasoning between two tool calls does not split the run', () => {
@@ -261,7 +241,7 @@ test('a run that grew, changed rows, or changed showThinking is rebuilt', () => 
   const [grown] = groupConsecutiveTools([first, second, toolMessage('Read', { file_path: '/c.ts' })]);
   assert.ok(isToolGroupItem(grown));
   assert.notEqual(grown, initial);
-  assert.equal(grown.preview, '/a.ts, /b.ts, +1 more');
+  assert.equal(grown.preview, '读取文件 3 次');
 
   // A tool result arriving re-projects the row into a new object.
   const [replaced] = groupConsecutiveTools([first, { ...second, toolResult: { content: 'ok' } }]);
@@ -272,4 +252,29 @@ test('a run that grew, changed rows, or changed showThinking is rebuilt', () => 
   const [rehidden] = groupConsecutiveTools([first, thinkingMessage(), second], false);
   assert.ok(isToolGroupItem(rehidden));
   assert.notEqual(rehidden, initial);
+});
+
+
+test('interactive questions break mixed tool runs and remain accessible', () => {
+  const question = toolMessage('AskUserQuestion', { questions: [] });
+  const items = groupConsecutiveTools([
+    toolMessage('Bash', { command: 'pwd' }), question,
+    toolMessage('Read', { file_path: '/a.ts' }),
+  ]);
+  assert.equal(items.length, 3);
+  assert.equal(items[1], question);
+  assert.equal(items.some(isToolGroupItem), false);
+});
+
+
+test('mixed operations are counted by category without revealing command or file content', () => {
+  const [group] = groupConsecutiveTools([
+    toolMessage('Edit', { file_path: '/private/a' }),
+    toolMessage('Write', { file_path: '/private/b' }),
+    toolMessage('Read', { file_path: '/private/c' }),
+    toolMessage('Bash', { command: 'secret-command' }),
+    toolMessage('Glob', { pattern: '**/*' }),
+  ]);
+  assert.ok(isToolGroupItem(group));
+  assert.equal(group.preview, '修改文件 2 次，读取文件 1 次，运行脚本 1 次，搜索文件 1 次');
 });

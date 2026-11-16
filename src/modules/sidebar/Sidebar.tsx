@@ -86,7 +86,6 @@ function Sidebar({
     showNewProject,
     initialSessionsLoaded,
     currentTime,
-    isRefreshing,
     searchFilter,
     searchMode,
     setSearchMode,
@@ -137,7 +136,6 @@ function Sidebar({
     openArchivedSession,
     restoreArchivedProject,
     restoreArchivedSession,
-    refreshProjects,
     updateSessionSummary,
     forkSession,
     collapseSidebar: handleCollapseSidebar,
@@ -345,10 +343,6 @@ function Sidebar({
                 handleSessionClick(sessionObj, projectId ?? '');
               }
             }}
-            onRefresh={() => {
-              void refreshProjects();
-            }}
-            isRefreshing={isRefreshing}
             onCreateProject={() => setShowNewProject(true)}
             onCollapseSidebar={handleCollapseSidebar}
             updateAvailable={updateAvailable}

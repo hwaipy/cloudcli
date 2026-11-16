@@ -1,3 +1,4 @@
+import { extractClaudeTaggedContent as extractTaggedContent, parseClaudeLocalCommand as parseClaudeLocalCommandPayload, formatClaudeLocalCommand as buildClaudeLocalCommandDisplayText } from '@/shared/index.js';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -369,47 +370,6 @@ function extractClaudeText(content: unknown): string {
     .filter((part: AnyRecord) => part?.type === 'text' && typeof part?.text === 'string')
     .map((part: AnyRecord) => String(part.text))
     .join(' ');
-}
-
-function extractTaggedContent(content: string, tagName: string): string | null {
-  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = new RegExp(`<${escapedTagName}>([\\s\\S]*?)<\\/${escapedTagName}>`).exec(content);
-  return match ? match[1] : null;
-}
-
-type ClaudeLocalCommandPayload = {
-  commandName: string;
-  commandMessage: string;
-  commandArgs: string;
-};
-
-function parseClaudeLocalCommandPayload(content: string): ClaudeLocalCommandPayload | null {
-  const commandName = extractTaggedContent(content, 'command-name');
-  const commandMessage = extractTaggedContent(content, 'command-message');
-  const commandArgs = extractTaggedContent(content, 'command-args');
-
-  if (commandName === null && commandMessage === null && commandArgs === null) {
-    return null;
-  }
-
-  return {
-    commandName: commandName ?? '',
-    commandMessage: commandMessage ?? '',
-    commandArgs: commandArgs ?? '',
-  };
-}
-
-function buildClaudeLocalCommandDisplayText(payload: ClaudeLocalCommandPayload): string {
-  const commandName = payload.commandName.trim();
-  const commandMessage = payload.commandMessage.trim();
-  const commandArgs = payload.commandArgs.trim();
-  const baseCommand = commandName || commandMessage;
-
-  if (!baseCommand) {
-    return '';
-  }
-
-  return commandArgs ? `${baseCommand} ${commandArgs}` : baseCommand;
 }
 
 type ClaudeSearchableMessage = {

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import type { WebSocket } from 'ws';
 
 import { notificationChannelEndpointsDb } from '@/modules/database/index.js';
@@ -98,7 +100,8 @@ export function sendDesktopNotification(userId: unknown, payload: unknown): { at
 
   const message = JSON.stringify({
     type: 'notification',
-    id: typeof (payload as any)?.data?.tag === 'string' ? (payload as any).data.tag : `${Date.now()}`,
+    // A grouping tag is reused across turns; each published event needs its own ID.
+    id: randomUUID(),
     payload,
   });
 

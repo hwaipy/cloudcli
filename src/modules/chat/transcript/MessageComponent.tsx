@@ -1,3 +1,5 @@
+import ToolGroupContainer from '@/modules/chat/transcript/ToolGroupContainer';
+import { groupConsecutiveTools, isToolGroupItem } from '@/modules/chat/utils/toolGrouping';
 import { copyTextToClipboard, formatDateTime24 } from '@/shared/utils';
 import { AsyncQuestions } from '@/modules/chat/transcript/AsyncQuestions';
 import { memo, useId, useMemo, useRef, useState } from 'react';
@@ -6,7 +8,7 @@ import { ChevronRightIcon, GitBranchIcon, PencilIcon } from 'lucide-react';
 
 import { useMessageSendAnimation } from '@/modules/chat/context/MessageSendAnimationContext';
 
-import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult, LLMProvider,DiffLine,Project } from '@/shared/types';
+import type { ChatMessage, LLMProvider,DiffLine,Project } from '@/shared/types';
 import { formatUsageLimitText, stripProposedPlanEnvelope } from '@/modules/chat/utils/chatFormatting';
 import { formatTaskDuration } from '@/modules/chat/utils/backgroundTasks';
 import { ToolRenderer, ToolErrorDisplay, SubagentPanel, WorkflowPanel, shouldHideToolResult } from '@/modules/chat/tools';
@@ -25,12 +27,11 @@ import { MemoryCitations } from '@/modules/chat/transcript/MemoryCitations';
 import { LongUserMessage } from '@/modules/chat/transcript/LongUserMessage';
 
 type MessageComponentProps = {
+  expandToolDetails?: boolean;
   message: ChatMessage;
   prevMessage: ChatMessage | null;
   createDiff: (oldStr: string, newStr: string) => DiffLine[];
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
-  onShowSettings?: () => void;
-  onGrantToolPermission?: (suggestion: ClaudePermissionSuggestion) => PermissionGrantResult | null | undefined;
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject?: Project | null;
@@ -48,13 +49,17 @@ type MessageComponentProps = {
   onForkFromMessage?: (message: ChatMessage) => void;
 };
 
+function getUpdateToolKey(message: ChatMessage): string {
+  return String(message.toolId || message.timestamp || message.toolName);
+}
+
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
 /**
  * Rendered by chat's ChatMessagesPane and ToolGroupContainer to draw one
  * transcript entry — user turn, assistant turn, or a tool call and its result.
  */
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, provider, onEditMessage, onForkFromMessage }: MessageComponentProps) => {
+const MessageComponent = memo(({ expandToolDetails, message, prevMessage, createDiff, onFileOpen, showRawParameters, showThinking, selectedProject, provider, onEditMessage, onForkFromMessage }: MessageComponentProps) => {
   const openContextMenu = useAppContextMenu();
   const { t } = useTranslation('chat');
   const account = useOptionalAuth()?.user;
@@ -141,7 +146,11 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
           >
             <div className="min-h-0 overflow-hidden">
               <div className="space-y-4 py-4">
-                {message.codexUpdates.map((update, index) => (
+                {groupConsecutiveTools(message.codexUpdates, Boolean(showThinking)).map((update, index) => isToolGroupItem(update) ? (
+                  <ToolGroupContainer key={`group-${index}`} group={update} prevMessage={null} createDiff={createDiff}
+                    getMessageKey={getUpdateToolKey} onFileOpen={onFileOpen} showRawParameters={showRawParameters}
+                    showThinking={showThinking} selectedProject={selectedProject} provider={provider} />
+                ) : (
                   <div key={`${String(update.timestamp)}-${index}`}>
                     {update.isToolUse ? (
                       <MessageComponent
@@ -329,6 +338,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                   // the row the background-tasks strip scrolls to.
                   <div id={message.toolName === 'Bash' ? `tool-result-${message.toolId}` : undefined} className="scroll-mt-4">
                     <ToolRenderer
+                      defaultOpenOverride={expandToolDetails}
                       toolName={message.toolName || 'UnknownTool'}
                       toolInput={message.toolInput}
                       toolResult={message.toolResult}
@@ -350,6 +360,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     // Error results — collapsed red row that expands to the content
                     <div id={`tool-result-${message.toolId}`} className="scroll-mt-4">
                       <ToolErrorDisplay
+                        defaultOpen={expandToolDetails}
                         label={t('messageTypes.error')}
                         content={String(message.toolResult.content || '')}
                       />
@@ -358,6 +369,7 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, s
                     // Non-error results - route through ToolRenderer (single source of truth)
                     <div id={`tool-result-${message.toolId}`} className="scroll-mt-4">
                       <ToolRenderer
+                      defaultOpenOverride={expandToolDetails}
                         toolName={message.toolName || 'UnknownTool'}
                         toolInput={message.toolInput}
                         toolResult={message.toolResult}

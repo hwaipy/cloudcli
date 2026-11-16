@@ -107,6 +107,34 @@ type SubmitOptions = {
   skipCommandInterception?: boolean;
 };
 
+/** One owner for receipt filtering, timeout and subscription cleanup across all composer sends. */
+function observeChatReceipt(options: {
+  subscribe: (listener: (event: ServerEvent) => void) => () => void;
+  sessionId: string;
+  clientMessageId: string;
+  acceptedKind: 'chat_send_accepted' | 'chat_steer_accepted';
+  timeoutMs: number;
+}, onResult: (event: ServerEvent | null) => void): () => void {
+  let settled = false;
+  let unsubscribe = () => {};
+  const cancel = () => { if (settled) return; settled = true; window.clearTimeout(timer); unsubscribe(); };
+  const finish = (event: ServerEvent | null) => {
+    if (settled) return;
+    cancel();
+    onResult(event);
+  };
+  const timer = window.setTimeout(() => finish(null), options.timeoutMs);
+  try {
+    unsubscribe = options.subscribe((event) => {
+      if (event.sessionId === options.sessionId && event.clientMessageId === options.clientMessageId
+        && (event.kind === options.acceptedKind || event.kind === 'protocol_error')) finish(event);
+    });
+    // A synchronous replay can settle before subscribe returns its disposer.
+    if (settled) unsubscribe();
+  } catch (error) { cancel(); throw error; }
+  return cancel;
+}
+
 const createFakeSubmitEvent = () => {
   return { preventDefault: () => undefined } as unknown as FormEvent<HTMLFormElement>;
 };
@@ -1056,34 +1084,18 @@ export function useChatComposerState({
         : `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       pendingSendRef.current = { sessionId: targetSessionId, content: messageContent, clientMessageId };
       const releaseSendResult = claimChatSendResult(clientMessageId);
-      let unsubscribe: () => void = () => undefined;
-      let timer: number | undefined;
+      let cancelReceipt = () => {};
       const receipt = new Promise<{ accepted: boolean; userMessageId?: string; error?: string; retryable?: boolean; code?: string }>((resolve) => {
-        if (!subscribe) {
-          // Legacy non-application callers and test doubles may not expose the
-          // event stream. The app always supplies it and waits for server ACK.
-          resolve({ accepted: true });
-          return;
-        }
-        let settled = false;
-        const settle = (result: { accepted: boolean; userMessageId?: string; error?: string; retryable?: boolean; code?: string }) => {
-          if (settled) return;
-          settled = true;
-          if (timer !== undefined) window.clearTimeout(timer);
-          unsubscribe();
-          resolve(result);
-        };
-        unsubscribe = subscribe((event) => {
-          if (event.sessionId !== targetSessionId || event.clientMessageId !== clientMessageId) return;
-          if (event.kind === 'chat_send_accepted') settle({ accepted: true, userMessageId: typeof event.userMessageId === 'string' ? event.userMessageId : undefined });
-          if (event.kind === 'protocol_error') settle({
-            accepted: false,
-            error: String(event.error || 'The server refused this message.'),
-            retryable: event.code === 'RUN_IN_PROGRESS',
-            code: typeof event.code === 'string' ? event.code : undefined,
-          });
+        // Only legacy callers omit the event stream; application sends always await ACK.
+        if (!subscribe) { resolve({ accepted: true }); return; }
+        cancelReceipt = observeChatReceipt({ subscribe, sessionId: targetSessionId, clientMessageId, acceptedKind: 'chat_send_accepted', timeoutMs: 20_000 }, (event) => {
+          if (event?.kind === 'chat_send_accepted') {
+            resolve({ accepted: true, userMessageId: typeof event.userMessageId === 'string' ? event.userMessageId : undefined });
+          } else resolve({ accepted: false,
+            error: event ? String(event.error || 'The server refused this message.') : 'The server did not confirm receipt. Your message remains in the input; retry the same text while this page stays open to reuse its request ID.',
+            retryable: event ? event.code === 'RUN_IN_PROGRESS' : undefined,
+            code: typeof event?.code === 'string' ? event.code : undefined });
         });
-        timer = window.setTimeout(() => settle({ accepted: false, error: 'The server did not confirm receipt. Your message remains in the input; retry the same text while this page stays open to reuse its request ID.' }), 20_000);
       });
       const cancelSendAnimation = !queuedSubmission && submitOptions?.questionAnswer === undefined
         ? rememberMessageSendOrigin(targetSessionId, currentInput, textareaRef.current)
@@ -1106,8 +1118,7 @@ export function useChatComposerState({
         releaseSendResult();
         submitOptions?.onQuestionFailure?.(new Error('Connection unavailable.'));
         cancelSendAnimation();
-        unsubscribe();
-        if (timer !== undefined) window.clearTimeout(timer);
+        cancelReceipt();
         addMessage({
           type: 'error',
           content: 'Connection unavailable. Message was not sent; it remains in the input.',
@@ -1145,7 +1156,7 @@ export function useChatComposerState({
 
       // New gateways already broadcast/replay the authoritative row before ACK.
       // Retain the local fallback only for older backends, scoped to its target.
-      if (!sendReceipt.userMessageId) addMessage({ ...userMessage, sessionId: targetSessionId });
+      if (!sendReceipt.userMessageId) addMessage({ ...userMessage, sessionId: targetSessionId, realtimeMessageId: `local_${clientMessageId}` });
       // Mark this request as processing only after the socket accepted the
       // frame. A failed local send must leave the composer ready to retry.
       onSessionProcessing?.(targetSessionId, {
@@ -1262,28 +1273,16 @@ export function useChatComposerState({
         options: buildSendOptions(content),
       }, targetSessionId);
     };
-    let settled = false;
-    let unsubscribe = () => {};
-    const timer = window.setTimeout(() => {
-      settled = true;
+    const cancelReceipt = observeChatReceipt({ subscribe, sessionId: targetSessionId, clientMessageId, acceptedKind: 'chat_steer_accepted', timeoutMs: 30_000 }, (event) => {
       pendingSteerRef.current = false;
-      unsubscribe();
-      cancelSendAnimation();
-      addMessage({ type: 'error', content: 'Steer was not confirmed. Your message remains in the input.', timestamp: new Date() });
-    }, 30_000);
-    unsubscribe = subscribe((event) => {
-      if (settled || event.sessionId !== targetSessionId) return;
-      const accepted = event.kind === 'chat_steer_accepted' && event.clientMessageId === clientMessageId;
-      const rejected = event.kind === 'protocol_error' && event.clientMessageId === clientMessageId;
-      if (!accepted && !rejected) return;
-      settled = true;
-      pendingSteerRef.current = false;
-      window.clearTimeout(timer);
-      unsubscribe();
-      if (!accepted) {
+      if (!event) {
         cancelSendAnimation();
-        if (event.kind === 'protocol_error'
-          && (event.code === 'NO_ACTIVE_CODEX_TURN' || event.code === 'STEER_UNAVAILABLE')) queueUnacceptedSteer();
+        addMessage({ type: 'error', content: 'Steer was not confirmed. Your message remains in the input.', timestamp: new Date() });
+        return;
+      }
+      if (event.kind !== 'chat_steer_accepted') {
+        cancelSendAnimation();
+        if (event.code === 'NO_ACTIVE_CODEX_TURN' || event.code === 'STEER_UNAVAILABLE') queueUnacceptedSteer();
         return;
       }
       if (inputValueRef.current !== inputAtSend) return;
@@ -1295,10 +1294,8 @@ export function useChatComposerState({
     });
     if (sendMessage({ type: 'chat.steer', sessionId: targetSessionId, clientMessageId, content }) === false) {
       cancelSendAnimation();
-      settled = true;
       pendingSteerRef.current = false;
-      window.clearTimeout(timer);
-      unsubscribe();
+      cancelReceipt();
       queueUnacceptedSteer();
     }
   }, [addMessage, attachedFiles.length, buildSendOptions, canSteer, currentSessionId, editingAnchorId, isLoading, provider, queueMessage, recordSentMessage, selectedSession?.id, sendMessage, setInput, subscribe]);
@@ -1313,20 +1310,16 @@ export function useChatComposerState({
     if (!sessionId || !subscribe) throw new Error('Question session is unavailable.');
     await new Promise<void>((resolve, reject) => {
       const clientMessageId = `question-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      let unsubscribe = () => {};
-      const finish = (error?: Error) => { window.clearTimeout(timer); unsubscribe(); if (error) reject(error); else resolve(); };
-      const timer = window.setTimeout(() => finish(new Error('Answer was not confirmed.')), 30000);
-      unsubscribe = subscribe((event) => {
-        if (event.sessionId !== sessionId || event.clientMessageId !== clientMessageId) return;
-        if (event.kind === 'chat_steer_accepted') { recordSentMessage(text, sessionId); finish(); }
-        else if (event.kind === 'protocol_error') {
-          if (event.code === 'NO_ACTIVE_CODEX_TURN' || event.code === 'STEER_UNAVAILABLE') {
-            window.clearTimeout(timer); unsubscribe();
-            void sendIdleAnswer().then(resolve, reject);
-          } else finish(new Error(String(event.error || 'Answer rejected.')));
-        }
+      const cancelReceipt = observeChatReceipt({ subscribe, sessionId, clientMessageId, acceptedKind: 'chat_steer_accepted', timeoutMs: 30_000 }, (event) => {
+        if (!event) { reject(new Error('Answer was not confirmed.')); return; }
+        if (event.kind === 'chat_steer_accepted') { recordSentMessage(text, sessionId); resolve(); }
+        else if (event.code === 'NO_ACTIVE_CODEX_TURN' || event.code === 'STEER_UNAVAILABLE') {
+          void sendIdleAnswer().then(resolve, reject);
+        } else reject(new Error(String(event.error || 'Answer rejected.')));
       });
-      if (sendMessage({ type: 'chat.steer', sessionId, clientMessageId, content: text }) === false) finish(new Error('Connection unavailable.'));
+      if (sendMessage({ type: 'chat.steer', sessionId, clientMessageId, content: text }) === false) {
+        cancelReceipt(); reject(new Error('Connection unavailable.'));
+      }
     });
   }, [isLoading, canSteer, currentSessionId, selectedSession?.id, subscribe, sendMessage, recordSentMessage, handleSubmit]);
 
@@ -1340,19 +1333,9 @@ export function useChatComposerState({
       || pendingSteerRef.current || !subscribe) return;
     pendingSteerRef.current = true;
     const clientMessageId = `queued-steer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    let settled = false;
-    let unsubscribe = () => {};
-    const timer = window.setTimeout(() => { settled = true; pendingSteerRef.current = false; unsubscribe(); }, 30_000);
-    unsubscribe = subscribe((event) => {
-      if (settled || event.sessionId !== targetSessionId) return;
-      const accepted = event.kind === 'chat_steer_accepted' && event.clientMessageId === clientMessageId;
-      const rejected = event.kind === 'protocol_error' && event.clientMessageId === clientMessageId;
-      if (!accepted && !rejected) return;
-      settled = true;
+    const cancelReceipt = observeChatReceipt({ subscribe, sessionId: targetSessionId, clientMessageId, acceptedKind: 'chat_steer_accepted', timeoutMs: 30_000 }, (event) => {
       pendingSteerRef.current = false;
-      window.clearTimeout(timer);
-      unsubscribe();
-      if (!accepted) return;
+      if (event?.kind !== 'chat_steer_accepted') return;
       recordSentMessage(draft.content, targetSessionId);
       if (queuedDraftSessionRef.current === scope) {
         clearQueuedMessage(scope, id);
@@ -1360,10 +1343,8 @@ export function useChatComposerState({
       }
     });
     if (sendMessage({ type: 'chat.steer', sessionId: targetSessionId, clientMessageId, queuedMessageId: id }) === false) {
-      settled = true;
       pendingSteerRef.current = false;
-      window.clearTimeout(timer);
-      unsubscribe();
+      cancelReceipt();
       addMessage({ type: 'error', content: 'Connection unavailable. Queued message remains in the queue.', timestamp: new Date() });
     }
   }, [addMessage, canSteer, currentSessionId, isLoading, provider, queuedDrafts, recordSentMessage, selectedSession?.id, sendMessage, subscribe]);

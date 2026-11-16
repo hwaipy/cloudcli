@@ -7,6 +7,7 @@ import { Markdown } from '@/modules/chat/transcript/Markdown';
 type ToolErrorDisplayProps = {
   /** Full error text; rendered as markdown when expanded. */
   content: string;
+  defaultOpen?: boolean;
   /** Localized "Error" label shown in the header. */
   label: string;
 };
@@ -19,10 +20,11 @@ type ToolErrorDisplayProps = {
  *
  * Rendered by chat's MessageComponent for failed tool results.
  */
-export const ToolErrorDisplay: React.FC<ToolErrorDisplayProps> = ({ content, label }) => {
+export const ToolErrorDisplay: React.FC<ToolErrorDisplayProps> = ({ content, label, defaultOpen = false }) => {
   const trimmedContent = content.trim();
   const hasContent = trimmedContent.length > 0;
-  const [open, setOpen] = useState(false);
+  // An explicitly opened grouped call reveals its error without a third click.
+  const [open, setOpen] = useState(defaultOpen);
 
   const toggle = () => {
     if (hasContent) {

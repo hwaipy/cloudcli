@@ -55,4 +55,5 @@ class ReloadTests(unittest.TestCase):
    with patch.object(m.threading,'Thread') as thread:
     m.start_task('b',[],['']);thread.assert_not_called()
 
-unittest.main()
+if __name__ == "__main__":
+ unittest.main()

@@ -300,7 +300,7 @@ async function mutateOwnedDraft(method: string, url: string, scope: string, valu
 
 export const api = {
   hub: {
-    backends: (): Promise<Response> => fetch('/hub/backends', { cache: 'no-store' }),
+    backends: (options: Pick<RequestInit, 'signal'> = {}): Promise<Response> => fetch('/hub/backends', { ...options, cache: 'no-store' }),
     managedBackends: () => get('/hub/admin/backends'),
     updateBackend: (id: string, name: string, color: string) => patch(`/hub/admin/backends/${encodeURIComponent(id)}`, { name, color }),
     createBackend: (name: string) => post('/hub/admin/backends', { name }),
@@ -333,7 +333,7 @@ export const api = {
   // After the projectName → projectId migration the path/query identifier is
   // the DB-assigned `projectId`; parameter names reflect that for clarity.
   projectIsolationCapabilities: (backendId?: string) => get('/api/projects/isolation-capabilities', backendId ? { hubBackendId: backendId } : {}),
-  projects: (backendId?: string) => get('/api/projects', backendId ? { hubBackendId: backendId } : {}),
+  projects: (backendId?: string, options: Pick<RequestInit, 'signal'> = {}) => get('/api/projects', { ...options, ...(backendId ? { hubBackendId: backendId } : {}) }),
   archivedProjects: () => aggregateHubRows('/api/projects/archived', 'projects'),
   projectSessions: (
     projectId: string,
@@ -701,6 +701,14 @@ export const api = {
     clearQueuedMessage: (scope: string, messageId?: string) => mutateOwnedDraft('DELETE', '/api/user/drafts/queued-message', scope, { messageId }),
   },
 
+  // Device-specific notification registration and backend-routed sockets.
+  desktopNotifications: {
+    register: (endpointId: string, enabled: boolean, backendId?: string) =>
+      post('/api/notifications/endpoints/current', { channel: 'desktop', endpointId, label: 'CloudCLI desktop', enabled }, { hubBackendId: backendId }),
+    socketUrl: (token: string, backendId?: string) => withHubBackendUrl(
+      `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/desktop-notifications?token=${encodeURIComponent(token)}`, backendId),
+  },
+
   // Server-side settings: API keys, stored credentials, notifications, web push
   settings: {
     apiKeys: () => get('/api/settings/api-keys'),
@@ -726,10 +734,10 @@ export const api = {
       put('/api/settings/notification-preferences', preferences),
 
     push: {
-      vapidPublicKey: () => get('/api/settings/push/vapid-public-key'),
-      subscribe: (subscription: { endpoint?: string; keys?: unknown }) =>
-        post('/api/settings/push/subscribe', subscription),
-      unsubscribe: (endpoint: string) => post('/api/settings/push/unsubscribe', { endpoint }),
+      vapidPublicKey: (backendId?: string) => get('/api/settings/push/vapid-public-key', { hubBackendId: backendId }),
+      subscribe: (subscription: { endpoint?: string; keys?: unknown }, backendId?: string) =>
+        post('/api/settings/push/subscribe', subscription, { hubBackendId: backendId }),
+      unsubscribe: (endpoint: string, backendId?: string) => post('/api/settings/push/unsubscribe', { endpoint }, { hubBackendId: backendId }),
     },
   },
 

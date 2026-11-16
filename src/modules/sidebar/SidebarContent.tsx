@@ -2,7 +2,7 @@ import { type ReactNode } from 'react';
 import { Activity, Archive, Folder, MessageSquare, RotateCcw, Search, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
-import { LLMProviderLogo, ScrollArea } from '@/shared/ui';
+import { ScrollArea } from '@/shared/ui';
 import type { ArchivedProjectListItem, ArchivedSessionListItem, ConversationSearchResults, Project, RecentConversationListItem, ReleaseInfo, SearchProgress, SidebarProjectListProps, SidebarSearchMode } from '@/shared/types';
 import { formatCompactAge, getAllSessions } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import SidebarFooter from '@/modules/sidebar/SidebarFooter';
@@ -114,8 +114,6 @@ type SidebarContentProps = {
   // Conversation result clicks pass back the DB projectId (or null when the
   // server couldn't resolve it). Consumers must handle the null case.
   onConversationResultClick: (projectId: string | null, sessionId: string, provider: string, messageTimestamp?: string | null, messageSnippet?: string | null) => void;
-  onRefresh: () => void;
-  isRefreshing: boolean;
   onCreateProject: () => void;
   onCollapseSidebar: () => void;
   updateAvailable: boolean;
@@ -160,8 +158,6 @@ export default function SidebarContent({
   onRestoreArchivedSession,
   onDeleteArchivedSession,
   onConversationResultClick,
-  onRefresh,
-  isRefreshing,
   onCreateProject,
   onCollapseSidebar,
   updateAvailable,
@@ -200,8 +196,6 @@ export default function SidebarContent({
         onClearSearchFilter={onClearSearchFilter}
         searchMode={searchMode}
         onSearchModeChange={onSearchModeChange}
-        onRefresh={onRefresh}
-        isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
         onShowSettings={onShowSettings}
         onCollapseSidebar={onCollapseSidebar}
@@ -260,9 +254,6 @@ export default function SidebarContent({
                           session.provider,
                         )}
                       >
-                        <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-muted/60">
-                          <LLMProviderLogo provider={session.provider} className="h-3.5 w-3.5" />
-                        </span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[13px] font-normal leading-4 text-foreground">
                             {session.sessionTitle}
@@ -543,9 +534,6 @@ export default function SidebarContent({
                               isProjectArchived: true,
                             })}
                           >
-                            <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
-                              <LLMProviderLogo provider={session.__provider} className="h-3 w-3" />
-                            </span>
                             <div className="flex min-w-0 flex-1 items-center gap-2">
                               <p className="min-w-0 flex-1 truncate text-xs text-foreground">
                                 {(typeof session.summary === 'string' && session.summary.trim().length > 0
@@ -596,9 +584,6 @@ export default function SidebarContent({
                           className="flex min-w-0 flex-1 items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           onClick={() => onArchivedSessionClick(session)}
                         >
-                          <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
-                            <LLMProviderLogo provider={session.provider} className="h-3 w-3" />
-                          </span>
                           <div className="flex min-w-0 flex-1 items-center gap-2">
                             <p className="min-w-0 flex-1 truncate text-xs text-foreground">
                               {session.sessionTitle}

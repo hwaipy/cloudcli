@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 
 import { render } from '@testing-library/react';
-import React from 'react';
 import { beforeEach, test, vi } from 'vitest';
 
 import type { ActiveSidebarRename, RecentConversationListItem, SessionRowActions, SidebarProjectListProps } from '@/shared/types';

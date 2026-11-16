@@ -516,8 +516,6 @@ function ChatInterface({
               showLoadAllOverlay={showLoadAllOverlay}
               createDiff={createDiff}
               onFileOpen={onFileOpen}
-              onShowSettings={onShowSettings}
-              onGrantToolPermission={handleGrantToolPermission}
               showRawParameters={showRawParameters}
               showThinking={showThinking}
               selectedProject={selectedProject}

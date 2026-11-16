@@ -115,7 +115,7 @@ createWebSocketServer(server, {
         runtime: providerRuntimeService,
     },
     shell: {
-        resolveProviderSessionId: (sessionId, provider) => {
+        resolveProviderSessionId: (sessionId, _provider) => {
             const dbSession = sessionsDb.getSessionById(sessionId);
             if (dbSession) {
                 return dbSession.provider_session_id ?? null;
@@ -142,7 +142,7 @@ app.use(express.json({
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Public health check endpoint (no authentication required)
-app.get('/health', (req, res) => {
+app.get('/health', (_req, res) => {
     res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
@@ -258,7 +258,7 @@ app.get('*', (req, res) => {
 });
 
 // global error middleware must be last
-app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({
       success: false,

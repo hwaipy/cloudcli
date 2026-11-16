@@ -12,7 +12,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 
 import { createHubIdentityAssertion } from '@/shared/hub-identity.js';
 
-import { createHubAuthService, HubAuthError, type HubUserIdentity } from './hub-auth.service.js';
+import { createHubAuthService, HubAuthError } from './hub-auth.service.js';
 
 type HubBackend = { id: string; name: string; color?: string; url: URL | null; registeredAt?: number; lastConnectedAt?: number | null; online?: boolean; keyConfigured?: boolean };
 type RoutableHubBackend = HubBackend & { url: URL };
@@ -365,7 +365,7 @@ function staticFilePath(relativePath: string, config: HubConfiguration): string 
   return null;
 }
 
-function serveStatic(request: IncomingMessage, response: ServerResponse, config: HubConfiguration, pathname: string, backends: HubBackend[]): void {
+function serveStatic(request: IncomingMessage, response: ServerResponse, config: HubConfiguration, pathname: string): void {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     response.writeHead(405).end();
     return;
@@ -378,7 +378,6 @@ function serveStatic(request: IncomingMessage, response: ServerResponse, config:
   if (!selectedFile) { response.writeHead(404).end(); return; }
   if (isNavigation) {
     fs.promises.readFile(selectedFile, 'utf8').then((html) => {
-      const backendId = selectedBackend(request, config, backends)?.id ?? config.defaultBackendId;
       const runtimeConfig = `<script>window.__ROUTER_BASENAME__=${JSON.stringify(config.basePath)};window.__CLOUDCLI_HUB__=true;</script>`;
       const prefixed = html
         .replace(/\b(href|src)="\/([^"]*)"/g, (match, attribute: string, target: string) =>
@@ -718,11 +717,11 @@ export function createHubServer(config: HubConfiguration): http.Server {
     }
     if (pathname === '/api-docs.html' || pathname === '/logo.svg' || pathname.startsWith('/logo-')
       || pathname.startsWith('/favicon.') || pathname.startsWith('/icons/')) {
-      serveStatic(request, response, config, `${config.basePath}${pathname}`, listBackends());
+      serveStatic(request, response, config, `${config.basePath}${pathname}`);
       return;
     }
     if (pathname === config.basePath) { response.writeHead(308, { Location: `${config.basePath}/` }).end(); return; }
-    if (pathname.startsWith(`${config.basePath}/`)) { serveStatic(request, response, config, pathname, listBackends()); return; }
+    if (pathname.startsWith(`${config.basePath}/`)) { serveStatic(request, response, config, pathname); return; }
     response.writeHead(404).end();
   });
   server.on('upgrade', (request, socket, head) => {

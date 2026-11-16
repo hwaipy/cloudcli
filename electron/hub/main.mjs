@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, session, shell } from 'electron';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { WebUpdates } from './web-updates.mjs';
 import { networkForwardingOptions } from './network-forwarding.mjs';
 import { retainWindowOnClose } from './window-lifecycle.mjs';
+import { createHubNotifications } from './notifications.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const base = new URL(process.env.CLOUDCLI_DESKTOP_URL || 'https://ai.hwaipy.cn/cloudcli/');
@@ -70,6 +71,14 @@ win = new BrowserWindow({ width: 1280, height: 860, minWidth: 400, minHeight: 42
   webPreferences: { preload: path.join(root, 'preload.cjs'), additionalArguments: [`--cloudcli-hub-url=${base.href}`], contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, backgroundThrottling: false },
 });
 lifecycle = retainWindowOnClose(app, win);
+const notifications = await createHubNotifications({ file: path.join(app.getPath('userData'), 'notifications.json'), app, window: win, Notification,
+  onState: state => win.webContents.send('cloudcli-hub:notifications-state', state),
+  onNavigate: target => win.webContents.send('cloudcli-hub:notification-navigate', target),
+});
+for (const [action, handler] of Object.entries({ state: notifications.state, scope: notifications.scope, update: notifications.update, receive: notifications.receive, active: notifications.active })) {
+  ipcMain.handle(`cloudcli-hub:notifications-${action}`, (event, input) => { if (!trusted(event)) throw Error('Untrusted desktop request'); return handler(input); });
+}
+
 win.webContents.setWindowOpenHandler(({ url }) => { external(url); return { action: 'deny' }; });
 win.webContents.on('will-navigate', (event, url) => { const target = new URL(url); if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname)) { event.preventDefault(); external(url); } });
 win.webContents.on('will-attach-webview', (event) => event.preventDefault());

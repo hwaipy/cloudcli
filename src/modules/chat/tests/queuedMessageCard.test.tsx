@@ -15,7 +15,7 @@ test('queued turn uses a user-message bubble and exposes its queue actions', () 
   const onMoveDown = vi.fn();
   const onDragStart = vi.fn();
   const onDrop = vi.fn();
-  const { getByRole, getByText, queryByRole, container } = render(
+  const { getByRole, queryByRole, container } = render(
     <QueuedMessageCard
       content={'First line\n second line'}
       attachmentCount={2}

@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
+import { createNotificationEvent, notifyUserIfEnabled } from '@/modules/notifications/index.js';
+
 import { createNormalizedMessage } from '@/shared/index.js';
 import type { AnyRecord, ProviderPermissionDecision, ProviderRuntimeWriter } from '@/shared/index.js';
+
+// The legacy JavaScript factory accepts session IDs and dedupe keys at runtime.
+const notificationEvent = createNotificationEvent as (input: AnyRecord) => unknown;
 
 type Question = { id: string; question: string; header: string; options: Array<{ label: string; description: string }>; isSecret: boolean };
 type PendingQuestion = {
@@ -19,6 +24,8 @@ function emit(pending: PendingQuestion, fields: AnyRecord & { kind: Parameters<t
 /** Used by the Codex App Server runtime to bridge question RPCs to the provider-neutral permission UI and replay pending prompts. */
 export class CodexUserInputRequests {
   private readonly pending = new Map<string, PendingQuestion>();
+
+  constructor(private readonly notify = notifyUserIfEnabled) {}
 
   receive(sessionId: string, rpcId: string | number, params: AnyRecord, writer: ProviderRuntimeWriter, respond: (result: unknown) => void): boolean {
     if (!Array.isArray(params.questions) || !params.questions.length || params.questions.length > 20 || typeof params.itemId !== 'string') return false;
@@ -39,6 +46,16 @@ export class CodexUserInputRequests {
     this.pending.set(requestId, pending);
     emit(pending, { id: params.itemId, kind: 'tool_use', role: 'assistant', toolName: 'AskUserQuestion', toolId: params.itemId, toolInput: pending.input });
     emit(pending, { kind: 'permission_request', requestId, toolName: 'AskUserQuestion', input: pending.input });
+    if (writer.userId) {
+      try {
+        this.notify({ userId: writer.userId, event: notificationEvent({
+          provider: 'codex', sessionId, kind: 'action_required', code: 'permission.required',
+          meta: { toolName: 'AskUserQuestion' }, severity: 'warning', requiresUserAction: true,
+          dedupeKey: `codex:question:${sessionId}:${requestId}`,
+        }) });
+      } catch { console.warn('[Codex questions] Notification delivery unavailable; question remains answerable.'); }
+    }
+
     return true;
   }
 

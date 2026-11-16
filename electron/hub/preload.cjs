@@ -8,6 +8,21 @@ try {
   allowed = window.location.origin === configured.origin && window.location.pathname.startsWith(configured.pathname);
 } catch {}
 if (allowed) {
+  contextBridge.exposeInMainWorld('cloudcliDesktopNotifications', {
+    getState: () => ipcRenderer.invoke('cloudcli-hub:notifications-state'),
+    scope: account => ipcRenderer.invoke('cloudcli-hub:notifications-scope', account),
+    update: settings => ipcRenderer.invoke('cloudcli-hub:notifications-update', settings),
+    receive: message => ipcRenderer.invoke('cloudcli-hub:notifications-receive', message),
+    active: target => ipcRenderer.invoke('cloudcli-hub:notifications-active', target),
+    onStateUpdated: callback => {
+      const listener = (_event, value) => callback(value); ipcRenderer.on('cloudcli-hub:notifications-state', listener);
+      return () => ipcRenderer.removeListener('cloudcli-hub:notifications-state', listener);
+    },
+    onNavigate: callback => {
+      const listener = (_event, value) => callback(value); ipcRenderer.on('cloudcli-hub:notification-navigate', listener);
+      return () => ipcRenderer.removeListener('cloudcli-hub:notification-navigate', listener);
+    },
+  });
   contextBridge.exposeInMainWorld('cloudcliDesktopUpdates', {
     state: () => ipcRenderer.invoke('cloudcli-hub:update-state'),
     check: () => ipcRenderer.invoke('cloudcli-hub:check-updates'),

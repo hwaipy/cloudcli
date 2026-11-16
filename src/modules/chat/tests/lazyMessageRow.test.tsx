@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import type { ReactNode } from 'react';
 import { act, render } from '@testing-library/react';
 

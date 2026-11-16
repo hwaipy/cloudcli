@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 
 import { fireEvent, render, screen } from '@testing-library/react';
-import React from 'react';
 import { afterEach, test, vi } from 'vitest';
 
 import { ContextMenuProvider } from '@/shared/ui';

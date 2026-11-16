@@ -38,7 +38,6 @@ Benefits:
 | `services/chat-session-writer.service.ts` | Gateway writer handed to provider runtimes: remaps provider session ids to app ids, swallows `session_created`, assigns `seq` |
 | `services/shell-websocket.service.ts` | Handles `/shell` PTY lifecycle, reconnect buffering, auth URL detection |
 | `services/plugin-websocket-proxy.service.ts` | Bridges client socket to plugin socket |
-| `services/websocket-writer.service.ts` | Adapts raw WebSocket to writer interface (`send`, `setSessionId`, `getSessionId`) for non-chat writer consumers |
 | `services/websocket-state.service.ts` | Holds shared chat client set and open-state constant |
 
 ## High-Level Architecture
@@ -237,18 +236,11 @@ Broadcasts per-session `kind: session_upserted` deltas when provider session art
 
 This design centralizes cross-module realtime fanout without requiring route-local references to WebSocket internals.
 
-## Writer Adapter (`WebSocketWriter`)
+## Chat Session Writer
 
-`WebSocketWriter` normalizes chat transport behavior to match existing writer-style interfaces used elsewhere.
+`ChatSessionWriter` is the single provider-facing chat writer. It remaps provider session IDs, sequences and buffers events, and broadcasts to all authorized run subscribers. Raw sockets are not an alternate chat writer path.
 
-Methods:
-
-1. `send(data)`  
-JSON-serializes and sends only if socket is open.
-2. `setSessionId(sessionId)` / `getSessionId()`  
-Supports provider session bookkeeping and resume flows.
-3. `updateWebSocket(newRawWs)`  
-Allows active session stream redirection on reconnect.
+The `isWebSocketWriter` property remains part of the provider compatibility contract; it indicates structured-event delivery rather than a serialized SSE payload.
 
 ## Error Handling and Close Codes
 

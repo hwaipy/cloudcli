@@ -94,7 +94,7 @@ const assertSupportedTransport = (
   );
 };
 
-export const parseJsonMcpPayload = (
+const parseJsonMcpPayload = (
   provider: McpProvider,
   formData: McpFormState,
   options?: CreateMcpPayloadOptions,

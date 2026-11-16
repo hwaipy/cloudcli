@@ -12,6 +12,7 @@ def assets(p,text='new'):
  (p/'assets/app.js').write_text(text)
  (p/'index.html').write_text('<script src="/cloudcli/assets/app.js"></script>')
  (p/'boot-assets.json').write_text(json.dumps({'assets':[{'file':'assets/app.js','bytes':len(text)}]}))
+ (p/'desktop-assets.json').write_text(json.dumps({'assets':[{'file':'assets/app.js','sha256':hashlib.sha256(text.encode()).hexdigest()}]}))
 
 class FrontTests(unittest.TestCase):
  def setUp(self):
@@ -41,7 +42,7 @@ class FrontTests(unittest.TestCase):
   with self.assertRaisesRegex(RuntimeError,'base'):m.validate_frontend()
  def test_uploaded_asset_missing_rejected(self):
   assets(m.FRONTEND_BUILD);(m.FRONTEND_BUILD/'assets/app.js').unlink()
-  with self.assertRaisesRegex(RuntimeError,'缺少资源'):m.validate_frontend()
+  with self.assertRaisesRegex(RuntimeError,'资源清单校验失败'):m.validate_frontend()
 
 class RemoteTests(unittest.TestCase):
  def setUp(self):
@@ -73,4 +74,5 @@ class RemoteTests(unittest.TestCase):
    with self.assertRaisesRegex(RuntimeError,'清单'):r.deploy(self.archive,'new-release','bad')
    restart.assert_not_called();self.assertEqual((self.root/'current').resolve(),self.old)
 
-unittest.main()
+if __name__ == "__main__":
+ unittest.main()

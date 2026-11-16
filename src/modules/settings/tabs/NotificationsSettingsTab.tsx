@@ -17,10 +17,13 @@ type NotificationsSettingsTabProps = {
   desktopNotifications?: {
     enabled: boolean;
     supported: boolean;
+    canClearUnread?: boolean;
+    unreadCount?: number;
     connectedCount?: number;
     targetCount?: number;
     lastError?: string | null;
   } | null;
+  onClearDesktopUnread?: () => void;
   onEnableDesktopNotifications?: () => void;
   onDisableDesktopNotifications?: () => void;
 };
@@ -36,6 +39,7 @@ export default function NotificationsSettingsTab({
   onDisablePush,
   isDesktop = false,
   desktopNotifications = null,
+  onClearDesktopUnread,
   onEnableDesktopNotifications,
   onDisableDesktopNotifications,
 }: NotificationsSettingsTabProps) {
@@ -96,6 +100,12 @@ export default function NotificationsSettingsTab({
                   </span>
                 )}
               </div>
+              {desktopNotifications?.canClearUnread && (
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  <span>未读会话：{desktopNotifications.unreadCount ?? 0}</span>
+                  <Button variant="outline" disabled={!desktopNotifications.unreadCount} onClick={onClearDesktopUnread}>全部标为已读</Button>
+                </div>
+              )}
               {desktopNotifications?.lastError && (
                 <p className="text-sm text-red-600 dark:text-red-400">{desktopNotifications.lastError}</p>
               )}

@@ -1,6 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
-import type { CSSProperties } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
 
 //----------------- LLM PROVIDER MODEL CATALOG ------------
@@ -374,6 +373,8 @@ export type SubagentInfo = {
 
 /** One rendered entry in a chat transcript — user turn, assistant turn, tool call and result, local command output, or subagent container — and the shape the chat message list and message components consume. */
 export type ChatMessage = {
+  /** Stable gateway identity for a compatibility user echo; prevents duplicate realtime rows after retries. */
+  realtimeMessageId?: string;
   /** Fork boundary for a completed assistant round; separate from user edit anchors. */
   forkAnchorId?: string;
   /** Explicit destination for delayed local echoes; never infer it from the visible session. */
@@ -1315,21 +1316,11 @@ export type ExistingPrdFile = {
 /** The active project-creation wizard step: 1 selects a Hub backend, 2 selects a path, 3 confirms creation. */
 export type WizardStep = 1 | 2 | 3;
 
-/** How the project-creation wizard authenticates a GitHub clone: reuse a 'stored' credential, enter a 'new' token, or use 'none' and rely on public access or an SSH key. */
-export type TokenMode = 'stored' | 'new' | 'none';
-
 /** One filesystem directory returned by the browse-filesystem endpoint, used to populate workspace-path autocomplete and the folder browser. */
 export type FolderSuggestion = {
   name: string;
   path: string;
   type?: string;
-};
-
-/** A stored GitHub token credential as returned by the credentials endpoint, listed so the user can pick which token authenticates a clone. */
-export type GithubTokenCredential = {
-  id: number;
-  credential_name: string;
-  is_active: boolean;
 };
 
 // ---------------------------
@@ -1401,26 +1392,6 @@ export type ProviderCliUpdateResult = {
   installedVersion: string | null;
   failure: 'permission_denied' | 'timed_out' | 'failed' | null;
 };
-
-// ---------------------------
-
-//----------------- QUICK SETTINGS PANEL ------------
-
-/** Identifier of a boolean user preference exposed in the quick settings panel; use it as the key when reading or writing one preference. */
-export type PreferenceToggleKey =
-  | 'showRawParameters'
-  | 'showThinking'
-  | 'sendByCtrlEnter'
-  | 'voiceEnabled';
-
-/** The full set of quick settings booleans keyed by PreferenceToggleKey, held together so the panel can read every toggle from one object. */
-export type QuickSettingsPreferences = Record<PreferenceToggleKey, boolean>;
-
-/** Which content area the quick settings panel is showing: 'settings' (preference toggles) or 'commands' (slash-command list); persisted with the pin state and used by the tab bar and the panel view. */
-export type QuickSettingsTab = 'settings' | 'commands';
-
-/** Inline style for the quick settings drag handle, produced by the drag hook from the stored handle position and applied by the handle component. */
-export type QuickSettingsHandleStyle = CSSProperties;
 
 // ---------------------------
 
@@ -1944,4 +1915,23 @@ export type DesktopUpdateBridge = {
   check(): Promise<DesktopUpdateState>;
   apply(): Promise<void>;
   onState(callback: (state: DesktopUpdateState) => void): () => void;
+};
+
+//----------------- DESKTOP NOTIFICATIONS ------------
+
+/** Shared native bridge state consumed by workspace notification delivery and settings. */
+export type DesktopNotificationState = { desktopNotifications: { enabled: boolean; supported: boolean; canClearUnread?: boolean; unreadCount: number } };
+
+/** Trusted notification navigation is a session identity, never an arbitrary URL. */
+export type DesktopNotificationTarget = { sessionId: string; backendId?: string; provider?: string | null };
+
+/** Hub desktop preload bridge; the legacy desktop settings bridge is intentionally compatible. */
+export type HubDesktopNotificationsBridge = {
+  getState(): Promise<DesktopNotificationState>;
+  scope(account: string): Promise<DesktopNotificationState>;
+  update(settings: { enabled?: boolean; clearUnread?: boolean; readSessions?: Array<{ backendId: string; sessionId: string }> }): Promise<DesktopNotificationState>;
+  receive(message: unknown): Promise<boolean>;
+  active(target: { sessionId: string | null; backendId?: string }): Promise<void>;
+  onStateUpdated(callback: (state: DesktopNotificationState) => void): () => void;
+  onNavigate(callback: (target: DesktopNotificationTarget) => void): () => void;
 };

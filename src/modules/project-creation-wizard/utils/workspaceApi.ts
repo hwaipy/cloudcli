@@ -1,10 +1,5 @@
 import { api } from '@/shared/api';
-import type { FolderSuggestion, GithubTokenCredential, TokenMode } from '@/shared/types';
-
-type CredentialsResponse = {
-  credentials?: GithubTokenCredential[];
-  error?: string;
-};
+import type { FolderSuggestion } from '@/shared/types';
 
 type BrowseFilesystemResponse = {
   path?: string;
@@ -37,24 +32,6 @@ type CreateProjectResponse = {
   error?: string | CreateProjectApiError;
   details?: string;
   message?: string;
-};
-
-type CloneProgressEvent = {
-  type?: string;
-  message?: string;
-  project?: Record<string, unknown>;
-};
-
-type CloneWorkspaceParams = {
-  workspacePath: string;
-  githubUrl: string;
-  tokenMode: TokenMode;
-  selectedGithubToken: string;
-  newGithubToken: string;
-};
-
-type CloneProgressHandlers = {
-  onProgress: (message: string) => void;
 };
 
 const parseJson = async <T>(response: Response): Promise<T> => {
@@ -98,17 +75,6 @@ const resolveCreateProjectErrorMessage = (responseData: CreateProjectResponse): 
   return null;
 };
 
-export const fetchGithubTokenCredentials = async (backendId?: string) => {
-  const response = await api.settings.credentials('github_token', backendId ? { hubBackendId: backendId } : {});
-  const data = await parseJson<CredentialsResponse>(response);
-
-  if (!response.ok) {
-    throw new Error(data.error || 'Failed to load GitHub tokens');
-  }
-
-  return (data.credentials || []).filter((credential) => credential.is_active);
-};
-
 export const browseFilesystemFolders = async (pathToBrowse: string, backendId?: string) => {
   const response = await api.browseFilesystem(pathToBrowse, backendId);
   const data = await parseJson<BrowseFilesystemResponse>(response);
@@ -144,84 +110,3 @@ export const createProjectRequest = async (payload: CreateProjectPayload, backen
 
   return data.project;
 };
-
-type StartCloneResponse = {
-  cloneId?: string;
-  error?: string | CreateProjectApiError;
-};
-
-// Submits the clone details — token included — in a request body and returns
-// the id the progress stream is opened with, so the token never enters a URL.
-const startClone = async ({
-  workspacePath,
-  githubUrl,
-  tokenMode,
-  selectedGithubToken,
-  newGithubToken,
-}: CloneWorkspaceParams, backendId?: string) => {
-  const response = await api.startProjectClone({
-    path: workspacePath.trim(),
-    githubUrl: githubUrl.trim(),
-    githubTokenId: tokenMode === 'stored' && selectedGithubToken ? Number(selectedGithubToken) : null,
-    newGithubToken: tokenMode === 'new' ? newGithubToken.trim() : null,
-  }, backendId);
-  const data = await parseJson<StartCloneResponse>(response);
-
-  if (!response.ok || !data.cloneId) {
-    const errorMessage = typeof data.error === 'string' ? data.error : data.error?.message;
-    throw new Error(errorMessage || 'Failed to start clone');
-  }
-
-  return data.cloneId;
-};
-
-const streamCloneProgress = (
-  cloneId: string,
-  handlers: CloneProgressHandlers,
-  backendId?: string,
-) =>
-  new Promise<Record<string, unknown> | undefined>((resolve, reject) => {
-    const eventSource = new EventSource(api.cloneProjectProgressUrl({ cloneId, backendId }));
-    let settled = false;
-
-    const settle = (callback: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      eventSource.close();
-      callback();
-    };
-
-    eventSource.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data) as CloneProgressEvent;
-
-        if (payload.type === 'progress' && payload.message) {
-          handlers.onProgress(payload.message);
-          return;
-        }
-
-        if (payload.type === 'complete') {
-          settle(() => resolve(payload.project));
-          return;
-        }
-
-        if (payload.type === 'error') {
-          settle(() => reject(new Error(payload.message || 'Failed to clone repository')));
-        }
-      } catch (error) {
-        console.error('Error parsing clone progress event:', error);
-      }
-    };
-
-    eventSource.onerror = () => {
-      settle(() => reject(new Error('Connection lost during clone')));
-    };
-  });
-
-export const cloneWorkspaceWithProgress = async (
-  params: CloneWorkspaceParams,
-  handlers: CloneProgressHandlers,
-  backendId?: string,
-) => streamCloneProgress(await startClone(params, backendId), handlers, backendId);

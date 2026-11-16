@@ -1,11 +1,6 @@
 import type { ChatMessage, ToolGroupItem } from '@/shared/types';
-import { getToolConfig } from '@/modules/chat/tools/configs/toolConfigs';
 
-export const TOOL_GROUP_THRESHOLD = 2;
-
-/** How many of a group's tool inputs the collapsed summary line spells out. */
-const PREVIEWED_TOOL_COUNT = 2;
-
+const TOOL_GROUP_THRESHOLD = 2;
 
 export type MessageListItem = ChatMessage | ToolGroupItem;
 
@@ -59,65 +54,34 @@ export function isToolGroupItem(item: MessageListItem): item is ToolGroupItem {
 // An agent's or a workflow's row is its whole card — status, timeline, result —
 // so it never folds into a collapsed run with its neighbours.
 function isGroupableToolMessage(message: ChatMessage): message is ChatMessage & { toolName: string } {
-  return Boolean(message.isToolUse && message.toolName && !message.isSubagentContainer && message.toolName !== 'Workflow');
+  return Boolean(message.isToolUse && message.toolName && !message.isSubagentContainer && !['Workflow', 'AskUserQuestion', 'request_user_input'].includes(message.toolName));
 }
 
 // Messages that render nothing (e.g. reasoning hidden when showThinking is off)
-// shouldn't split an otherwise-continuous run of the same tool — providers like
+// shouldn't split an otherwise-continuous run of tools — providers like
 // Codex interleave hidden reasoning between consecutive tool calls.
 function rendersNothing(message: ChatMessage, showThinking: boolean): boolean {
   return Boolean(message.isThinking && !showThinking);
 }
 
-function parseToolInput(toolInput: unknown): unknown {
-  if (typeof toolInput !== 'string') {
-    return toolInput;
-  }
-
-  try {
-    return JSON.parse(toolInput);
-  } catch {
-    return toolInput;
-  }
-}
-
-function getToolInputPreview(message: ChatMessage): string {
-  const config = getToolConfig(message.toolName || 'UnknownTool').input;
-  const parsedInput = parseToolInput(message.toolInput);
-  const title = typeof config.title === 'function' ? config.title(parsedInput) : config.title;
-  const value = config.getValue?.(parsedInput);
-
-  return String(value || title || message.displayText || message.content || '').trim();
-}
-
-/**
- * Builds the collapsed group's summary line.
- *
- * Computed here rather than in the component so it happens once per grouping
- * pass instead of once per group render, and skipped entirely for runs the tool
- * group cache above can reuse — a run's preview depends on the whole run, which
- * is exactly what that cache compares.
- */
+/** Summarize operations without exposing commands, paths, or tool payloads. */
 function buildGroupPreview(messages: ChatMessage[]): string {
-  const named = messages
-    .slice(0, PREVIEWED_TOOL_COUNT)
-    .map(getToolInputPreview)
-    .filter(Boolean);
-
-  const previewText = named.join(', ');
-  // Subtracted from the previews actually printed, not from the two slots the
-  // line reserves, so that named + extraCount === messages.length for every
-  // input. A tool whose input yields no text — a Read with no file_path, an
-  // input still arriving as partial JSON — is genuinely not named, so it
-  // belongs in the remainder. Counting slots instead makes a group of three
-  // whose first preview is empty render "/b.ts, +1 more" beside an x3 badge.
-  const extraCount = messages.length - named.length;
-
-  if (!previewText) {
-    return extraCount > 0 ? `+${extraCount} more` : '';
+  const counts = new Map<string, number>();
+  for (const message of messages) {
+    const tool = message.toolName || '';
+    const category = ['Edit', 'Write', 'ApplyPatch', 'apply_patch'].includes(tool) ? '修改文件'
+      : ['Read', 'read_file'].includes(tool) ? '读取文件'
+      : ['Bash', 'exec_command', 'shell_command', 'shell'].includes(tool) ? '运行脚本'
+      : ['Grep', 'Glob'].includes(tool) ? '搜索文件'
+      : ['WebSearch', 'WebFetch'].includes(tool) ? '访问网络'
+      : ['TodoWrite', 'TodoRead', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(tool) ? '管理任务'
+      : '其他工具调用';
+    counts.set(category, (counts.get(category) || 0) + 1);
   }
-
-  return extraCount > 0 ? `${previewText}, +${extraCount} more` : previewText;
+  return ['修改文件', '读取文件', '运行脚本', '搜索文件', '访问网络', '管理任务', '其他工具调用']
+    .filter((category) => counts.has(category))
+    .map((category) => `${category} ${counts.get(category)} 次`)
+    .join('，');
 }
 
 export function groupConsecutiveTools(
@@ -148,7 +112,7 @@ export function groupConsecutiveTools(
         continue;
       }
 
-      if (isGroupableToolMessage(candidate) && candidate.toolName === message.toolName) {
+      if (isGroupableToolMessage(candidate)) {
         run.push(candidate);
         nextIndex += 1;
         continue;

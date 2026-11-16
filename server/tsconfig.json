@@ -19,6 +19,8 @@
     // still go through the normal TypeScript pipeline and strict checks.
     "checkJs": false,
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmitOnError": true,
     // The backend build emits both /server and /shared into dist-server, so rootDir must
     // stay one level above this file even though the config itself now lives in /server.

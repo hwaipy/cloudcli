@@ -16,7 +16,19 @@ type VapidKeyPair = {
   privateKey: string;
 };
 
+/** Used by notifications to persist one stable VAPID identity in the active database. */
 export const vapidKeysDb = {
+  /** Atomically reuse stored keys or create one pair; concurrent startup must not rotate subscriptions. */
+  getOrCreateVapidKeys(generateKeys: () => VapidKeyPair): VapidKeyPair {
+    const db = getConnection();
+    return db.transaction(() => {
+      const existing = vapidKeysDb.getVapidKeys();
+      if (existing) return existing;
+      const keys = generateKeys();
+      vapidKeysDb.createVapidKeys(keys.publicKey, keys.privateKey);
+      return keys;
+    })();
+  },
   /** Returns the latest stored VAPID key pair, or null when unset. */
   getVapidKeys(): VapidKeyPair | null {
     const db = getConnection();

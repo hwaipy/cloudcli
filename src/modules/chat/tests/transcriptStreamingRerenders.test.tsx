@@ -69,7 +69,6 @@ const stable = {
   providerModelCatalog: {},
   providerModelActions: {},
   createDiff: () => [],
-  onGrantToolPermission: () => ({ success: true }),
 };
 
 function paneProps(chatMessages: ChatMessage[]) {

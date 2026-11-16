@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 
 import { render } from '@testing-library/react';
 import { test, vi } from 'vitest';
-import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { normalizeLatexDelimiters } from '@/modules/chat/utils/latexDelimiters';

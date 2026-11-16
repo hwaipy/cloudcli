@@ -1,4 +1,4 @@
-import type { ChatMessage, ClaudePermissionSuggestion, PermissionGrantResult } from '@/shared/types';
+import type { PermissionGrantResult } from '@/shared/types';
 import { getClaudeSettings, saveClaudePermissions } from '@/modules/chat/utils/chatStorage';
 
 export function buildClaudeToolPermissionEntry(toolName?: string, toolInput?: unknown) {
@@ -36,22 +36,6 @@ export function formatToolInputForDisplay(input: unknown) {
   } catch {
     return String(input);
   }
-}
-
-export function getClaudePermissionSuggestion(
-  message: ChatMessage | null | undefined,
-  provider: string,
-): ClaudePermissionSuggestion | null {
-  if (provider !== 'claude') return null;
-  if (!message?.toolResult?.isError) return null;
-
-  const toolName = message?.toolName;
-  const entry = buildClaudeToolPermissionEntry(toolName, message.toolInput);
-  if (!entry) return null;
-
-  const settings = getClaudeSettings();
-  const isAllowed = settings.allowedTools.includes(entry);
-  return { toolName: toolName || 'UnknownTool', entry, isAllowed };
 }
 
 export function grantClaudeToolPermission(entry: string | null): PermissionGrantResult {

@@ -4,7 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, test, vi } from 'vitest';
 
 import { useChatComposerState } from '@/modules/chat/hooks/useChatComposerState';
-import { readDraftText, resetChatDrafts, writeDraftText } from '@/shared/chatDrafts';
+import { resetChatDrafts } from '@/shared/chatDrafts';
 import type { ChatMessage, PermissionMode, Project, ProjectSession, SessionActivityMap } from '@/shared/types';
 
 /**

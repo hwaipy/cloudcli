@@ -1,7 +1,8 @@
+import type { HubDesktopNotificationsBridge } from '@/shared/types';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-import type { NormalizedMessage, Project, ProjectSession, QuickSettingsTab, SlashCommand } from '@/shared/types';
+import type { NormalizedMessage, Project, ProjectSession, SlashCommand } from '@/shared/types';
 
 //----------------- DATE AND TIME DISPLAY ------------
 
@@ -242,7 +243,7 @@ const AudioContextConstructor =
 let audioContext: AudioContext | null = null;
 
 /** Reports whether the user has left completion sounds on; defaults to on when unset. */
-export const isNotificationSoundEnabled = (): boolean => {
+const isNotificationSoundEnabled = (): boolean => {
   if (typeof localStorage === 'undefined') {
     return true;
   }
@@ -384,16 +385,6 @@ export const getPageTitle = (
 export const isSkillCommand = (command: SlashCommand): boolean =>
   command.type === 'skill' || command.metadata?.type === 'skill';
 
-// ---------------------------
-
-//----------------- QUICK SETTINGS PANEL ------------
-
-/** DOM id of a quick settings tab button; pairs with `getQuickSettingsTabPanelId` for aria-controls / aria-labelledby. */
-export const getQuickSettingsTabId = (tab: QuickSettingsTab): string => `quick-settings-tab-${tab}`;
-
-/** DOM id of the tabpanel a quick settings tab controls; pairs with `getQuickSettingsTabId`. */
-export const getQuickSettingsTabPanelId = (tab: QuickSettingsTab): string => `quick-settings-tabpanel-${tab}`;
-
 //----------------- SESSION PAGE LINKS ------------
 
 /** Builds a session deep link while retaining the deployed app prefix and current origin. Used by sidebar menus and recents links. */
@@ -417,4 +408,16 @@ export function claimChatSendResult(clientMessageId: string): () => void {
 /** Realtime chat rendering defers owned failures to their send controller, avoiding premature duplicate errors. */
 export function isChatSendResultOwned(clientMessageId: unknown): boolean {
   return typeof clientMessageId === 'string' && ownedChatSendResults.has(clientMessageId);
+}
+
+//----------------- DESKTOP NOTIFICATION READ STATE ------------
+/** Sidebar archive/delete actions retire native unread identities without changing the active chat. */
+export function clearDesktopSessionNotifications(sessionIds: string[], backendId?: string): void {
+  const bridge = (window as Window & { cloudcliDesktopNotifications?: HubDesktopNotificationsBridge }).cloudcliDesktopNotifications;
+  if (!bridge) return;
+  void bridge.getState().then(state => {
+    if (!state.desktopNotifications.canClearUnread) return;
+    return bridge.update({ readSessions: sessionIds.map(sessionId => ({ sessionId,
+      backendId: getHubResourceBackend('session', sessionId) ?? backendId ?? '' })) });
+  }).catch(() => {});
 }

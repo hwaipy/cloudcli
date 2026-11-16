@@ -71,14 +71,19 @@ const { WebSocketProvider, useWebSocket } = await import('@/shared/context/WebSo
 let seen: string[] = [];
 let isConnected: boolean | null = null;
 let sendMessage: ((message: unknown) => boolean) | null = null;
+let receivedKinds: string[] = [];
 
 function RecordStatus() {
   const value = useWebSocket();
+  const { subscribe } = value;
   seen.push(String(value.connectionStatus));
   useEffect(() => {
     isConnected = value.isConnected;
     sendMessage = value.sendMessage;
   });
+  useEffect(() => subscribe((event) => {
+    if (typeof event.kind === 'string') receivedKinds.push(event.kind);
+  }), [subscribe]);
   return null;
 }
 
@@ -92,8 +97,10 @@ beforeEach(() => {
   seen = [];
   isConnected = null;
   sendMessage = null;
+  receivedKinds = [];
   AUTH.current = { user: AUTH.user, token: 'token-1', isLoading: false };
   vi.stubGlobal('WebSocket', FakeWebSocket);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 
@@ -222,6 +229,86 @@ test('signing out while connected stops reporting a live connection', () => {
   assert.equal(isConnected, false, 'isConnected no longer reports the closed socket as live');
 });
 
+test('native foreground recovery replaces a stale OPEN socket and announces catch-up after reopening', () => {
+  renderProvider();
+  act(() => socket(0).serverOpens());
+
+  act(() => {
+    window.dispatchEvent(new Event('cloudcli:resume'));
+    window.dispatchEvent(new Event('online'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    vi.advanceTimersByTime(0);
+  });
+  assert.equal(FakeWebSocket.instances.length, 2, 'foreground events share one transport replacement');
+  assert.equal(socket(0).readyState, FakeWebSocket.CLOSED);
+  assert.equal(lastStatus(), 'connecting');
+  assert.deepEqual(receivedKinds, [], 'catch-up waits until the new socket is ready');
+
+  act(() => socket(1).serverOpens());
+  assert.equal(isConnected, true);
+  assert.deepEqual(receivedKinds, ['websocket_reconnected']);
+  act(() => { vi.advanceTimersByTime(3000); });
+  assert.equal(FakeWebSocket.instances.length, 2, 'intentional closure did not schedule a retry');
+});
+
+test('ordinary focus keeps a live socket while returning from a hidden page rebuilds it', () => {
+  renderProvider();
+  act(() => socket(0).serverOpens());
+  act(() => {
+    window.dispatchEvent(new Event('focus'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    vi.advanceTimersByTime(0);
+  });
+  assert.equal(FakeWebSocket.instances.length, 1);
+
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  act(() => {
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('online'));
+    vi.advanceTimersByTime(0);
+  });
+  assert.equal(FakeWebSocket.instances.length, 1, 'background network events do not open sockets');
+
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  act(() => {
+    document.dispatchEvent(new Event('visibilitychange'));
+    vi.advanceTimersByTime(0);
+  });
+  assert.equal(FakeWebSocket.instances.length, 2);
+  assert.equal(socket(0).readyState, FakeWebSocket.CLOSED);
+});
+
+test('network recovery cancels the delayed retry and unmount removes queued recovery', () => {
+  const view = renderProvider();
+  act(() => socket(0).serverDrops());
+  act(() => {
+    window.dispatchEvent(new Event('online'));
+    vi.advanceTimersByTime(0);
+  });
+  assert.equal(FakeWebSocket.instances.length, 2);
+  act(() => { vi.advanceTimersByTime(3000); });
+  assert.equal(FakeWebSocket.instances.length, 2, 'the previous socket retry was cancelled');
+
+  act(() => { window.dispatchEvent(new Event('cloudcli:resume')); });
+  view.unmount();
+  act(() => {
+    window.dispatchEvent(new Event('cloudcli:resume'));
+    window.dispatchEvent(new Event('online'));
+    vi.advanceTimersByTime(3000);
+  });
+  assert.equal(FakeWebSocket.instances.length, 2, 'queued work and listeners were removed');
+});
+
+test('foreground recovery cannot create a socket while signed out', () => {
+  AUTH.current = { user: null, token: null, isLoading: false };
+  renderProvider();
+  act(() => {
+    window.dispatchEvent(new Event('cloudcli:resume'));
+    vi.advanceTimersByTime(0);
+  });
+  assert.equal(FakeWebSocket.instances.length, 0);
+});
+
 
 test('Hub sends project and session frames on independent backend connections', async () => {
   const { registerHubResourceBackend } = await import('@/shared/utils');
@@ -250,6 +337,50 @@ test('Hub sends project and session frames on independent backend connections', 
     assert.equal(sendMessage!({ type: 'chat.send', sessionId: 'hub-lab-session' }), false);
     assert.equal(office.send.mock.calls.length, 2); // Never fall back to the wrong backend.
     view.unmount();
+  } finally {
+    delete (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__;
+  }
+});
+
+test('Hub foreground recovery rediscovers every backend and clears old sockets and retry timers', async () => {
+  (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__ = 'office';
+  const discover = vi.fn()
+    .mockResolvedValueOnce({
+      ok: true, json: async () => ({ defaultBackendId: 'office', backends: [{ id: 'office' }, { id: 'lab' }] }),
+    })
+    .mockResolvedValue({
+      ok: true, json: async () => ({ defaultBackendId: 'office', backends: [{ id: 'office' }, { id: 'lab' }, { id: 'home' }] }),
+    });
+  vi.stubGlobal('fetch', discover);
+  try {
+    const view = renderProvider();
+    await act(async () => { await Promise.resolve(); });
+    act(() => { socket(0).serverOpens(); socket(1).serverOpens(); });
+    act(() => socket(1).serverDrops());
+    receivedKinds = [];
+
+    await act(async () => {
+      window.dispatchEvent(new Event('cloudcli:resume'));
+      window.dispatchEvent(new Event('online'));
+      vi.advanceTimersByTime(0);
+      await Promise.resolve();
+    });
+    assert.equal(discover.mock.calls.length, 2);
+    assert.equal(socket(0).readyState, FakeWebSocket.CLOSED, 'even the OPEN socket was replaced');
+    assert.equal(FakeWebSocket.instances.length, 5, 'the new backend was discovered with both existing ones');
+    assert.ok(socket(4).url.includes('hub_backend=home'));
+    act(() => { socket(2).serverOpens(); socket(3).serverOpens(); socket(4).serverOpens(); });
+    assert.deepEqual(receivedKinds, ['websocket_reconnected', 'websocket_reconnected', 'websocket_reconnected']);
+    act(() => { vi.advanceTimersByTime(3000); });
+    assert.equal(FakeWebSocket.instances.length, 5, 'the dropped old backend no longer retries');
+
+    view.unmount();
+    act(() => {
+      window.dispatchEvent(new Event('cloudcli:resume'));
+      vi.advanceTimersByTime(30000);
+    });
+    assert.equal(FakeWebSocket.instances.length, 5);
+    assert.equal(discover.mock.calls.length, 2, 'neither discovery nor lifecycle events outlive the provider');
   } finally {
     delete (window as Window & { __CLOUDCLI_BACKEND_ID__?: string }).__CLOUDCLI_BACKEND_ID__;
   }

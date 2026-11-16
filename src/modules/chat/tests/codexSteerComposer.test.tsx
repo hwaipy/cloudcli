@@ -43,10 +43,11 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function setup({ isLoading = true, sendByCtrlEnter = false, codexEnterQueues = false, sendResult }: { isLoading?: boolean; sendByCtrlEnter?: boolean; codexEnterQueues?: boolean; sendResult?: boolean } = {}) {
+function setup({ isLoading = true, sendByCtrlEnter = false, codexEnterQueues = false, sendResult, replayOnSubscribe = false }: { isLoading?: boolean; sendByCtrlEnter?: boolean; codexEnterQueues?: boolean; sendResult?: boolean; replayOnSubscribe?: boolean } = {}) {
   const sent: Array<Record<string, unknown>> = [];
   const messages: Array<{ type: string; content: string }> = [];
   let listener: ((event: ServerEvent) => void) | null = null;
+  let unsubscribeCount = 0;
   const view = renderHook(() => useChatComposerState({
     selectedProject: project,
     selectedSession: session,
@@ -63,13 +64,17 @@ function setup({ isLoading = true, sendByCtrlEnter = false, codexEnterQueues = f
     canAbortSession: true,
     tokenBudget: null,
     sendMessage: (message) => { sent.push(message as Record<string, unknown>); return sendResult; },
-    subscribe: (callback) => { listener = callback; return () => { listener = null; }; },
+    subscribe: (callback) => {
+      listener = callback;
+      if (replayOnSubscribe && sent.length) callback({ kind: 'chat_send_accepted', sessionId: session.id, clientMessageId: sent.at(-1)!.clientMessageId } as ServerEvent);
+      return () => { unsubscribeCount++; listener = null; };
+    },
     scrollToBottom: () => {},
     addMessage: (message) => { messages.push(message as { type: string; content: string }); },
     setIsUserScrolledUp: () => {},
     setPendingPermissionRequests: () => {},
   }));
-  return { view, sent, messages, emit: (event: ServerEvent) => listener?.(event) };
+  return { view, sent, messages, getUnsubscribeCount: () => unsubscribeCount, emit: (event: ServerEvent) => listener?.(event) };
 }
 
 function enter(view: ReturnType<typeof setup>['view'], modifiers: { metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; isComposing?: boolean } = {}) {
@@ -419,4 +424,39 @@ test('an authoritative accepted user event does not create a second local bubble
   await act(async () => { await submission; });
   assert.equal(messages.filter(message => message.type === 'user').length, 0);
   assert.equal(view.result.current.input, '');
+});
+
+test('mobile duplicate submit events keep one request and legacy ACK fallback retains its gateway identity', async () => {
+  const { view, sent, emit, messages } = setup({ isLoading: false });
+  act(() => view.result.current.setInput('one phone send'));
+  let first!: Promise<unknown>; let second!: Promise<unknown>;
+  act(() => {
+    first = view.result.current.handleSubmit({ preventDefault() {} } as never);
+    second = view.result.current.handleSubmit({ preventDefault() {} } as never);
+  });
+  await waitFor(() => assert.equal(sent.length, 1));
+  act(() => emit({ kind: 'chat_send_accepted', sessionId: session.id, clientMessageId: sent[0].clientMessageId } as ServerEvent));
+  await act(async () => { await Promise.all([first, second]); });
+  const users = messages.filter(message => message.type === 'user');
+  assert.equal(users.length, 1);
+  assert.equal((users[0] as { realtimeMessageId?: string }).realtimeMessageId, `local_${sent[0].clientMessageId}`);
+});
+
+
+test('a retry acknowledged synchronously during subscription releases its listener exactly once', async () => {
+  vi.useFakeTimers();
+  try {
+    const { view, sent, getUnsubscribeCount } = setup({ isLoading: false, replayOnSubscribe: true });
+    act(() => view.result.current.setInput('retry receipt'));
+    let first!: Promise<unknown>;
+    await act(async () => { first = view.result.current.handleSubmit({ preventDefault() {} } as never); await Promise.resolve(); });
+    assert.equal(sent.length, 1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_001); await first; });
+    assert.equal(getUnsubscribeCount(), 1);
+    act(() => view.result.current.setInput('retry receipt'));
+    await act(async () => { await view.result.current.handleSubmit({ preventDefault() {} } as never); });
+    assert.equal(sent.length, 2);
+    assert.equal(getUnsubscribeCount(), 2, 'synchronous ACK must dispose the subscription returned after it');
+    assert.equal(sent[0].clientMessageId, sent[1].clientMessageId);
+  } finally { vi.useRealTimers(); }
 });

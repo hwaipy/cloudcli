@@ -4,6 +4,7 @@ type UseDeviceSettingsOptions = {
   mobileBreakpoint?: number;
   trackMobile?: boolean;
   trackPWA?: boolean;
+  trackTouch?: boolean;
 };
 
 const getIsMobile = (mobileBreakpoint: number): boolean => {
@@ -28,18 +29,33 @@ const getIsPWA = (): boolean => {
   );
 };
 
+const getHasTouchInput = (): boolean => (
+  typeof window !== 'undefined' && (
+    window.navigator.maxTouchPoints > 0 ||
+    window.matchMedia('(any-pointer: coarse)').matches
+  )
+);
+
+/** Used by workspace, settings, sidebar and shell to track layout, installation and input capabilities independently. */
 export function useDeviceSettings(options: UseDeviceSettingsOptions = {}) {
   const {
     mobileBreakpoint = 768,
     trackMobile = true,
-    trackPWA = true
+    trackPWA = true,
+    trackTouch = false,
   } = options;
 
+  // Layout follows the available width even when a wide device also accepts touch input.
   const [isMobile, setIsMobile] = useState<boolean>(() => (
     trackMobile ? getIsMobile(mobileBreakpoint) : false
   ));
+  // Installation status controls the sidebar's standalone-app presentation.
   const [isPWA, setIsPWA] = useState<boolean>(() => (
     trackPWA ? getIsPWA() : false
+  ));
+  // Input controls need touch capability independently of the desktop/mobile layout breakpoint.
+  const [hasTouchInput, setHasTouchInput] = useState<boolean>(() => (
+    trackTouch ? getHasTouchInput() : false
   ));
 
   useEffect(() => {
@@ -84,5 +100,23 @@ export function useDeviceSettings(options: UseDeviceSettingsOptions = {}) {
     };
   }, [trackPWA]);
 
-  return { isMobile, isPWA };
+  useEffect(() => {
+    if (!trackTouch || typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(any-pointer: coarse)');
+    const checkTouchInput = () => setHasTouchInput(getHasTouchInput());
+    checkTouchInput();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', checkTouchInput);
+      return () => mediaQuery.removeEventListener('change', checkTouchInput);
+    }
+
+    mediaQuery.addListener(checkTouchInput);
+    return () => mediaQuery.removeListener(checkTouchInput);
+  }, [trackTouch]);
+
+  return { isMobile, isPWA, hasTouchInput };
 }

@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { Transform } from 'node:stream';
 
@@ -84,18 +85,31 @@ export async function startIsolationSshBroker(stateRoot: string, targetAgent: st
   } catch (error) { agent.close(); throw error; }
 }
 
-const SSH_PROXY_COMMAND = String.raw`const net=require('net');const host=process.argv[2],port=Number(process.argv[3]);if(!host||!(/^[a-zA-Z0-9_.:\[\]-]+$/).test(host)||!Number.isInteger(port)||port<1||port>65535)process.exit(2);const authority=(host.includes(':')?'['+host.replace(/^\[|\]$/g,'')+']':host)+':'+port;const socket=net.connect('/run/cloudcli-egress/ssh-proxy.sock');socket.setTimeout(30000,()=>socket.destroy(new Error('SSH proxy timeout')));socket.on('error',()=>{process.stderr.write('Isolated SSH connection failed\n');process.exitCode=1});socket.on('connect',()=>socket.write('CONNECT '+authority+' HTTP/1.1\r\nHost: '+authority+'\r\n\r\n'));let header=Buffer.alloc(0);function handshake(chunk){header=Buffer.concat([header,chunk]);const end=header.indexOf('\r\n\r\n');if(end<0){if(header.length>8192)socket.destroy();return}if(!/^HTTP\/1\.[01] 200 /.test(header.subarray(0,end).toString())){socket.destroy(new Error('SSH egress denied'));return}socket.removeListener('data',handshake);socket.setTimeout(0);const rest=header.subarray(end+4);if(rest.length)process.stdout.write(rest);socket.pipe(process.stdout);process.stdin.pipe(socket)}socket.on('data',handshake);socket.on('close',()=>{process.stdin.destroy()});`;
+const SSH_PROXY_COMMAND = String.raw`const net=require('net');const host=process.argv[2],port=Number(process.argv[3]);if(!host||!(/^[a-zA-Z0-9_.:\[\]-]+$/).test(host)||!Number.isInteger(port)||port<1||port>65535)process.exit(2);const authority=(host.includes(':')?'['+host.replace(/^\[|\]$/g,'')+']':host)+':'+port;const socket=net.connect('/run/cloudcli-egress/ssh-proxy.sock');socket.setTimeout(30000,()=>socket.destroy(new Error('SSH proxy timeout')));socket.on('error',()=>{process.stderr.write('Isolated SSH connection failed\n');process.exitCode=1});socket.on('connect',()=>{let token='';try{token=require('fs').readFileSync('/opt/cloudcli/ssh-egress-token','utf8').trim()}catch{}socket.write('CONNECT '+authority+' HTTP/1.1\r\nHost: '+authority+'\r\n'+(/^[a-f0-9]{64}$/.test(token)?'Proxy-Authorization: Bearer '+token+'\r\n':'')+'\r\n')});let header=Buffer.alloc(0);function handshake(chunk){header=Buffer.concat([header,chunk]);const end=header.indexOf('\r\n\r\n');if(end<0){if(header.length>8192)socket.destroy();return}if(!/^HTTP\/1\.[01] 200 /.test(header.subarray(0,end).toString())){socket.destroy(new Error('SSH egress denied'));return}socket.removeListener('data',handshake);socket.setTimeout(0);const rest=header.subarray(end+4);if(rest.length)process.stdout.write(rest);socket.pipe(process.stdout);process.stdin.pipe(socket)}socket.on('data',handshake);socket.on('close',()=>{process.stdin.destroy()});`;
 
 /** Used by project startup and the broker's initial adoption of existing containers; writes only managed public socket/proxy configuration into the private writable system layer. */
 export async function configureContainerSshAccess(container: string): Promise<void> {
   await prepareContainerSshTools(container);
+  let token = '';
+  const root = path.resolve(process.env.CLOUDCLI_ISOLATION_STATE_DIR || path.join(os.homedir(), '.cloudcli', 'isolated-projects'));
+  try {
+    const info = JSON.parse((await executeIsolationDocker(['inspect', container])).stdout)[0];
+    const projectId = info.Config.Labels?.['cloudcli.project-id'];
+    const rules = JSON.parse(await fs.readFile(path.join(root, 'ssh-allowlist.json'), 'utf8'));
+    if (typeof projectId === 'string' && /^[a-f0-9]{64}$/.test(rules[projectId]?.token)) token = rules[projectId].token;
+  } catch { /* No operator grant means public SSH destinations only. */ }
+
   const files = {
     '/opt/cloudcli/ssh-proxy.cjs': SSH_PROXY_COMMAND,
+    // A broker-owned entry survives a still-running older backend rewriting its managed files.
+    '/opt/cloudcli/ssh-proxy-broker.cjs': SSH_PROXY_COMMAND,
+    '/etc/ssh/ssh_config.d/00-cloudcli-ssh-broker.conf': 'Host *\n  ProxyCommand /usr/local/bin/node /opt/cloudcli/ssh-proxy-broker.cjs %h %p\n',
+    '/opt/cloudcli/ssh-egress-token': token,
     '/etc/profile.d/cloudcli-ssh-agent.sh': 'export SSH_AUTH_SOCK=/run/cloudcli-egress/ssh-agent.sock\n',
     '/etc/ssh/ssh_config.d/90-cloudcli-isolation.conf': 'Host *\n  IdentityAgent /run/cloudcli-egress/ssh-agent.sock\n  ProxyCommand /usr/local/bin/node /opt/cloudcli/ssh-proxy.cjs %h %p\n',
   };
   await new Promise<void>((resolve, reject) => {
-    const child = spawnIsolationDocker(['exec', '-i', container, '/usr/local/bin/node', '-e', `let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const fs=require('fs'),p=require('path');for(const [file,body] of Object.entries(JSON.parse(input))){fs.mkdirSync(p.dirname(file),{recursive:true});if(!fs.existsSync(file)||fs.readFileSync(file,'utf8')!==body)fs.writeFileSync(file,body,{mode:0o644})}});`]);
+    const child = spawnIsolationDocker(['exec', '-i', container, '/usr/local/bin/node', '-e', `let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{const fs=require('fs'),p=require('path');for(const [file,body] of Object.entries(JSON.parse(input))){fs.mkdirSync(p.dirname(file),{recursive:true});if(!fs.existsSync(file)||fs.readFileSync(file,'utf8')!==body)fs.writeFileSync(file,body,{mode:file.endsWith("ssh-egress-token")?0o600:0o644})}});`]);
     child.once('error', reject); child.stdin.once('error', reject);
     child.once('exit', (code) => code === 0 ? resolve() : reject(new Error('Cannot configure isolated SSH access')));
     child.stdin.end(JSON.stringify(files));

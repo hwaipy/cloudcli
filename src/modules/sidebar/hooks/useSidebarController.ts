@@ -1,4 +1,4 @@
-import { getHubStorageKey, isHubRuntime } from '@/shared/utils';
+import { clearDesktopSessionNotifications, getHubStorageKey, isHubRuntime } from '@/shared/utils';
 import { openConversationSearch } from '@/shared/hubSearch';
 import type { ConversationSearchStream } from '@/shared/hubSearch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -961,6 +961,7 @@ export function useSidebarController({
       const response = await api.deleteSession(sessionId, hardDelete);
 
       if (response.ok) {
+        clearDesktopSessionNotifications([sessionId]);
         onSessionDelete?.(sessionId);
         // Same gap as rename: nothing refetched the recents feed, so the row the
         // user just archived stayed in the list. Archiving keeps the session, so
@@ -1137,6 +1138,7 @@ export function useSidebarController({
       const response = await api.deleteProject(project.projectId, deleteData);
 
       if (response.ok) {
+        clearDesktopSessionNotifications(getAllSessions(project).map(session => session.id), project.__hubBackendId);
         onProjectDelete?.(project.projectId);
       } else {
         const data = (await response.json()) as { error?: string | { message?: string } };

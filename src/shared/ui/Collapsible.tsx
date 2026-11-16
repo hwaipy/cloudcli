@@ -9,7 +9,7 @@ type CollapsibleContextValue = {
 
 const CollapsibleContext = React.createContext<CollapsibleContextValue | null>(null);
 
-export function useCollapsible() {
+function useCollapsible() {
   const ctx = React.useContext(CollapsibleContext);
   if (!ctx) throw new Error('Collapsible components must be used within <Collapsible>');
   return ctx;

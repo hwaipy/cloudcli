@@ -34,6 +34,8 @@ type SettingsProps = {
 type DesktopNotificationsState = {
   enabled: boolean;
   supported: boolean;
+  canClearUnread?: boolean;
+  unreadCount?: number;
   connectedCount?: number;
   targetCount?: number;
   lastError?: string | null;
@@ -276,6 +278,14 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                   desktopNotifications={desktopNotificationsState}
                   onEnableDesktopNotifications={handleEnableDesktopNotifications}
                   onDisableDesktopNotifications={handleDisableDesktopNotifications}
+                  onClearDesktopUnread={async () => {
+                    try {
+                      const state = await desktopNotificationsBridge.update({ clearUnread: true });
+                      setDesktopNotificationsState(state?.desktopNotifications || null);
+                    } catch {
+                      setDesktopNotificationsState((previous) => previous ? { ...previous, lastError: '清除失败，请更新客户端后重试' } : previous);
+                    }
+                  }}
                 />
               )}
 
