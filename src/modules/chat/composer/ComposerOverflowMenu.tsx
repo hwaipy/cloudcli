@@ -103,7 +103,7 @@ export function ComposerOverflowMenu({
                 <TokenUsageSummary part="context" usage={usage} onClick={() => choose(onShowTokenUsage)} />
               </div>}
               {collapseCount >= 3 && effortOptions.length > 0 && <ComposerMenuItem label={`${effortLabel}: ${effort === DEFAULT_EFFORT_VALUE ? t('composer.effortDefault', { defaultValue: 'Default' }) : effort}`} role="menuitem" isSelected={false} trailing={<ChevronRight className="h-4 w-4" />} onSelect={() => setSubmenu('effort')} />}
-              {collapseCount >= 4 && (modelOptions.length > 0 || modelsLoading) && <ComposerMenuItem label={`${modelLabel}: ${modelOptions.find((option) => option.value === model)?.label || model}`} role="menuitem" isSelected={false} trailing={<ChevronRight className="h-4 w-4" />} onSelect={() => setSubmenu('model')} />}
+              {collapseCount >= 4 && (Boolean(model) || modelOptions.length > 0 || modelsLoading) && <ComposerMenuItem label={`${modelLabel}: ${modelOptions.find((option) => option.value === model)?.label || model}`} role="menuitem" isSelected={false} trailing={<ChevronRight className="h-4 w-4" />} onSelect={() => setSubmenu('model')} />}
               {collapseCount >= 5 && permissionModes.length > 0 && <ComposerMenuItem label={`${permissionLabel}: ${t(`codex.modes.${permissionMode}`, { defaultValue: permissionMode })}`} role="menuitem" isSelected={false} trailing={<ChevronRight className="h-4 w-4" />} onSelect={() => setSubmenu('permission')} />}
             </>
           )}

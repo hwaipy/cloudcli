@@ -313,7 +313,12 @@ async function dispatchRun(
     }
   }
 
-  run.writer.send(createNormalizedMessage({ kind: 'status', provider, sessionId, text: 'Processing…' }));
+  // History edits may need a slow provider fork before input can be accepted.
+  // Keep that preparation distinct from model execution and preserve the draft
+  // until the preparation has succeeded.
+  if (beforeRun) {
+    run.writer.send(createNormalizedMessage({ kind: 'status', provider, sessionId, text: 'Preparing conversation…' }));
+  }
   console.info('[ChatAdmission]', { timestamp: new Date().toISOString(), sessionId, runId: run.runId, clientMessageId: data.clientMessageId, action: ws ? 'chat.send' : 'queue-dispatch', result: 'accepted' });
 
   const command = typeof data.content === 'string' ? data.content : '';
@@ -398,9 +403,11 @@ async function dispatchRun(
     // App Server enriches this same row with its native turn anchor; it must
     // not independently emit userMessage items as a second source of input.
     runtimeOptions.acceptedUserMessage = acceptedUserMessage;
-    const runPromise = dependencies.runtime.run(provider, command, runtimeOptions, run.writer);
+    // Confirm before the runtime can synchronously emit thinking/output. The
+    // composer clears only on this receipt, never on an unconfirmed status.
     onAccepted?.();
-    await runPromise;
+    run.writer.send(createNormalizedMessage({ kind: 'status', provider, sessionId, text: 'Processing…' }));
+    await dependencies.runtime.run(provider, command, runtimeOptions, run.writer);
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
     console.error(`[Chat] Provider runtime "${provider}" failed`, { sessionId, error: failure });

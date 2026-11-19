@@ -189,3 +189,11 @@ test('the title is not editable without a session or off the chat tab', () => {
   assert.equal(queryRenameInput(), null);
   assert.equal(onRenameSession.mock.calls.length, 0);
 });
+
+test('the session header identifies the session provider and updates when switching sessions', () => {
+  const view = render(<WorkspaceTitle activeTab="chat" selectedProject={project} selectedSession={session} shouldShowTasksTab={false} onRenameSession={async () => true} />);
+  assert.ok(screen.getByLabelText('Claude'));
+  view.rerender(<WorkspaceTitle activeTab="chat" selectedProject={project} selectedSession={{ ...session, id: 'codex-session', __provider: 'codex' }} shouldShowTasksTab={false} onRenameSession={async () => true} />);
+  assert.ok(screen.getByLabelText('Codex'));
+  assert.equal(screen.queryByLabelText('Claude'), null);
+});

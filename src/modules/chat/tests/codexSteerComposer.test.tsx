@@ -43,15 +43,16 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function setup({ isLoading = true, sendByCtrlEnter = false, codexEnterQueues = false, sendResult, replayOnSubscribe = false }: { isLoading?: boolean; sendByCtrlEnter?: boolean; codexEnterQueues?: boolean; sendResult?: boolean; replayOnSubscribe?: boolean } = {}) {
+function setup({ isLoading = true, sendByCtrlEnter = false, codexEnterQueues = false, sendResult, replayOnSubscribe = false, isNew = false, canStartNewSession = true }: { isNew?: boolean; canStartNewSession?: boolean; isLoading?: boolean; sendByCtrlEnter?: boolean; codexEnterQueues?: boolean; sendResult?: boolean; replayOnSubscribe?: boolean } = {}) {
   const sent: Array<Record<string, unknown>> = [];
   const messages: Array<{ type: string; content: string }> = [];
   let listener: ((event: ServerEvent) => void) | null = null;
   let unsubscribeCount = 0;
   const view = renderHook(() => useChatComposerState({
     selectedProject: project,
-    selectedSession: session,
-    currentSessionId: session.id,
+    selectedSession: isNew ? null : session,
+    currentSessionId: isNew ? null : session.id,
+    canStartNewSession,
     provider: 'codex',
     permissionMode: 'default',
     resolvePermissionModeForProvider: () => 'default' as PermissionMode,
@@ -459,4 +460,15 @@ test('a retry acknowledged synchronously during subscription releases its listen
     assert.equal(getUnsubscribeCount(), 2, 'synchronous ACK must dispose the subscription returned after it');
     assert.equal(sent[0].clientMessageId, sent[1].clientMessageId);
   } finally { vi.useRealTimers(); }
+});
+
+
+test('new conversation send waits for a model confirmed by its backend and retains the draft', async () => {
+  const { view, sent } = setup({ isNew: true, isLoading: false, canStartNewSession: false });
+  act(() => view.result.current.setInput('keep this until models are ready'));
+  const preventDefault = vi.fn();
+  await act(async () => { await view.result.current.handleSubmit({ preventDefault } as never); });
+  assert.equal(preventDefault.mock.calls.length, 1);
+  assert.equal(sent.length, 0);
+  assert.equal(view.result.current.input, 'keep this until models are ready');
 });

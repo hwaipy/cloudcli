@@ -1,3 +1,5 @@
+import TOML from '@iarna/toml';
+
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
@@ -52,8 +54,22 @@ export class CodexProviderAuth implements IProviderAuth {
    * Reads Codex auth.json and checks OAuth tokens or an API key fallback.
    */
   private async checkCredentials(): Promise<CodexCredentialsStatus> {
+    // Custom API providers can authenticate entirely through config.toml, with no auth.json.
+    if (process.env.OPENAI_API_KEY?.trim()) return { authenticated: true, email: 'API Key Auth', method: 'api_key' };
     try {
-      const authPath = path.join(os.homedir(), '.codex', 'auth.json');
+      const home = process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex');
+      const config = readObjectRecord(TOML.parse(await readFile(path.join(home, 'config.toml'), 'utf8')));
+      const providers = readObjectRecord(config?.model_providers);
+      const selected = readOptionalString(config?.model_provider);
+      const provider = readObjectRecord(selected ? providers?.[selected] : null);
+      const envKey = readOptionalString(provider?.env_key);
+      if (readOptionalString(provider?.experimental_bearer_token) || (envKey && process.env[envKey]?.trim())) {
+        return { authenticated: true, email: 'Configured API provider', method: 'api_key' };
+      }
+    } catch { /* Continue to the official login file; never log credential contents. */ }
+
+    try {
+      const authPath = path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex'), 'auth.json');
       const content = await readFile(authPath, 'utf8');
       const auth = readObjectRecord(JSON.parse(content)) ?? {};
       const tokens = readObjectRecord(auth.tokens) ?? {};

@@ -27,7 +27,7 @@ export const ComposerModelMenu = memo(function ComposerModelMenu({ model, modelO
   const modelLabel = selectedModelOption?.label || model || t('composer.model', { defaultValue: 'Model' });
   const ariaLabel = t('composer.selectModel', { model: modelLabel, defaultValue: 'Model: {{model}}' });
 
-  if (modelOptions.length === 0 && !modelsLoading) return null;
+  if (!model && modelOptions.length === 0 && !modelsLoading) return null;
 
   return (
     <>
@@ -39,6 +39,7 @@ export const ComposerModelMenu = memo(function ComposerModelMenu({ model, modelO
           setIsOpen((current) => !current);
         }}
         className="flex h-8 max-w-28 shrink-0 items-center rounded-lg border border-border/60 bg-muted/40 px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted sm:max-w-48"
+        disabled={modelOptions.length === 0 && !modelsLoading}
         aria-haspopup="menu"
         aria-expanded={isOpen}
         aria-label={ariaLabel}

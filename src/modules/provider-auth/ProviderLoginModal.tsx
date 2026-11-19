@@ -23,6 +23,7 @@ const DEFAULT_PROJECT_FOR_EMPTY_SHELL = {
 
 type ProviderLoginModalProps = {
   isOpen: boolean;
+  backendId?: string;
   onClose: () => void;
   provider?: LLMProvider;
   onComplete?: (exitCode: number) => void;
@@ -73,6 +74,7 @@ const getProviderTitle = (provider: LLMProvider) => {
 /** Used by the onboarding and settings modules to run a provider's CLI login command in an embedded shell. */
 export default function ProviderLoginModal({
   isOpen,
+  backendId,
   onClose,
   provider = 'claude',
   onComplete,
@@ -110,7 +112,7 @@ export default function ProviderLoginModal({
         </div>
 
         <div className="flex-1 overflow-hidden">
-          <StandaloneShell project={DEFAULT_PROJECT_FOR_EMPTY_SHELL} command={command} onComplete={handleComplete} minimal={true} />
+          <StandaloneShell project={{ ...DEFAULT_PROJECT_FOR_EMPTY_SHELL, __hubBackendId: backendId }} command={command} onComplete={handleComplete} minimal={true} />
         </div>
       </div>
     </div>

@@ -2,6 +2,8 @@ import { useTranslation } from 'react-i18next';
 
 import type { AppTab, Project, ProjectSession } from '@/shared/types';
 import { usePlugins } from '@/modules/plugins';
+import { LLMProviderLogo } from '@/shared/ui';
+import { PROVIDER_LABELS } from '@/shared/constants';
 import { getSessionTitle } from '@/shared/utils';
 import { useSessionTitleRename } from '@/modules/project-workspace/hooks/useSessionTitleRename';
 
@@ -58,6 +60,8 @@ export default function WorkspaceTitle({
     : undefined;
 
   const showChatNewSession = activeTab === 'chat' && !selectedSession;
+  const sessionProvider = selectedSession?.__provider ?? selectedSession?.provider;
+  const providerLabel = sessionProvider ? PROVIDER_LABELS[sessionProvider as keyof typeof PROVIDER_LABELS] : undefined;
   const sessionTitle = selectedSession ? getSessionTitle(selectedSession) : '';
 
   const {
@@ -106,8 +110,11 @@ export default function WorkspaceTitle({
                 {sessionTitle}
               </h2>
             )}
-            <div className="truncate text-[11px] leading-tight text-muted-foreground">{selectedProject.strictFileIsolation && <span title={t('projectWizard.isolation.label')}>🔒 </span>}{selectedProject.displayName}
-              {selectedProject.__hubBackendName && <span style={{ color: selectedProject.__hubBackendColor }}> · {selectedProject.__hubBackendName}</span>}
+            <div className="flex min-w-0 items-center gap-1 text-[11px] leading-tight text-muted-foreground">
+              <span className="min-w-0 truncate">{selectedProject.strictFileIsolation && <span title={t('projectWizard.isolation.label')}>🔒 </span>}{selectedProject.displayName}
+                {selectedProject.__hubBackendName && <span style={{ color: selectedProject.__hubBackendColor }}> · {selectedProject.__hubBackendName}</span>}
+              </span>
+              {providerLabel && <span className="inline-flex h-3 w-3 shrink-0 items-center justify-center" title={providerLabel} aria-label={providerLabel}><LLMProviderLogo provider={sessionProvider!} className="h-3 w-3" /></span>}
             </div>
           </div>
         ) : showChatNewSession ? (

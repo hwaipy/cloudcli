@@ -6,7 +6,8 @@ import { ProviderLoginModal } from '@/modules/provider-auth';
 import { useAuth } from '@/modules/auth';
 import { Button } from '@/shared/ui';
 import SettingsSidebar from '@/modules/settings/SettingsSidebar';
-import AgentsSettingsTab from '@/modules/settings/tabs/agents-settings/AgentsSettingsTab';
+import BackendProviderSettings from '@/modules/settings/tabs/BackendProviderSettings';
+import { BackendApiProvider } from '@/shared/context/BackendApiContext';
 import AppearanceSettingsTab from '@/modules/settings/tabs/AppearanceSettingsTab';
 import CredentialsSettingsTab from '@/modules/settings/tabs/api-settings/CredentialsSettingsTab';
 import VoiceSettingsTab from '@/modules/settings/tabs/VoiceSettingsTab';
@@ -17,6 +18,7 @@ import TasksSettingsTab from '@/modules/settings/tabs/tasks-settings/TasksSettin
 import { PluginSettingsTab } from '@/modules/plugins';
 import AboutTab from '@/modules/settings/tabs/AboutTab';
 import UsersSettingsTab from '@/modules/settings/tabs/UsersSettingsTab';
+import { BackendQuota } from '@/modules/settings/tabs/BackendPlanUsageTab';
 import HubBackendsSettingsTab from '@/modules/settings/tabs/HubBackendsSettingsTab';
 import AccountSettingsTab from '@/modules/settings/tabs/AccountSettingsTab';
 import { useSettingsController } from '@/modules/settings/hooks/useSettingsController';
@@ -42,7 +44,7 @@ type DesktopNotificationsState = {
 };
 
 /** Exported as the settings module's public entry point and rendered by the sidebar module as its settings dialog. */
-function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: SettingsProps) {
+function Settings({ isOpen, onClose, projects: _projects = [], initialTab = 'agents' }: SettingsProps) {
   const { t } = useTranslation('settings');
   const { user } = useAuth();
   const isAdmin = user?.isAdmin === true && !IS_PLATFORM;
@@ -60,16 +62,9 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     setProjectSortOrder,
     codeEditorSettings,
     updateCodeEditorSetting,
-    claudePermissions,
-    setClaudePermissions,
     notificationPreferences,
     setNotificationPreferences,
-    cursorPermissions,
-    setCursorPermissions,
-    codexPermissionMode,
-    setCodexPermissionMode,
     providerAuthStatus,
-    openLoginForProvider,
     showLoginModal,
     setShowLoginModal,
     loginProvider,
@@ -80,7 +75,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
   });
 
   useEffect(() => {
-    if ((!isAdmin && (activeTab === 'admin' || activeTab === 'backends' || activeTab === 'browser')) || (IS_PLATFORM && activeTab === 'account')) setActiveTab('agents');
+    if ((!isAdmin && (activeTab === 'admin' || activeTab === 'browser')) || (IS_PLATFORM && activeTab === 'account')) setActiveTab('agents');
   }, [activeTab, isAdmin, setActiveTab]);
 
   const {
@@ -245,21 +240,11 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                 />
               )}
 
+
+
               {activeTab === 'git' && <GitSettingsTab />}
 
-              {activeTab === 'agents' && (
-                <AgentsSettingsTab
-                  providerAuthStatus={providerAuthStatus}
-                  onProviderLogin={openLoginForProvider}
-                  claudePermissions={claudePermissions}
-                  onClaudePermissionsChange={setClaudePermissions}
-                  cursorPermissions={cursorPermissions}
-                  onCursorPermissionsChange={setCursorPermissions}
-                  codexPermissionMode={codexPermissionMode}
-                  onCodexPermissionModeChange={setCodexPermissionMode}
-                  projects={projects}
-                />
-              )}
+
 
               {activeTab === 'tasks' && <TasksSettingsTab />}
 
@@ -297,7 +282,18 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
               {activeTab === 'account' && !IS_PLATFORM && <AccountSettingsTab />}
               {activeTab === 'admin' && isAdmin && <UsersSettingsTab />}
-              {activeTab === 'backends' && isAdmin && <HubBackendsSettingsTab />}
+              {(activeTab === 'backends' || activeTab === 'agents' || activeTab === 'usage') && <HubBackendsSettingsTab canManage={isAdmin} renderSettings={backend => <BackendApiProvider key={backend.id} backendId={backend.id}>
+                <div className="space-y-6">
+                  <section className="space-y-3">
+                    <h3 className="font-medium">{t('mainTabs.usage')}</h3>
+                    <BackendQuota backend={backend} />
+                  </section>
+                  <section className="space-y-3 border-t border-border pt-5">
+                    <h3 className="font-medium">{t('mainTabs.agents')}</h3>
+                    {backend.online ? <BackendProviderSettings /> : <p className="text-sm text-muted-foreground">{t('planUsage.offlineHint')}</p>}
+                  </section>
+                </div>
+              </BackendApiProvider>} />}
 
               {activeTab === 'about' && <AboutTab />}
             </div>

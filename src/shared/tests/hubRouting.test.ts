@@ -60,3 +60,34 @@ test('new sessions use the project backend and register it before the first chat
     vi.unstubAllGlobals();
   }
 });
+
+test('provider auth and subscription usage explicitly route to each requested backend', async () => {
+  const { api } = await import('@/shared/api');
+  const hubWindow = window as Window & { __CLOUDCLI_BACKEND_ID__?: string };
+  hubWindow.__CLOUDCLI_BACKEND_ID__ = 'office';
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true, data: {} })));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    await api.providers.authStatus('claude','ubuntu');
+    await api.providers.claudePlanUsage('ubuntu');
+    await api.providers.codexPlanUsage('office');
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    for (const [index, backend] of ['ubuntu','ubuntu','office'].entries()) {
+      expect(calls[index][0]).toContain(`hub_backend=${backend}`);
+      expect((calls[index][1].headers as Record<string,string>)['X-CloudCLI-Backend']).toBe(backend);
+    }
+  } finally { delete hubWindow.__CLOUDCLI_BACKEND_ID__; vi.unstubAllGlobals(); }
+});
+
+test('immutable backend clients keep interleaved provider reads and writes on their selected hosts', async () => {
+  const { createBackendApi } = await import('@/shared/api');
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true, data: {} })));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    const office = createBackendApi('office'); const ubuntu = createBackendApi('ubuntu');
+    await Promise.all([office.providers.cliStatus('claude'), ubuntu.providers.mcpServers('codex', { scope: 'user' }), office.providers.saveSkills('claude', {}), ubuntu.providers.saveMcpServer('codex', {})]);
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(calls.map(([,options]) => (options.headers as Record<string,string>)['X-CloudCLI-Backend'])).toEqual(['office','ubuntu','office','ubuntu']);
+    expect(calls[2][1].method).toBe('POST'); expect(calls[3][1].method).toBe('POST');
+  } finally { vi.unstubAllGlobals(); }
+});

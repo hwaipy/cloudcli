@@ -410,3 +410,43 @@ test('messages without permission options still run with the saved session permi
     assert.equal(sessionsDb.getSessionById(SESSION_ID)?.permission_mode, 'bypassPermissions');
   }, CODEX_TRANSCRIPT_ROWS);
 });
+
+
+test('slow edit preparation cannot announce execution before the send receipt', async () => {
+  await withGateway('codex', async ({ socket, runs }) => {
+    const original = sessionsService.rewindSessionForEdit;
+    let release!: () => void;
+    let entered!: () => void;
+    const prepared = new Promise<void>(resolve => { release = resolve; });
+    const preparing = new Promise<void>(resolve => { entered = resolve; });
+    sessionsService.rewindSessionForEdit = async () => { entered(); await prepared; };
+    try {
+      socket.emit('message', JSON.stringify({
+        type: 'chat.edit-send', sessionId: SESSION_ID, anchorId: 'turn-b',
+        content: 'replacement', clientMessageId: 'slow-edit-receipt',
+      }));
+      await preparing;
+      assert.equal(runs.length, 0);
+      assert.ok(socket.frames.some(frame => frame.kind === 'status' && frame.text === 'Preparing conversation…'));
+      assert.equal(socket.frames.some(frame => frame.kind === 'status' && frame.text === 'Processing…'), false);
+      assert.equal(socket.frames.some(frame => frame.kind === 'chat_send_accepted'), false);
+      // Observe synchronously at the execution status: runtime output cannot
+      // overtake ACK even if its implementation writes before its first await.
+      socket.on('frame', frame => {
+        if (frame.kind === 'status' && frame.text === 'Processing…') {
+          assert.ok(socket.frames.some(item => item.kind === 'chat_send_accepted'));
+          assert.equal(runs.length, 0);
+        }
+      });
+      const executed = new Promise<void>(resolve => {
+        socket.on('frame', frame => { if (frame.kind === 'complete') resolve(); });
+      });
+      release();
+      await executed;
+      assert.equal(runs.length, 1);
+    } finally {
+      release();
+      sessionsService.rewindSessionForEdit = original;
+    }
+  }, CODEX_TRANSCRIPT_ROWS);
+});

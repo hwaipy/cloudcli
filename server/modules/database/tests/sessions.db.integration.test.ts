@@ -191,3 +191,15 @@ test('transcript updates do not reorder sessions; accepted user messages do', as
     );
   });
 });
+
+test('AI title replacement is atomic, preserves a renamed row, and never recreates a missing session', async () => {
+  await withIsolatedDatabase(() => {
+    sessionsDb.createSession('auto-title','codex','/workspace/demo-project','Temporary');
+    assert.equal(sessionsDb.updateSessionCustomNameIfUnchanged('auto-title','Temporary','Generated title'),true);
+    assert.equal(sessionsDb.getSessionById('auto-title')?.custom_name,'Generated title');
+    sessionsDb.updateSessionCustomName('auto-title','My custom title');
+    assert.equal(sessionsDb.updateSessionCustomNameIfUnchanged('auto-title','Generated title','Late AI title'),false);
+    assert.equal(sessionsDb.getSessionById('auto-title')?.custom_name,'My custom title');
+    assert.equal(sessionsDb.updateSessionCustomNameIfUnchanged('does-not-exist','Temporary','Generated'),false);
+  });
+});

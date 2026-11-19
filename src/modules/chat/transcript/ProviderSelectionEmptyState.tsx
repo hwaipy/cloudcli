@@ -128,7 +128,7 @@ export default function ProviderSelectionEmptyState({
       provider: meta.id,
       name: meta.name,
       models: providerModelCatalog[meta.id]?.OPTIONS ?? [],
-    })),
+    })).filter((group) => group.models.length > 0),
     [providerModelCatalog],
   );
 

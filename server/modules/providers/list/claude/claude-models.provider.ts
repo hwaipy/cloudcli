@@ -1,4 +1,9 @@
 import { readFile } from 'node:fs/promises';
+import os from 'node:os';
+
+import { query } from '@anthropic-ai/claude-agent-sdk';
+
+import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 
 import { sessionsDb } from '@/modules/database/index.js';
 import type { IProviderModels } from '@/shared/interfaces.js';
@@ -10,6 +15,8 @@ import type {
 import {
   buildDefaultProviderCurrentActiveModel,
   isPlaceholderProviderModel,
+  readObjectRecord,
+  readOptionalString,
   stripAnsiSequences,
 } from '@/shared/utils.js';
 
@@ -276,20 +283,72 @@ const readClaudeSessionModelFromJsonl = async (
   return null;
 };
 
+async function readNativeClaudeModels(): Promise<unknown> {
+  // The input stream never emits a prompt: supportedModels is an SDK control
+  // request, not an inference turn. No project transcript should be persisted.
+  const input = (async function* () { yield* await new Promise<never[]>(() => {}); })();
+  const run = query({ prompt: input, options: {
+    cwd: os.tmpdir(), persistSession: false, settingSources: [],
+    pathToClaudeCodeExecutable: resolveClaudeCodeExecutablePath(),
+    env: { ...process.env },
+  } });
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([
+      run.supportedModels(),
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('Claude model discovery timed out')), 10_000); }),
+    ]);
+  } finally { clearTimeout(timer!); run.close(); }
+}
+
+function nativeClaudeCatalog(value: unknown): ProviderModelsDefinition {
+  if (!Array.isArray(value)) throw new Error('Invalid Claude model catalog');
+  const seen = new Set<string>();
+  const options: ProviderModelOption[] = [];
+  for (const entry of value) {
+    const row = readObjectRecord(entry);
+    const id = readOptionalString(row?.value);
+    if (!row || !id || seen.has(id)) continue;
+    seen.add(id);
+    const displayName = readOptionalString(row.displayName) ?? id;
+    const description = readOptionalString(row.description) ?? '';
+    const resolved = readOptionalString(row.resolvedModel) ?? '';
+    const resolvedVersion = /claude-(opus|sonnet|haiku|fable)-(\d{1,2})-(\d{1,2})(?:-|$)/i.exec(resolved);
+    const versionName = /\b(?:Opus|Sonnet|Haiku|Fable)\s+\d+(?:\.\d+)*/i.exec(description)?.[0]
+      ?? (resolvedVersion ? `${resolvedVersion[1][0].toUpperCase()}${resolvedVersion[1].slice(1)} ${resolvedVersion[2]}.${resolvedVersion[3]}` : null);
+    const label = !versionName || displayName.toLowerCase().includes(versionName.toLowerCase())
+      ? displayName
+      : /\b(?:Opus|Sonnet|Haiku|Fable)\b/i.test(displayName)
+        ? displayName.replace(/\b(?:Opus|Sonnet|Haiku|Fable)\b/i, versionName)
+        : `${displayName} · ${versionName}`;
+    const levels = Array.isArray(row.supportedEffortLevels)
+      ? [...new Set(row.supportedEffortLevels.filter((level): level is string => typeof level === 'string' && ['low','medium','high','xhigh','max'].includes(level)))] : [];
+    options.push({ value: id, label, description,
+      ...(row.supportsEffort !== false && levels.length ? { effort: {
+        default: levels.includes('high') ? 'high' : levels[0],
+        values: [...levels.map(level => ({ value: level })), ...(levels.includes('xhigh') ? [ULTRACODE_EFFORT_OPTION] : [])],
+      } } : {}),
+    });
+  }
+  if (!options.length) throw new Error('Claude reported no models');
+  return { OPTIONS: options, DEFAULT: options.some(option => option.value === 'default') ? 'default' : options[0].value };
+}
+
 export class ClaudeProviderModels implements IProviderModels {
+  private cached: { models: ProviderModelsDefinition; expires: number } | null = null;
+  private pending: Promise<ProviderModelsDefinition> | null = null;
+
+  constructor(private readonly readModels = readNativeClaudeModels, private readonly now = Date.now) {}
+
   async getSupportedModels(): Promise<ProviderModelsDefinition> {
-    // claude creates a new jsonl file as a separate session for this request.
-    // As a result, it lists the workspace where this is invoked when it shouldn't.
-    //
-    // Disabled for now:
-    // const queryInstance = query({
-    //   prompt: 'Get supported models',
-    //   options: buildClaudeQueryOptions(),
-    // });
-    // const supportedModels = await queryInstance.supportedModels();
-    // queryInstance.close();
-    // return buildClaudeModelsDefinition(supportedModels);
-    return CLAUDE_PREDEFINED_MODELS;
+    if (this.cached && this.cached.expires > this.now()) return this.cached.models;
+    if (this.pending) return this.pending;
+    this.pending = this.readModels().then(raw => {
+      const models = nativeClaudeCatalog(raw);
+      this.cached = { models, expires: this.now() + 60_000 };
+      return models;
+    }).finally(() => { this.pending = null; });
+    return this.pending;
   }
 
   async getCurrentActiveModel(sessionId?: string): Promise<ProviderCurrentActiveModel> {

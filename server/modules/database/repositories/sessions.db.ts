@@ -471,6 +471,11 @@ export const sessionsDb = {
       .run(permissionMode, sessionId);
   },
 
+  /** Atomically replaces only the temporary title; never resurrects a deleted session. */
+  updateSessionCustomNameIfUnchanged(sessionId: string, expected: string, title: string): boolean {
+    return getConnection().prepare('UPDATE sessions SET custom_name = ? WHERE session_id = ? AND custom_name = ?').run(title, sessionId, expected).changes === 1;
+  },
+
   updateSessionCustomName(sessionId: string, customName: string): void {
     const db = getConnection();
     db.prepare(

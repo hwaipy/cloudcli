@@ -1,7 +1,8 @@
+import { useBackendApi } from '@/shared/context/BackendApiContext';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { api } from '@/shared/api';
+import type { api } from '@/shared/api';
 import { MCP_GLOBAL_SUPPORTED_TRANSPORTS, MCP_PROVIDER_NAMES, MCP_SUPPORTED_SCOPES } from '@/shared/constants';
 import type { McpFormState, McpProject, McpProvider, McpScope, McpTransport, ProviderMcpServer, UpsertProviderMcpServerPayload } from '@/shared/types';
 import {
@@ -154,11 +155,12 @@ const createProjectTargets = (projects: McpProject[]): ProjectTarget[] => {
 };
 
 const fetchProviderScopeServers = async (
+  client: typeof api,
   provider: McpProvider,
   scope: McpScope,
   project?: ProjectTarget,
 ): Promise<ProviderMcpServer[]> => {
-  const response = await api.providers.mcpServers(provider, {
+  const response = await client.providers.mcpServers(provider, {
     scope,
     workspacePath: project?.path,
   });
@@ -172,10 +174,11 @@ const fetchProviderScopeServers = async (
 };
 
 const deleteProviderServer = async (
+  client: typeof api,
   provider: McpProvider,
   server: ProviderMcpServer,
 ): Promise<void> => {
-  const response = await api.providers.deleteMcpServer(provider, server.name, {
+  const response = await client.providers.deleteMcpServer(provider, server.name, {
     scope: server.scope,
     workspacePath: server.workspacePath,
   });
@@ -187,10 +190,11 @@ const deleteProviderServer = async (
 };
 
 const saveProviderServer = async (
+  client: typeof api,
   provider: McpProvider,
   payload: UpsertProviderMcpServerPayload,
 ): Promise<void> => {
-  const response = await api.providers.saveMcpServer(provider, payload);
+  const response = await client.providers.saveMcpServer(provider, payload);
   const data = await toResponseJson<ApiResponse<{ server: ProviderMcpServer }>>(response);
 
   if (!response.ok || !data.success) {
@@ -199,9 +203,10 @@ const saveProviderServer = async (
 };
 
 const saveGlobalServer = async (
+  client: typeof api,
   payload: UpsertProviderMcpServerPayload,
 ): Promise<GlobalMcpServerResult[]> => {
-  const response = await api.providers.saveGlobalMcpServer(payload);
+  const response = await client.providers.saveGlobalMcpServer(payload);
   const data = await toResponseJson<ApiResponse<GlobalMcpServerResponse>>(response);
 
   if (!response.ok || !data.success) {
@@ -301,6 +306,7 @@ type McpServerFormState =
   | null;
 
 export function useMcpServers({ selectedProvider, currentProjects }: UseMcpServersArgs) {
+  const { api: client, backendId } = useBackendApi();
   const { t } = useTranslation('settings');
   const [servers, setServers] = useState<ProviderMcpServer[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -315,7 +321,7 @@ export function useMcpServers({ selectedProvider, currentProjects }: UseMcpServe
   const activeLoadIdRef = useRef(0);
 
   const projectTargets = useMemo(() => createProjectTargets(currentProjects), [currentProjects]);
-  const cacheKey = useMemo(() => getCacheKey(selectedProvider, projectTargets), [projectTargets, selectedProvider]);
+  const cacheKey = useMemo(() => `${backendId ?? ""}:${getCacheKey(selectedProvider, projectTargets)}`, [backendId, projectTargets, selectedProvider]);
 
   const refreshServers = useCallback(async (options: { force?: boolean } = {}) => {
     const loadId = activeLoadIdRef.current + 1;
@@ -350,7 +356,7 @@ export function useMcpServers({ selectedProvider, currentProjects }: UseMcpServe
     // are appended below as background requests instead of blocking this render.
     if (supportedScopes.includes('user')) {
       try {
-        const userServers = await fetchProviderScopeServers(selectedProvider, 'user');
+        const userServers = await fetchProviderScopeServers(client, selectedProvider, 'user');
         if (activeLoadIdRef.current !== loadId) {
           return;
         }
@@ -392,7 +398,7 @@ export function useMcpServers({ selectedProvider, currentProjects }: UseMcpServe
     // slowest project before showing servers from faster config files.
     await Promise.all(projectScopeRequests.map(async ({ scope, project }) => {
       try {
-        const scopedServers = await fetchProviderScopeServers(selectedProvider, scope, project);
+        const scopedServers = await fetchProviderScopeServers(client, selectedProvider, scope, project);
         if (activeLoadIdRef.current !== loadId) {
           return;
         }
@@ -434,10 +440,10 @@ export function useMcpServers({ selectedProvider, currentProjects }: UseMcpServe
         throw new Error(t('mcpServersAddErrors.selectProjectRequired'));
       }
 
-      await saveProviderServer(selectedProvider, payload);
+      await saveProviderServer(client, selectedProvider, payload);
 
       if (serverBeingEdited && didServerIdentityChange(serverBeingEdited, payload)) {
-        await deleteProviderServer(selectedProvider, serverBeingEdited);
+        await deleteProviderServer(client, selectedProvider, serverBeingEdited);
       }
 
       mcpServersCache.delete(cacheKey);
@@ -468,7 +474,7 @@ export function useMcpServers({ selectedProvider, currentProjects }: UseMcpServe
 
       // The global endpoint updates every provider, so clear every provider
       // cache entry instead of only the currently visible provider tab.
-      const results = await saveGlobalServer(payload);
+      const results = await saveGlobalServer(client, payload);
       mcpServersCache.clear();
       await refreshServers({ force: true });
 
@@ -492,7 +498,7 @@ export function useMcpServers({ selectedProvider, currentProjects }: UseMcpServe
 
       setDeleteError(null);
       try {
-        await deleteProviderServer(selectedProvider, server);
+        await deleteProviderServer(client, selectedProvider, server);
         mcpServersCache.delete(cacheKey);
         await refreshServers({ force: true });
         setSaveStatus('success');

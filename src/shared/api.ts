@@ -298,7 +298,21 @@ async function mutateOwnedDraft(method: string, url: string, scope: string, valu
   return authenticatedFetch(url, { method, body: JSON.stringify({ scope, ...values }), ...(backendId ? { hubBackendId: backendId } : {}) });
 }
 
-export const api = {
+const baseGet = get;
+const basePost = post;
+const basePut = put;
+const basePatch = patch;
+const baseDelete = del;
+
+/** Builds an immutable API client pinned to one backend, safe across concurrent tabs and requests. */
+export function createBackendApi(backendId?: string) {
+  const optionsFor = (options: ApiRequestOptions = {}): ApiRequestOptions => ({ ...options, hubBackendId: options.hubBackendId ?? backendId });
+  const get = (url: string, options?: ApiRequestOptions) => baseGet(url, optionsFor(options));
+  const post = (url: string, body?: unknown, options?: ApiRequestOptions) => basePost(url, body, optionsFor(options));
+  const put = (url: string, body?: unknown, options?: ApiRequestOptions) => basePut(url, body, optionsFor(options));
+  const patch = (url: string, body?: unknown, options?: ApiRequestOptions) => basePatch(url, body, optionsFor(options));
+  const del = (url: string, body?: unknown, options?: ApiRequestOptions) => baseDelete(url, body, optionsFor(options));
+  return {
   hub: {
     backends: (options: Pick<RequestInit, 'signal'> = {}): Promise<Response> => fetch('/hub/backends', { ...options, cache: 'no-store' }),
     managedBackends: () => get('/hub/admin/backends'),
@@ -533,9 +547,10 @@ export const api = {
   // Provider (coding agent) endpoints — models, capabilities, sessions, MCP, skills.
   providers: {
     capabilities: (backendId?: string) => get('/api/providers/capabilities', backendId ? { hubBackendId: backendId } : {}),
-    authStatus: (provider: string) =>
-      get(`/api/providers/${encodeURIComponent(provider)}/auth/status`),
-    codexPlanUsage: () => get('/api/providers/codex/plan-usage'),
+    authStatus: (provider: string, backendId?: string, options: Pick<RequestInit, 'signal'> = {}) =>
+      get(`/api/providers/${encodeURIComponent(provider)}/auth/status`, { ...options, ...(backendId ? { hubBackendId: backendId } : {}) }),
+    codexPlanUsage: (backendId: string) => get('/api/providers/codex/plan-usage', { signal: AbortSignal.timeout(20_000), ...(backendId ? { hubBackendId: backendId } : {}) }),
+    claudePlanUsage: (backendId: string) => get('/api/providers/claude/plan-usage', { signal: AbortSignal.timeout(20_000), ...(backendId ? { hubBackendId: backendId } : {}) }),
     codexTransport: () => get('/api/providers/codex/transport'),
     cliStatus: (provider: string) =>
       get(`/api/providers/${encodeURIComponent(provider)}/cli`),
@@ -543,7 +558,7 @@ export const api = {
       post(`/api/providers/${encodeURIComponent(provider)}/cli/update`),
     claudeSettingsPermissions: () => get('/api/providers/claude/settings-permissions'),
 
-    models: (provider: string, backendId?: string) => get(`/api/providers/${provider}/models`, backendId ? { hubBackendId: backendId } : {}),
+    models: (provider: string, backendId?: string, availableOnly = false) => get(`/api/providers/${provider}/${availableOnly ? 'available-models' : 'models'}`,  backendId ? { hubBackendId: backendId } : {}),
     createModel: (provider: string, input: unknown, backendId?: string) =>
       post(`/api/providers/${provider}/models`, input, backendId ? { hubBackendId: backendId } : {}),
     updateModel: (provider: string, recordId: string | number, input: unknown, backendId?: string) =>
@@ -557,6 +572,7 @@ export const api = {
       provider: string;
       projectPath: string;
       initialMessage?: unknown;
+      model?: string;
       permissionMode?: string;
     }, backendId?: string) => {
       const owner = backendId ?? getHubRequestBackend('/api/providers/sessions', JSON.stringify(payload));
@@ -787,7 +803,11 @@ export const api = {
   system: {
     update: () => post('/api/system/update'),
   },
-};
+  };
+}
+
+/** Default client for resource-routed application requests. */
+export const api = createBackendApi();
 
 // ---------------------------
 

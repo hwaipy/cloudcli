@@ -1,6 +1,7 @@
+import { useBackendApi } from '@/shared/context/BackendApiContext';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { api, ApiRequestError, readApiJson } from '@/shared/api';
+import { type api, ApiRequestError, readApiJson } from '@/shared/api';
 import type { AgentProvider, ProviderCliStatus, ProviderCliUpdateResult } from '@/shared/types';
 
 type ProviderCliStatusResponse = { data: ProviderCliStatus };
@@ -29,8 +30,8 @@ type ProviderCliUpdateOutcome = {
 /** How often a row that follows a run it did not see finish asks whether the run is over. */
 const UPDATE_POLL_INTERVAL_MS = 3000;
 
-const fetchCliStatus = async (provider: AgentProvider): Promise<ProviderCliStatus> => {
-  const response = await api.providers.cliStatus(provider);
+const fetchCliStatus = async (client: typeof api, provider: AgentProvider): Promise<ProviderCliStatus> => {
+  const response = await client.providers.cliStatus(provider);
   return (await readApiJson<ProviderCliStatusResponse>(response)).data;
 };
 
@@ -43,6 +44,7 @@ const wait = (ms: number) => new Promise<void>((resolve) => {
  * that status. Returns null when `isActive` turns false first (the row went away).
  */
 async function waitForUpdateToEnd(
+  client: typeof api,
   provider: AgentProvider,
   isActive: () => boolean,
 ): Promise<ProviderCliStatus | null> {
@@ -52,7 +54,7 @@ async function waitForUpdateToEnd(
     if (!isActive()) {
       return null;
     }
-    current = await fetchCliStatus(provider);
+    current = await fetchCliStatus(client, provider);
   } while (current.updateInProgress);
   return current;
 }
@@ -63,10 +65,10 @@ async function waitForUpdateToEnd(
  * running on the server, so the server is asked: a run that is still going is
  * followed to its end and its result returned.
  */
-async function requestUpdate(provider: AgentProvider, isActive: () => boolean): Promise<ProviderCliUpdateOutcome> {
+async function requestUpdate(client: typeof api, provider: AgentProvider, isActive: () => boolean): Promise<ProviderCliUpdateOutcome> {
   let response: Response | null = null;
   try {
-    response = await api.providers.updateCli(provider);
+    response = await client.providers.updateCli(provider);
     const payload = await readApiJson<ProviderCliUpdateResponse>(response);
     return { result: payload.data, error: null, status: null };
   } catch (error) {
@@ -83,8 +85,8 @@ async function requestUpdate(provider: AgentProvider, isActive: () => boolean): 
 
     const unconfirmed: ProviderCliUpdateRequestError = { kind: 'unconfirmed', code: null, message };
     try {
-      const current = await fetchCliStatus(provider);
-      const final = current.updateInProgress ? await waitForUpdateToEnd(provider, isActive) : current;
+      const current = await fetchCliStatus(client, provider);
+      const final = current.updateInProgress ? await waitForUpdateToEnd(client, provider, isActive) : current;
       if (final?.lastUpdate && current.updateInProgress) {
         return { result: final.lastUpdate, error: null, status: final };
       }
@@ -105,6 +107,7 @@ async function requestUpdate(provider: AgentProvider, isActive: () => boolean): 
  * agent) so a run's result never lands on another agent's row.
  */
 export function useProviderCliVersion(provider: AgentProvider) {
+  const { api: client } = useBackendApi();
   // The server's answer; null while the first request is in flight or when it
   // failed, and the row then falls back to the version from the auth status.
   const [status, setStatus] = useState<ProviderCliStatus | null>(null);
@@ -137,7 +140,7 @@ export function useProviderCliVersion(provider: AgentProvider) {
     let loaded = false;
     const follow = async () => {
       try {
-        const initial = await fetchCliStatus(provider);
+        const initial = await fetchCliStatus(client, provider);
         if (cancelled) {
           return;
         }
@@ -150,7 +153,7 @@ export function useProviderCliVersion(provider: AgentProvider) {
         // Started before this row mounted (on another agent's tab, before
         // Settings was closed or the page reloaded) and still running.
         setUpdating(true);
-        const final = await waitForUpdateToEnd(provider, () => !cancelled);
+        const final = await waitForUpdateToEnd(client, provider, () => !cancelled);
         if (!final || cancelled) {
           return;
         }
@@ -185,7 +188,7 @@ export function useProviderCliVersion(provider: AgentProvider) {
     setUpdating(true);
     setUpdateResult(null);
     setUpdateError(null);
-    const outcome = await requestUpdate(provider, () => mountedRef.current);
+    const outcome = await requestUpdate(client, provider, () => mountedRef.current);
     if (!mountedRef.current) {
       return;
     }
@@ -197,7 +200,7 @@ export function useProviderCliVersion(provider: AgentProvider) {
       return;
     }
     try {
-      setStatus(await fetchCliStatus(provider));
+      setStatus(await fetchCliStatus(client, provider));
     } catch (error) {
       console.error(`Error reloading the ${provider} CLI version:`, error);
     }

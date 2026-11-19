@@ -1,6 +1,7 @@
+import { useBackendApi } from '@/shared/context/BackendApiContext';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { api } from '@/shared/api';
+import type { api } from '@/shared/api';
 import type { ProviderSkill, ProviderSkillCreateEntryPayload, SkillsProject, SkillsProvider, SkillsScope } from '@/shared/types';
 
 type ProviderSkillCreatePayload = {
@@ -181,10 +182,11 @@ const mergeSkills = (
 };
 
 const fetchProviderSkills = async (
+  client: typeof api,
   provider: SkillsProvider,
   project?: ProjectTarget,
 ): Promise<ProviderSkill[]> => {
-  const response = await api.providers.skills(provider, { workspacePath: project?.path });
+  const response = await client.providers.skills(provider, { workspacePath: project?.path });
   const data = await toResponseJson<ApiResponse<ProviderSkillsResponse>>(response);
   if (!response.ok || !data.success) {
     throw new Error(getApiErrorMessage(data, `Failed to load ${provider} skills`));
@@ -194,10 +196,11 @@ const fetchProviderSkills = async (
 };
 
 const saveProviderSkills = async (
+  client: typeof api,
   provider: SkillsProvider,
   payload: ProviderSkillCreatePayload,
 ): Promise<ProviderSkill[]> => {
-  const response = await api.providers.saveSkills(provider, payload);
+  const response = await client.providers.saveSkills(provider, payload);
   const data = await toResponseJson<ApiResponse<ProviderSkillsResponse>>(response);
   if (!response.ok || !data.success) {
     throw new Error(getApiErrorMessage(data, 'Failed to save skills'));
@@ -225,6 +228,7 @@ type UseProviderSkillsArgs = {
 };
 
 export function useProviderSkills({ selectedProvider, currentProjects }: UseProviderSkillsArgs) {
+  const { api: client, backendId } = useBackendApi();
   const [skills, setSkills] = useState<ProviderSkill[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingProjectScopes, setIsLoadingProjectScopes] = useState(false);
@@ -237,7 +241,7 @@ export function useProviderSkills({ selectedProvider, currentProjects }: UseProv
     () => JSON.parse(serializedProjectTargets) as ProjectTarget[],
     [serializedProjectTargets],
   );
-  const cacheKey = useMemo(() => getCacheKey(selectedProvider, projectTargets), [projectTargets, selectedProvider]);
+  const cacheKey = useMemo(() => `${backendId ?? ""}:${getCacheKey(selectedProvider, projectTargets)}`, [backendId, projectTargets, selectedProvider]);
 
   const refreshSkills = useCallback(async (options: { force?: boolean } = {}) => {
     const loadId = activeLoadIdRef.current + 1;
@@ -267,7 +271,7 @@ export function useProviderSkills({ selectedProvider, currentProjects }: UseProv
     let firstError: string | null = null;
 
     try {
-      const globalSkills = await fetchProviderSkills(selectedProvider);
+      const globalSkills = await fetchProviderSkills(client, selectedProvider);
       if (activeLoadIdRef.current !== loadId) {
         return;
       }
@@ -296,7 +300,7 @@ export function useProviderSkills({ selectedProvider, currentProjects }: UseProv
 
     await Promise.all(projectTargets.map(async (project) => {
       try {
-        const projectSkills = await fetchProviderSkills(selectedProvider, project);
+        const projectSkills = await fetchProviderSkills(client, selectedProvider, project);
         if (activeLoadIdRef.current !== loadId) {
           return;
         }
@@ -321,7 +325,7 @@ export function useProviderSkills({ selectedProvider, currentProjects }: UseProv
 
   const addSkills = useCallback(async (payload: ProviderSkillCreatePayload) => {
     try {
-      const createdSkills = await saveProviderSkills(selectedProvider, payload);
+      const createdSkills = await saveProviderSkills(client, selectedProvider, payload);
       clearProviderSkillCache(selectedProvider);
       await refreshSkills({ force: true });
       setSaveStatus('success');

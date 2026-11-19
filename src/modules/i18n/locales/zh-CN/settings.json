@@ -142,7 +142,8 @@
     "account": "账户",
     "admin": "管理员",
     "backends": "后端管理",
-    "about": "关于"
+    "about": "关于",
+    "usage": "套餐用量"
   },
   "users": {
     "title": "管理其他账户",
@@ -696,5 +697,18 @@
     "installAriaLabel": "插件 git 仓库 URL",
     "tab": "标签",
     "runningStatus": "运行中"
+  },
+  "planUsage": {
+    "description": "按后端分别显示其支持厂家的账号套餐用量，无法查询的用量会明确标注。",
+    "online": "在线",
+    "offline": "离线",
+    "offlineHint": "此后端已离线，暂时无法查询套餐用量。",
+    "loading": "正在加载…",
+    "discoveryFailed": "部分厂家账号状态暂时无法查询。",
+    "noProviders": "此后端未安装支持的厂家客户端。",
+    "notAuthenticated": "尚未登录，无法查询用量。",
+    "unsupported": "此厂家暂不支持查询套餐用量。",
+    "inventoryFailed": "无法加载后端列表。",
+    "noBackends": "尚未注册后端。"
   }
 }

@@ -62,6 +62,8 @@ type ChatComposerProps = {
   onSelectEffort: (effort: string) => void;
   model: string;
   availableModelOptions: ProviderModelOption[];
+  /** A new conversation needs a model confirmed by the current host. */
+  modelAvailable?: boolean;
   onSelectModel: (model: string) => void;
   modelsLoading: boolean;
   tokenBudget: Record<string, unknown> | null;
@@ -130,6 +132,7 @@ export default function ChatComposer({
   onSelectEffort,
   model,
   availableModelOptions,
+  modelAvailable = true,
   onSelectModel,
   modelsLoading,
   tokenBudget,
@@ -269,7 +272,7 @@ export default function ChatComposer({
     80,
     36,
     availableEffortOptions.length > 0 ? 32 : 0,
-    availableModelOptions.length > 0 || modelsLoading ? Math.min(typeof window !== 'undefined' && window.innerWidth < 640 ? 112 : 192, Math.max(64, selectedModelLabel.length * 7 + 16)) : 0,
+    model || availableModelOptions.length > 0 || modelsLoading ? Math.min(typeof window !== 'undefined' && window.innerWidth < 640 ? 112 : 192, Math.max(64, selectedModelLabel.length * 7 + 16)) : 0,
     availablePermissionModes.length > 0 ? 32 : 0,
   ];
   const availableControlWidth = footerWidth - toolsWidth - 24 - 32 - 8;
@@ -517,7 +520,7 @@ export default function ChatComposer({
                     ? false
                     : isTranscribing
                       ? true
-                      : !input.trim() && attachedFiles.length === 0
+                      : !modelAvailable || (!input.trim() && attachedFiles.length === 0)
               }
               aria-label={submitAriaLabel}
               title={canQueueDraft && canSteer ? `${submitAriaLabel} (${queueShortcut})` : submitAriaLabel}

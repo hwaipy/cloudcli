@@ -10,6 +10,7 @@ import type { PendingPermissionRequest, PermissionMode,
   ProviderModelOption,
   ProviderModelsDefinition } from '@/shared/types';
 import { DEFAULT_EFFORT_VALUE } from '@/shared/constants';
+import { readUserPreference } from '@/shared/userSettings';
 import { readSelectedProvider, writeSelectedProvider } from '@/shared/selectedProvider';
 
 const FALLBACK_PROVIDER_EFFORT_VALUES: Partial<Record<LLMProvider, readonly string[]>> = {
@@ -177,9 +178,17 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
     Partial<Record<LLMProvider, ProviderCapabilities>> | null
   >(null);
 
-  const [providerModelCatalog, setProviderModelCatalog] = useState<
+  const [rawProviderModelCatalog, setProviderModelCatalog] = useState<
     Partial<Record<LLMProvider, ProviderModelsDefinition>>
   >({});
+  // Identifies the host that owns the loaded catalog; a host switch hides old rows immediately.
+  const catalogBackendRef = useRef(backendId);
+  const providerModelCatalog = useMemo(() => {
+    if (catalogBackendRef.current !== backendId) return {};
+    return selectedProject?.strictFileIsolation
+      ? { codex: rawProviderModelCatalog.codex }
+      : rawProviderModelCatalog;
+  }, [backendId, rawProviderModelCatalog, selectedProject?.strictFileIsolation]);
   const [providerModelsLoading, setProviderModelsLoading] = useState(true);
 
   const providerModelsRequestIdRef = useRef(0);
@@ -222,6 +231,8 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
   const loadProviderModels = useCallback(async () => {
     const requestId = providerModelsRequestIdRef.current + 1;
     providerModelsRequestIdRef.current = requestId;
+    catalogBackendRef.current = backendId;
+    setProviderModelCatalog({});
     setProviderModelsLoading(true);
 
     try {
@@ -230,9 +241,9 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
       await Promise.all(
         PROVIDERS.map(async (p) => {
           try {
-            const response = backendId ? await api.providers.models(p, backendId) : await api.providers.models(p);
+            const response = await api.providers.models(p, backendId, true);
             const body = (await response.json()) as ProviderModelsApiResponse;
-            const models = body.success ? body.data?.models : undefined;
+            const models = response.ok && body.success ? body.data?.models : undefined;
             if (!models || providerModelsRequestIdRef.current !== requestId) {
               return;
             }
@@ -438,7 +449,10 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
       return;
     }
     initializedPermissionScopeRef.current = scope;
-    const providerSavedMode = localStorage.getItem(`permissionMode-last-${provider}`) as PermissionMode | null;
+    const ui = readUserPreference<Record<string, unknown>>('uiPreferences', {});
+    const byBackend = (ui.backendProviderSettings ?? {}) as Record<string, Record<string, { permissionMode?: PermissionMode }>>;
+    const scopedDefault = byBackend[backendId ?? '']?.[`${provider}Permissions`]?.permissionMode;
+    const providerSavedMode = scopedDefault ?? localStorage.getItem(`permissionMode-last-${provider}`) as PermissionMode | null;
     setPermissionMode(providerSavedMode && validModes.includes(providerSavedMode)
       ? providerSavedMode : getDefaultPermissionModeForProvider(provider));
   }, [backendId, selectedSession?.id, provider, getDefaultPermissionModeForProvider, getPermissionModesForProvider]);
@@ -769,15 +783,24 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
     [provider, providerModelCatalog],
   );
 
+  useEffect(() => {
+    if (selectedSession?.id || providerModelsLoading || providerModelCatalog[provider]?.OPTIONS.length) return;
+    const supported = PROVIDERS.find((candidate) => providerModelCatalog[candidate]?.OPTIONS.length);
+    if (supported) setProvider(supported);
+  }, [selectedSession?.id, providerModelsLoading, providerModelCatalog, provider, setProvider]);
+
   const applyProviderCatalog = useCallback((
     targetProvider: LLMProvider,
     models: ProviderModelsDefinition,
   ) => {
-    setProviderModelCatalog((previous) => ({
-      ...previous,
-      [targetProvider]: models,
-    }));
-  }, []);
+    if (catalogBackendRef.current !== backendId) return;
+    // A configuration-library edit cannot enable an unavailable host provider.
+    if (!providerModelCatalog[targetProvider]?.OPTIONS.length) {
+      void loadProviderModels();
+      return;
+    }
+    setProviderModelCatalog((previous) => ({ ...previous, [targetProvider]: models }));
+  }, [backendId, providerModelCatalog, loadProviderModels]);
 
   const readModelMutationResponse = useCallback(async (
     response: Response,

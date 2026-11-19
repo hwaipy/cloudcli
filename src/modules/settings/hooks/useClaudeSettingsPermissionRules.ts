@@ -1,6 +1,7 @@
+import { useBackendApi } from '@/shared/context/BackendApiContext';
 import { useEffect, useState } from 'react';
 
-import { api, readApiJson } from '@/shared/api';
+import { readApiJson } from '@/shared/api';
 import type { ClaudeSettingsPermissionSource } from '@/shared/types';
 
 type ClaudeSettingsPermissionsResponse = {
@@ -13,6 +14,7 @@ type ClaudeSettingsPermissionsResponse = {
  * mount. Read-only: the app never edits those files.
  */
 export function useClaudeSettingsPermissionRules() {
+  const { api } = useBackendApi();
   // The files live on the server; null until it answers, so the panel shows a
   // loading line instead of claiming there are no rules.
   const [sources, setSources] = useState<ClaudeSettingsPermissionSource[] | null>(null);

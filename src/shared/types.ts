@@ -1352,6 +1352,8 @@ export type ProviderAuthSubscriptionOverride = {
 
 /** Sign-in state of one LLM provider CLI - whether it is authenticated, the account email and method, plus in-flight loading and error state - polled by the provider-auth module and rendered by the settings and onboarding account views. `subscriptionOverride` is only present when an API key is bypassing a valid subscription login. */
 export type ProviderAuthStatus = {
+  /** Whether this host has the provider CLI installed. */
+  installed?: boolean;
   authenticated: boolean;
   email: string | null;
   method: string | null;
@@ -1407,7 +1409,7 @@ export type AgentContext = {
 };
 
 /** Identifier of a top-level section in the settings dialog; use it whenever a tab is stored, compared or requested so deep links, the sidebar and the command palette all agree on the same set of names. */
-export type SettingsMainTab = 'agents' | 'appearance' | 'git' | 'api' | 'voice' | 'tasks' | 'browser' | 'notifications' | 'plugins' | 'account' | 'admin' | 'backends' | 'about';
+export type SettingsMainTab = 'usage' | 'agents' | 'appearance' | 'git' | 'api' | 'voice' | 'tasks' | 'browser' | 'notifications' | 'plugins' | 'account' | 'admin' | 'backends' | 'about';
 
 /** The coding-agent CLI a settings screen is configuring, aliasing LLMProvider so agent-scoped settings read as being about an agent rather than a chat model. */
 export type AgentProvider = LLMProvider;
@@ -1935,3 +1937,7 @@ export type HubDesktopNotificationsBridge = {
   onStateUpdated(callback: (state: DesktopNotificationState) => void): () => void;
   onNavigate(callback: (target: DesktopNotificationTarget) => void): () => void;
 };
+
+//----------------- BACKEND SETTINGS TARGET ------------
+/** Registered backend selected by management tabs; used to scope provider editors and quota. */
+export type BackendSettingsTarget = { id: string; name: string; color: string; online: boolean };

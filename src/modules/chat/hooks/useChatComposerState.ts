@@ -47,6 +47,8 @@ type UseChatComposerStateArgs = {
    * is one, otherwise the user's per-provider selection.
    */
   currentProviderModel: string;
+  /** Blocks a new conversation until its host has confirmed the selected model. */
+  canStartNewSession?: boolean;
   currentProviderEffort: string;
   isLoading: boolean;
   processingSessions?: SessionActivityMap;
@@ -220,6 +222,7 @@ export function useChatComposerState({
   permissionMode,
   resolvePermissionModeForProvider,
   currentProviderModel,
+  canStartNewSession = true,
   currentProviderEffort,
   isLoading,
   processingSessions,
@@ -694,7 +697,10 @@ export function useChatComposerState({
       },
     );
 
-    const toolsSettings = getToolsSettings();
+    const legacy = getToolsSettings();
+    const ui = readUserPreference<Record<string, unknown>>('uiPreferences', {});
+    const byBackend = (ui.backendProviderSettings ?? {}) as Record<string, Record<string, unknown>>;
+    const toolsSettings = (byBackend[selectedProject?.__hubBackendId ?? '']?.[PROVIDER_PERMISSION_PREFERENCE_KEYS[provider]] as typeof legacy | undefined) ?? legacy;
 
     return {
       model: currentProviderModel,
@@ -711,6 +717,7 @@ export function useChatComposerState({
     provider,
     resolvePermissionModeForProvider,
     selectedSession,
+    selectedProject?.__hubBackendId,
   ]);
 
   // Read at send time through a ref: the map changes on every poll, and a
@@ -866,6 +873,7 @@ export function useChatComposerState({
       submitOptions?: SubmitOptions,
     ) => {
       event.preventDefault();
+      if (!currentSessionId && !selectedSession?.id && !canStartNewSession) return;
       const activeEditAnchorId = submitOptions?.questionAnswer !== undefined ? null : editingAnchorId;
       const currentInput = submitOptions?.questionAnswer ?? queuedSubmission?.content ?? inputValueRef.current;
       const inputRevisionAtSubmit = inputRevisionRef.current;
@@ -990,6 +998,7 @@ export function useChatComposerState({
             provider,
             projectPath: resolvedProjectPath,
             initialMessage: messageContent,
+            model: currentProviderModel,
             permissionMode: resolvePermissionModeForProvider(provider, permissionMode),
           }, selectedProject?.__hubBackendId ?? getHubResourceBackend('project', selectedProject?.projectId) ?? undefined);
           if (!response.ok) {
@@ -1195,9 +1204,11 @@ export function useChatComposerState({
     [
       selectedSession,
       askBeforeSendingOverBackgroundWork,
+      canStartNewSession,
       attachedFiles,
       buildSendOptions,
       currentSessionId,
+      currentProviderModel,
       editingAnchorId,
       executeCommand,
       isLoading,

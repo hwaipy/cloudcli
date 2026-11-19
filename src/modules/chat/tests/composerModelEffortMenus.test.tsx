@@ -54,3 +54,10 @@ test('the half-dial needle moves with the selected effort', () => {
   assert.notEqual(low, medium);
   assert.notEqual(medium, high);
 });
+
+test('an existing model remains visible read-only when the selectable catalog is unavailable', () => {
+  const view = render(<ComposerModelMenu model="gpt-6.1-sol" modelOptions={[]} modelsLoading={false} onSelectModel={() => { throw Error('must not select'); }} />);
+  const button = view.getByRole('button');
+  assert.ok(button.textContent?.includes('gpt-6.1-sol'));
+  assert.equal((button as HTMLButtonElement).disabled, true);
+});

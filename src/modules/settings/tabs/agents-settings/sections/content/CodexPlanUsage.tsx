@@ -27,8 +27,8 @@ type PlanUsage = {
 
 const REFRESH_MS = 60_000;
 
-/** Rendered by AccountContent for Codex account quota, refreshed while the settings page is open. */
-export function CodexPlanUsage() {
+/** Rendered by BackendPlanUsageTab for one backend’s Codex quota, refreshed while settings is open. */
+export function CodexPlanUsage({ backendId }: { backendId: string }) {
   const { t, i18n } = useTranslation('chat');
   // Retains the last successful quota snapshot while a later refresh is in flight.
   const [usage, setUsage] = useState<PlanUsage | null>(null);
@@ -37,9 +37,11 @@ export function CodexPlanUsage() {
 
   useEffect(() => {
     let active = true;
+    setUsage(null);
+    setError(false);
     const refresh = async () => {
       try {
-        const response = await api.providers.codexPlanUsage();
+        const response = await api.providers.codexPlanUsage(backendId);
         const payload = await readApiJson<{ data: PlanUsage }>(response);
         if (active) {
           setUsage(payload.data);
@@ -55,7 +57,7 @@ export function CodexPlanUsage() {
       active = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [backendId]);
 
   const displayDate = (seconds: number | null) => seconds === null
     ? '—'

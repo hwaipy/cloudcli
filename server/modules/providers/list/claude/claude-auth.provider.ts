@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { readClaudeLoginCredentials } from '@/modules/providers/services/claude-login-credentials.service.js';
+
 import { resolveClaudeCodeExecutablePath } from '@/shared/claude-cli-path.js';
 import type { IProviderAuth } from '@/shared/interfaces.js';
 import type { CliVersionProbe, ProviderAuthStatus, ProviderAuthSubscriptionOverride } from '@/shared/types.js';
@@ -29,6 +31,8 @@ const hasErrorCode = (error: unknown, code: string): boolean => (
 );
 
 export class ClaudeProviderAuth implements IProviderAuth {
+  constructor(private readonly readLogin = readClaudeLoginCredentials) {}
+
   /**
    * Checks whether the Claude Code CLI that chats run is available on this
    * host, and which version it is.
@@ -80,7 +84,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
    */
   private async loadSettingsEnv(): Promise<Record<string, unknown>> {
     try {
-      const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+      const settingsPath = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'settings.json');
       const content = await readFile(settingsPath, 'utf8');
       const settings = readObjectRecord(JSON.parse(content));
       return readObjectRecord(settings?.env) ?? {};
@@ -128,7 +132,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
       // billed pay-as-you-go to the key (issue #568). Surface the bypassed
       // login so the settings page can warn about it; an expired or missing
       // login is not being bypassed, so it stays silent.
-      const subscription = await this.readCredentialsFile();
+      const subscription = await this.readSubscriptionLogin();
       if (subscription.authenticated) {
         status.subscriptionOverride = {
           variable: apiKey.variable,
@@ -148,32 +152,31 @@ export class ClaudeProviderAuth implements IProviderAuth {
       return { authenticated: true, email: 'OAuth Token (long-lived)', method: 'environment' };
     }
 
-    return this.readCredentialsFile();
+    return this.readSubscriptionLogin();
   }
 
   /**
-   * Reads the `claude /login` OAuth session from ~/.claude/.credentials.json and
+   * Reads the official login from macOS Keychain or the credentials file and
    * reports whether it is still usable. Shared by the fallback path (when no
    * env credential exists) and by the API-key path (to detect a bypassed login).
    */
-  private async readCredentialsFile(): Promise<ClaudeCredentialsStatus> {
+  private async readSubscriptionLogin(): Promise<ClaudeCredentialsStatus> {
     const missingCredentialsError = 'Claude CLI is not authenticated. Run claude /login or configure ANTHROPIC_API_KEY.';
 
     try {
-      const credPath = path.join(os.homedir(), '.claude', '.credentials.json');
-      const content = await readFile(credPath, 'utf8');
-      const creds = readObjectRecord(JSON.parse(content)) ?? {};
+      const login = await this.readLogin();
+      const creds = login?.credentials ?? {};
       const oauth = readObjectRecord(creds.claudeAiOauth);
       const accessToken = readOptionalString(oauth?.accessToken);
 
       if (accessToken) {
         const expiresAt = typeof oauth?.expiresAt === 'number' ? oauth.expiresAt : undefined;
-        const email = readOptionalString(creds.email) ?? readOptionalString(creds.user) ?? null;
+        const email = login?.email ?? null;
         if (!expiresAt || Date.now() < expiresAt) {
           return {
             authenticated: true,
             email,
-            method: 'credentials_file',
+            method: login?.method ?? 'credentials_file',
           };
         }
 
@@ -191,7 +194,7 @@ export class ClaudeProviderAuth implements IProviderAuth {
           return {
             authenticated: true,
             email,
-            method: 'credentials_file',
+            method: login?.method ?? 'credentials_file',
           };
         }
 

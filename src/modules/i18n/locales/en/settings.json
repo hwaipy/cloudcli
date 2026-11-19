@@ -142,7 +142,8 @@
     "account": "Account",
     "admin": "Admin",
     "backends": "Backends",
-    "about": "About"
+    "about": "About",
+    "usage": "Plan usage"
   },
   "users": {
     "title": "Manage other accounts",
@@ -939,5 +940,18 @@
     "teamManagementDescription": "Multiple users, role-based access, and shared projects for your team.",
     "licensed": "Licensed under AGPL-3.0",
     "proCta": "Available with CloudCLI Pro"
+  },
+  "planUsage": {
+    "description": "Each backend has its own provider accounts and subscription usage. Unavailable quotas are shown explicitly.",
+    "online": "Online",
+    "offline": "Offline",
+    "offlineHint": "This backend is offline; quota cannot be queried.",
+    "loading": "Loading…",
+    "discoveryFailed": "Some provider accounts could not be checked.",
+    "noProviders": "No supported providers are installed on this backend.",
+    "notAuthenticated": "Not signed in; usage unavailable.",
+    "unsupported": "This provider does not expose subscription usage.",
+    "inventoryFailed": "Could not load the backend inventory.",
+    "noBackends": "No backends are registered."
   }
 }

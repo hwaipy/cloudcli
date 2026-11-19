@@ -40,8 +40,12 @@ export default function AgentsSettingsTab({
   ), [selectedAgent]);
 
   const visibleAgents = useMemo<AgentProvider[]>(() => {
-    return ['claude', 'cursor', 'codex', 'opencode'];
-  }, []);
+    return (['claude', 'cursor', 'codex', 'opencode'] as AgentProvider[]).filter(agent => providerAuthStatus[agent].installed === true);
+  }, [providerAuthStatus]);
+
+  useEffect(() => {
+    if (!visibleAgents.includes(selectedAgent) && visibleAgents.length) setSelectedAgent(visibleAgents[0]);
+  }, [visibleAgents, selectedAgent]);
 
   const agentContextById = useMemo<AgentContextByProvider>(() => ({
     claude: {
@@ -73,6 +77,8 @@ export default function AgentsSettingsTab({
       setSelectedCategory(visibleCategories[0] ?? 'account');
     }
   }, [selectedCategory, visibleCategories]);
+
+  if (!visibleAgents.length) return <p className="text-sm text-muted-foreground">{Object.values(providerAuthStatus).some(status => status.loading) ? "正在查询后端服务商…" : "此后端没有已安装的服务商。"}</p>;
 
   return (
     <div className="-mx-4 -mb-4 -mt-2 flex min-h-[300px] min-w-0 flex-col overflow-hidden md:-mx-6 md:-mb-6 md:-mt-2 md:min-h-[500px]">

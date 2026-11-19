@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 
-import { api } from '@/shared/api';
+import { useBackendApi } from '@/shared/context/BackendApiContext';
 import type {
   LLMProvider,
   ProviderAuthStatus,
@@ -18,6 +18,7 @@ const createInitialProviderAuthStatusMap = (loading = true): ProviderAuthStatusM
 });
 
 type ProviderAuthStatusPayload = {
+  installed?: boolean;
   authenticated?: boolean;
   email?: string | null;
   method?: string | null;
@@ -42,6 +43,7 @@ const toProviderAuthStatus = (
   payload: ProviderAuthStatusPayload,
   fallbackError: string | null = null,
 ): ProviderAuthStatus => ({
+  ...(payload.installed !== undefined ? { installed: payload.installed } : {}),
   authenticated: Boolean(payload.authenticated),
   email: payload.email ?? null,
   method: payload.method ?? null,
@@ -63,6 +65,7 @@ type UseProviderAuthStatusOptions = {
 export function useProviderAuthStatus(
   { initialLoading = true }: UseProviderAuthStatusOptions = {},
 ) {
+  const { api } = useBackendApi();
   const [providerAuthStatus, setProviderAuthStatus] = useState<ProviderAuthStatusMap>(() => (
     createInitialProviderAuthStatusMap(initialLoading)
   ));

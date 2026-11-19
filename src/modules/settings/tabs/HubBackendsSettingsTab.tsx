@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { usePaletteOps } from '@/modules/command-palette';
 
+import type { BackendSettingsTarget } from '@/shared/types';
 import { api, readApiJson } from '@/shared/api';
 
 type ManagedBackend = {
@@ -19,7 +20,9 @@ type ManagedBackend = {
 type IssuedBackendKey = { id: string; name: string; key: string };
 
 /** Rendered by Settings for administrators to provision per-backend Hub connection keys. */
-export default function HubBackendsSettingsTab() {
+export default function HubBackendsSettingsTab({ canManage = true, renderSettings }: { canManage?: boolean; renderSettings?: (backend: BackendSettingsTarget) => ReactNode }) {
+  // Backend identity controls every editor in the active tab; the final tab creates a node.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const { t } = useTranslation('settings');
   const paletteOps = usePaletteOps();
   // The Hub's persisted inventory is loaded here so admins can provision both existing and new nodes.
@@ -39,7 +42,7 @@ export default function HubBackendsSettingsTab() {
 
   const loadBackends = useCallback(async () => {
     try {
-      const response = await api.hub.managedBackends();
+      const response = await (canManage ? api.hub.managedBackends() : api.hub.backends());
       const payload = await readApiJson<{ backends: ManagedBackend[] }>(response);
       setBackends(payload.backends);
     } catch (caught) {
@@ -47,7 +50,7 @@ export default function HubBackendsSettingsTab() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canManage]);
 
   useEffect(() => { void loadBackends(); }, [loadBackends]);
 
@@ -132,16 +135,22 @@ export default function HubBackendsSettingsTab() {
     }
   };
 
+  const activeId = selectedId ?? backends[0]?.id ?? '__new__';
+  const activeBackend = backends.find(backend => backend.id === activeId);
   return (
-    <section className="max-w-2xl space-y-5">
+    <section className="min-w-0 space-y-5">
       <header>
         <h3 className="text-lg font-medium">{t('backends.title')}</h3>
         <p className="mt-1 text-sm text-muted-foreground">{t('backends.description')}</p>
       </header>
 
+      <div role="tablist" aria-label="后端" className="flex gap-1 overflow-x-auto border-b border-border pb-2">
+        {backends.map(backend => <button key={backend.id} type="button" role="tab" aria-selected={activeId === backend.id} onClick={() => setSelectedId(backend.id)} className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm ${activeId === backend.id ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-muted'}`}><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: backend.color || '#3b82f6' }} />{backend.name}{!backend.online && <span className="text-xs">{t('backends.offline')}</span>}</button>)}
+        {canManage && <button type="button" role="tab" aria-label={t('backends.addButton')} aria-selected={activeId === '__new__'} onClick={() => setSelectedId('__new__')} className="shrink-0 rounded-lg px-3 py-2 text-lg hover:bg-muted">+</button>}
+      </div>
       {error && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">{error}</p>}
 
-      {issuedKey && (
+      {issuedKey && issuedKey.id === activeId && (
         <section className="space-y-3 rounded-lg border border-primary/40 bg-primary/5 p-4" aria-live="polite">
           <div>
             <h4 className="font-medium">{t('backends.keyReady', { name: issuedKey.name })}</h4>
@@ -157,7 +166,7 @@ export default function HubBackendsSettingsTab() {
         </section>
       )}
 
-      <form onSubmit={(event) => { void createBackend(event); }} className="space-y-3 rounded-lg border border-border p-4">
+      {canManage && activeId === '__new__' && <form onSubmit={(event) => { void createBackend(event); }} className="space-y-3 rounded-lg border border-border p-4">
         <h4 className="font-medium">{t('backends.addTitle')}</h4>
         <label className="block text-sm">
           <span>{t('backends.nameLabel')}</span>
@@ -166,11 +175,11 @@ export default function HubBackendsSettingsTab() {
         <button type="submit" disabled={pending || !name.trim()} className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50">
           {pending ? t('backends.working') : t('backends.addButton')}
         </button>
-      </form>
+      </form>}
 
       <div className="space-y-2">
-        <h4 className="font-medium">{t('backends.existingTitle')}</h4>
-        {loading ? <p className="text-sm text-muted-foreground">{t('backends.loading')}</p> : backends.length === 0 ? <p className="text-sm text-muted-foreground">{t('backends.empty')}</p> : backends.map((backend) => (
+
+        {loading ? <p className="text-sm text-muted-foreground">{t('backends.loading')}</p> : backends.length === 0 ? <p className="text-sm text-muted-foreground">{t('backends.empty')}</p> : backends.filter(backend => canManage && backend.id === activeId).map((backend) => (
           <form key={`${backend.id}:${backend.name}:${backend.color}`} onSubmit={(event) => { void saveBackend(event, backend); }} className="flex flex-wrap items-center gap-3 rounded-lg border border-border p-3">
             <span className={`h-2.5 w-2.5 rounded-full ${backend.online ? 'bg-green-500' : 'bg-muted-foreground/50'}`} aria-label={backend.online ? t('backends.online') : t('backends.offline')} />
             <div className="min-w-0 flex-1">
@@ -187,6 +196,7 @@ export default function HubBackendsSettingsTab() {
           </form>
         ))}
       </div>
+      {activeBackend && <div role="tabpanel" key={activeBackend.id}>{renderSettings?.(activeBackend)}</div>}
     </section>
   );
 }

@@ -103,3 +103,9 @@ describe('the model label in the message footer', () => {
     assert.equal(container.querySelector('[title^="Answered by"]'), null);
   });
 });
+
+it('assistant replies do not repeat the provider heading above their content', () => {
+  const { container } = renderMessage({ type: 'assistant', content: 'An ordinary answer.', timestamp: '2026-08-19T12:00:00.000Z' });
+  assert.ok(container.textContent?.includes('An ordinary answer.'));
+  assert.equal(container.textContent?.includes('Claude'), false);
+});

@@ -2,6 +2,7 @@ import {
   Bell,
   Bot,
   GitBranch,
+  Gauge,
   Info,
   KeyRound,
   ListChecks,
@@ -69,6 +70,7 @@ type SettingsMainTabMeta = {
  * the command palette turns each entry into an "open settings" command, so both stay in sync.
  */
 export const SETTINGS_MAIN_TABS: SettingsMainTabMeta[] = [
+  { id: 'usage', label: 'Plan usage', keywords: 'usage quota backend subscription 套餐 用量 后端', icon: Gauge },
   { id: 'agents', label: 'Agents', keywords: 'agents subagents claude code', icon: Bot },
   { id: 'appearance', label: 'Appearance', keywords: 'appearance theme dark light language', icon: Palette },
   { id: 'git', label: 'Git', keywords: 'git github commits', icon: GitBranch },
@@ -123,6 +125,15 @@ export const FILE_STATUS_GROUPS: GitStatusGroupEntry[] = [
   { key: 'deleted', status: 'D' },
   { key: 'untracked', status: 'U' },
 ];
+
+// ---------------------------
+
+//----------------- PROVIDER DISPLAY NAMES ------------
+
+/** Provider display names shared by sidebar session actions and per-backend quota settings. */
+export const PROVIDER_LABELS: Record<LLMProvider, string> = {
+  claude: 'Claude', codex: 'Codex', cursor: 'Cursor', opencode: 'OpenCode',
+};
 
 // ---------------------------
 

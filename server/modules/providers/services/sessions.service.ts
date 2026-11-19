@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { projectsDb, sessionsDb } from '@/modules/database/index.js';
 import { broadcastSessionUpserted, chatRunRegistry } from '@/modules/websocket/index.js';
+import { sessionAutoTitleService } from '@/modules/providers/services/session-auto-title.service.js';
 import { providerRegistry } from '@/modules/providers/provider.registry.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { listBusyClaudeCliSessions } from '@/modules/providers/services/claude-cli-liveness.service.js';
@@ -292,6 +293,7 @@ export const sessionsService = {
     projectPath: string,
     initialMessage: string,
     permissionMode?: string,
+    model?: string,
   ): CreateAppSessionResult {
     const normalizedProjectPath = projectPath.trim();
     if (!normalizedProjectPath) {
@@ -311,6 +313,7 @@ export const sessionsService = {
       });
     }
     sessionsDb.createAppSession(sessionId, provider, normalizedProjectPath, sessionName, permissionMode);
+    void sessionAutoTitleService.schedule(sessionId, provider, initialMessage, sessionName, model);
 
     return {
       sessionId,
@@ -769,6 +772,7 @@ export const sessionsService = {
       });
     }
 
+    sessionAutoTitleService.cancel(sessionId);
     sessionsDb.updateSessionCustomName(sessionId, summary);
     return { sessionId, summary };
   },

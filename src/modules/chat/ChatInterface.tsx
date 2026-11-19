@@ -277,6 +277,7 @@ function ChatInterface({
     permissionMode,
     currentProviderModel,
     currentProviderEffort,
+    canStartNewSession: currentProviderModelOptions.some((option) => option.value === currentProviderModel),
     isLoading: isProcessing,
     processingSessions,
     canAbortSession,
@@ -561,6 +562,7 @@ function ChatInterface({
           onSelectEffort={handleSelectComposerEffort}
           model={currentProviderModel}
           availableModelOptions={currentProviderModelOptions}
+          modelAvailable={Boolean(selectedSession?.id || currentSessionId || currentProviderModelOptions.some((option) => option.value === currentProviderModel))}
           onSelectModel={handleSelectComposerModel}
           modelsLoading={providerModelsLoading}
           tokenBudget={tokenBudget}

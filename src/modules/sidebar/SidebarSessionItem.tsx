@@ -10,7 +10,8 @@ import { Dialog, DialogContent, DialogTitle, Tooltip, buttonVariants, useAppCont
 import { cn, copyTextToClipboard, getSessionPageUrl } from '@/shared/utils';
 import { useOptionalAuth } from '@/modules/auth';
 import type { LLMProvider, Project, ProjectSession, SessionWithProvider } from '@/shared/types';
-import { PROVIDER_LABELS, createSessionViewModel, formatCompactAge } from '@/modules/sidebar/utils/sidebarProjectFormatting';
+import { PROVIDER_LABELS } from '@/shared/constants';
+import { createSessionViewModel, formatCompactAge } from '@/modules/sidebar/utils/sidebarProjectFormatting';
 import { useCompactSidebar } from '@/modules/sidebar/hooks/useCompactSidebar';
 import { useProviderSessionIdCopy } from '@/modules/sidebar/hooks/useProviderSessionIdCopy';
 import SessionOptions from '@/modules/sidebar/SessionOptions';

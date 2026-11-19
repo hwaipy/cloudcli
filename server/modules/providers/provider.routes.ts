@@ -3,8 +3,10 @@ import { requireOwnedProjectPath, requireOwnedSession, requireUserId } from '@/m
 
 import { providerAuthService } from '@/modules/providers/services/provider-auth.service.js';
 import { claudeSettingsPermissionsService } from '@/modules/providers/services/claude-settings-permissions.service.js';
+import { providerAvailableModelsService } from '@/modules/providers/services/provider-available-models.service.js';
 import { providerCapabilitiesService } from '@/modules/providers/services/provider-capabilities.service.js';
 import { providerCliService } from '@/modules/providers/services/provider-cli.service.js';
+import { claudePlanUsageService } from '@/modules/providers/services/claude-plan-usage.service.js';
 import { codexPlanUsageService } from '@/modules/providers/services/codex-plan-usage.service.js';
 import { providerMcpService } from '@/modules/providers/services/mcp.service.js';
 import { providerModelsService } from '@/modules/providers/services/provider-models.service.js';
@@ -650,6 +652,11 @@ router.get(
   }),
 );
 
+/** Returns sanitized official Claude account quota for the selected Hub backend. */
+router.get('/claude/plan-usage', asyncHandler(async (_req: Request, res: Response) => {
+  res.json(createApiSuccessResponse(await claudePlanUsageService.getClaudePlanUsage()));
+}));
+
 /** Lets the chat composer expose steering only when the experimental runtime is active. */
 router.get('/codex/transport', (_req: Request, res: Response) => {
   res.json(createApiSuccessResponse({ transport: process.env.CLOUDCLI_CODEX_TRANSPORT === 'app-server' ? 'app-server' : 'exec' }));
@@ -681,6 +688,13 @@ router.get(
     res.json(createApiSuccessResponse({ provider, models }));
   }),
 );
+
+/** Executable model catalog for new conversations on this backend, not the configuration library. */
+router.get('/:provider/available-models', asyncHandler(async (req: Request, res: Response) => {
+  const provider = parseProvider(req.params.provider);
+  const models = await providerAvailableModelsService.getAvailableModels(provider);
+  res.json(createApiSuccessResponse({ provider, models }));
+}));
 
 /** Turns "use only my models" on or off for one provider and returns its new catalog. */
 router.put(
@@ -943,7 +957,8 @@ router.post(
     requireOwnedProjectPath(requireUserId(req), projectPath);
     const initialMessage = typeof body.initialMessage === 'string' ? body.initialMessage : '';
     const permissionMode = typeof body.permissionMode === 'string' ? body.permissionMode.trim() : undefined;
-    const result = sessionsService.createAppSession(provider, projectPath, initialMessage, permissionMode);
+    const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined;
+    const result = sessionsService.createAppSession(provider, projectPath, initialMessage, permissionMode, model);
     res.status(201).json(createApiSuccessResponse(result));
   }),
 );
